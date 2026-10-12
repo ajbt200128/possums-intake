@@ -5,6 +5,7 @@ type Code string
 
 const (
 	CodeInput        Code = "LEDGER_INPUT_INVALID"
+	CodeNativeHold   Code = "LEDGER_NATIVE_BALANCE_HELD"
 	CodeKey          Code = "LEDGER_KEY_INVALID"
 	CodeKeyWindow    Code = "LEDGER_KEY_WINDOW"
 	CodeAccount      Code = "LEDGER_ACCOUNT_UNKNOWN"
@@ -46,6 +47,10 @@ func (d *Diagnostic) Error() string { return string(d.Code) }
 func diagnostic(code Code) *Diagnostic {
 	d := &Diagnostic{Code: code, Outcome: "no_effect", NextStep: "Correct the request; retry only the original identity."}
 	switch code {
+	case CodeNativeHold:
+		d.Stage = "native_account_write"
+		d.Constraint = "no_active_holds_for_changed_balance"
+		d.NextStep = "Changed absolute synthetic balances require no active holds. Refresh state; enabling or disabling remains permitted."
 	case CodeInput:
 		d.Stage = "validation"
 		d.Constraint = "canonical_money_account_or_timeout"

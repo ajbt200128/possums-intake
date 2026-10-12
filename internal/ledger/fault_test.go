@@ -50,7 +50,7 @@ func TestCancelledWorkRollsBackAndQueryBudget(t *testing.T) {
 	s, _, _ := testService(t)
 	ctx, cancel := context.WithCancel(background)
 	e := s.run(ctx, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(account_id,balance,enabled) VALUES('cancelled','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('cancelled000000','cancelled','0',1)", nil); e != nil {
 			return e
 		}
 		cancel() // cancellation after a write, before callback/commit completion
@@ -71,7 +71,7 @@ func TestCancelledWorkRollsBackAndQueryBudget(t *testing.T) {
 	// Callback that returns nil after the budget is still rolled back by the
 	// mandatory check immediately before PocketBase attempts commit.
 	e = s.run(background, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(account_id,balance,enabled) VALUES('over-budget','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('overbudget00000','over-budget','0',1)", nil); e != nil {
 			return e
 		}
 		<-tx.ctx.Done()
@@ -321,7 +321,7 @@ func TestCompletionEvidenceLossAndSameIdentityResolution(t *testing.T) {
 func TestRollbackAndPanicNeverExposeHostilePayload(t *testing.T) {
 	s, _, _ := testService(t)
 	e := s.run(background, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(account_id,balance,enabled) VALUES('rollback','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('rollback0000000','rollback','0',1)", nil); e != nil {
 			return e
 		}
 		return errors.New("SYNTHETIC_HOSTILE_SQL_OR_SDK_TEXT")
@@ -330,7 +330,7 @@ func TestRollbackAndPanicNeverExposeHostilePayload(t *testing.T) {
 	_, e = s.Balance(background, "rollback")
 	codeIs(t, e, CodeAccount)
 	e = s.run(background, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(account_id,balance,enabled) VALUES('panic','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('panic0000000000','panic','0',1)", nil); e != nil {
 			return e
 		}
 		panic("SYNTHETIC_HOSTILE_PANIC")

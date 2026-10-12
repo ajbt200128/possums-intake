@@ -25,7 +25,7 @@ func (s *Service) Provision(ctx context.Context, id string) (Account, error) {
 		if d, ok := err.(*Diagnostic); !ok || d.Code != CodeAccount {
 			return err
 		}
-		if err := tx.exec("INSERT INTO ledger_accounts(account_id,balance,enabled) VALUES({:id},'0',1)", dbx.Params{"id": id}); err != nil {
+		if _, err := tx.createAccount(NativeAccountCreate{AccountID: id, Balance: "0", Enabled: true}); err != nil {
 			return err
 		}
 		result = Account{AccountID: id, Balance: "0", Enabled: true}

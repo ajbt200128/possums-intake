@@ -75,11 +75,9 @@ func TestSchemaDriftRejectedAndMigrationRollback(t *testing.T) {
 		t.Fatal("fixture table failed")
 	}
 	e = partial.run(background, migrateV1, false)
-	codeIs(t, e, CodeStorage)
+	codeIs(t, e, CodeSchema)
 	var count int
-	if e := partial.run(background, func(tx *transaction) error {
-		return tx.query("SELECT count(*) FROM sqlite_schema WHERE name='ledger_meta'", nil).Row(&count)
-	}, false); e != nil || count != 0 {
+	if e := app.DB().NewQuery("SELECT count(*) FROM sqlite_schema WHERE name='ledger_meta'").Row(&count); e != nil || count != 0 {
 		t.Fatal("partial migration DDL committed")
 	}
 }
@@ -212,7 +210,7 @@ func TestRestartPreservesAcknowledgedBalancesActiveAndTerminal(t *testing.T) {
 		t.Fatal("restart duplicate charged again")
 	}
 }
-func TestNoCollectionsSuperusersOrActivityLogs(t *testing.T) {
+func TestOnlyAccountCollectionNoSuperusersOrActivityLogs(t *testing.T) {
 	s, dir, _ := testService(t)
 	var superusers, collections int
 	if e := s.run(background, func(tx *transaction) error {
@@ -220,8 +218,8 @@ func TestNoCollectionsSuperusersOrActivityLogs(t *testing.T) {
 			return e
 		}
 		return tx.query("SELECT count(*) FROM _collections WHERE name LIKE 'ledger_%'", nil).Row(&collections)
-	}, true); e != nil || superusers != 0 || collections != 0 {
-		t.Fatal("bootstrap exposed accounting collections or superusers")
+	}, true); e != nil || superusers != 0 || collections != 1 {
+		t.Fatal("bootstrap account collection or superuser policy differs")
 	}
 	// Store a synthetic old configuration that would enable upstream logging.
 	// Reload hook must override it before the stock logger sees the settings.

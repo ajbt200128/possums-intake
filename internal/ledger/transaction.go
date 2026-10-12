@@ -68,8 +68,12 @@ func (s *Service) run(ctx context.Context, fn func(*transaction) error, withCloc
 	// completion evidence the outcome is conservatively unknown.
 	defer func() {
 		if recover() != nil {
-			s.ready.Store(false)
-			result = diagnostic(CodeCommit)
+			if completionObserved && completionErr == nil && commitAttempted {
+				result = nil // known commit survives a later hook/presentation panic
+			} else {
+				s.ready.Store(false)
+				result = diagnostic(CodeCommit)
+			}
 		}
 	}()
 	err := s.app.RunInTransaction(func(app core.App) error {

@@ -79,8 +79,8 @@ func TestCLIExplicitInitExistingServeAndPrivateErrors(t *testing.T) {
 		out, stderr, success = runCLI(t, args...)
 		checkFailure(t, out, stderr, success, ledger.CodePath)
 	}
-	// A regular nonempty but invalid SQLite file reaches the real framework
-	// bootstrap failure path. Its raw driver error/path must not be displayed.
+	// A regular nonempty but invalid SQLite file fails the shared exact-layout
+	// guard before bootstrap. Raw driver error/path stays private.
 	corrupt := filepath.Join(t.TempDir(), "SYNTHETIC_PRIVATE_SENTINEL")
 	if e := os.Mkdir(corrupt, 0700); e != nil {
 		t.Fatal("fixture directory failed")
@@ -91,5 +91,5 @@ func TestCLIExplicitInitExistingServeAndPrivateErrors(t *testing.T) {
 		}
 	}
 	out, stderr, success = runCLI(t, "serve", "--state", corrupt)
-	checkFailure(t, out, stderr, success, ledger.CodeStartup)
+	checkFailure(t, out, stderr, success, ledger.CodeSchema)
 }
