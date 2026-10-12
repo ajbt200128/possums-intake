@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Standalone synthetic source/service and generated-image acceptance gates passed.** The parent independently verified the source suite, compiled curl smoke and actual Linux/arm64 image/runtime/migration fixture. Independent read-only review found no actionable correctness, privacy or security defects in its inspected source scope. This is local acceptance, not production readiness, independent release reproduction or approval for integration. No gateway integration, real export, publication, provisioning, deployment, commits or pushes were performed or authorized.
+**The standalone baseline and subsequent native-account/dashboard packet passed parent synthetic source/service, browser and generated-image gates.** The historical baseline archive below does not cover the native changes; the final native identity is recorded separately. Independent read-only reviews found no actionable defects in their respective source scopes. This is local evidence, not production readiness or independent release reproduction. The operator subsequently authorized commits/pushes to the private GitHub repository and synthetic-enclave preparation; the baseline was pushed. No gateway integration, real export, registry/release publication, provisioning or deployment has occurred.
 
 This record describes parent-observed checks, not merely delegated-agent summaries. Historical packet records remain scoped evidence: [core](../internal/ledger/README.md), [runtime](runtime-verification.md), [HTTP/metrics integration](http-metrics-verification.md), [telemetry](telemetry-contract.md), [delivery](delivery.md), and [curl runbook](runbook.md).
 
@@ -44,7 +44,7 @@ The parent inspected the narrowly matched bmake mirror rewrite, image probe and 
 
 The earlier image snapshot was **`36f64782a7b2170840a1e54caa12ed099301d69975a803fc6cdb960423f1dec0`**, using the snapshot-manifest method documented in [delivery evidence](delivery.md#evidence-and-blockers), not the parent digest method above. Initial 300-second/600-second builds and the subsequently approved 3600-second continuation all exhausted their budgets, leaving 112 derivations and no image/probe. Those were incomplete results, not failed image acceptance. The user then approved local continuation without a wall-clock build limit.
 
-## Final generated-image acceptance
+## Historical baseline generated-image acceptance
 
 The avoidable delay was disabling binary substitutes with `--offline`, which exposed the Darwin compiler/bootstrap dependency chain. Sol's read-only derivation/help inspection and signed official-cache prewarm are recorded in [delivery evidence](delivery.md#evidence-and-blockers). External dependency prewarm took 13.727 seconds; the actual joined image/probe build then completed in 20.789 seconds. Pins/signature verification and release fresh-A/B guards were unchanged. These are local cached build results, not independent reproduction.
 
@@ -63,7 +63,34 @@ Public artifact identities observed by the parent image rerun:
 - Config identity: **`sha256:a42f657cbf0ff167e13ab4345da677bd553a89ae6b552034413d8deb3d68d09e`**.
 - Docker immutable runtime ID: **`sha256:6eff9b53def6b01ea82ed7cab3f03ffd0c58280738a1012f5273cdaa86763f95`**.
 
-Exact archive/probe commands are in [local delivery reproduction](delivery.md#local-reproduction). The helper is exec-only, not shipped; fixture containers/volumes were cleaned up. Public images/dependencies may remain in local Docker/Nix stores. No delegated tasks remain active.
+Exact archive/probe commands are in [local delivery reproduction](delivery.md#local-reproduction). The helper is exec-only, not shipped; fixture containers/volumes were cleaned up. Public images/dependencies may remain in local Docker/Nix stores. These identities belong to the earlier baseline, not the subsequent native-account packet.
+
+## Subsequent native-account/dashboard verification
+
+The operator selected native account editing (no custom form), finalized the first unreleased schema as **v1** (no v2/migrator), and explicitly required PocketBase logs off by default. [Native packet evidence](operator-dashboard.md) describes supported collection registration, constrained fresh initialization, unchanged external accounting contracts, serialized native edits, active-hold balance-edit refusal, native/shared-key separation, pinned upstream UI patches and licenses. Earlier incompatible disposable layouts remain refused, not reset.
+
+The parent read the changed production accounting, schema, transaction, native parser/router and CLI bodies and the actual browser harness. An independent full-body Luna review found no actionable accounting, authorization, schema or privacy defect. The parent independently passed, with Go **1.27.2 / darwin/arm64**, export off and read-only module resolution:
+
+- Full Go race suite across all five tested packages, including subprocess/lifecycle, native/financial races, transaction/commit faults and logging negatives.
+- Go vet and two offline native UI build-environment/error-boundary tests.
+- Actual `go build -trimpath` CLI, compiled curl/restart/normal-shutdown smoke.
+- Actual headless Chromium against compiled main: native login/create/edit, available-balance verification through the keyed API, held-balance-edit refusal, stale editor/credit/settlement interaction, key/token separation, native refresh, memory-only app storage, Logs navigation/hash removal, authenticated logs/stats/settings-write denial, default-mode native exclusion and joined-shutdown auxiliary inspection. `_logs` and `_authOrigins` were empty in operator and default modes; service stdio was empty. No external browser requests, page errors or CSP violations were observed in that sequence. This is a local native-browser test, not a browser inside the generated Linux image or whole-browser/host transience.
+
+Repeatable source checks:
+
+`devenv shell -- env OTEL_SDK_DISABLED=true GOFLAGS=-mod=readonly go test -race ./... -count=1 -timeout=180s`
+
+`devenv shell -- env OTEL_SDK_DISABLED=true GOFLAGS=-mod=readonly go vet ./...`
+
+`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s internal/operator/ui -p 'test_*.py'`
+
+The browser harness uses `INTAKE_BINARY`, `PLAYWRIGHT_CORE_PATH` and `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`, with existing local tools only; see its header and the native packet record. No sibling files were edited, browser installed, screenshots/traces retained or live inference used.
+
+**Final native packaging passed.** The parent independently reran the delegate's original 179-file frozen image, all ten original gates, native operator checks and all 100 asset hashes, plus 53 offline packaging tests. It then found and fixed a lookup-boundary defect: only `sql.ErrNoRows` now becomes account-missing; other errors retain existing cancellation/storage/fatal-readiness classification, and the supported native query receives the transaction work context. Actual transaction-scoped negative tests cover missing, hostile unknown, cancellation, deadline and typed SQLite NOTADB errors, no receipts/effects and fatal readiness refusal. A second read-only review verified the pinned SDK semantics and fix; it did not execute tests because its Git-flake invocation excluded an untracked asset manifest. Parent checks used the actual working source and isolated frozen source.
+
+After that correction, the parent again passed full race/vet/module verification, compiled curl smoke and actual Chromium, then built and ran a fresh Linux/arm64 image locally with no build wall-clock wrapper or remote builder. All ten original gates, actual operator entrypoint/native writes/key separation/held-balance/logging checks and all 100 asset HTTP hashes passed. The unchanged file-limit fixture still required exact commit-unknown evidence, SQL rollback and same-partial-state refusal. Final source identity: **`9b1b8bdad91ee3b4a03d1a177f40ff580cec5aa4dfdb8225df9a58b45d1d261c`**. Final archive SHA256: **`43332aed114cdad8e4f3f17760b37d69eef5763220ae8eb07867fbc4b82a02cf`**. Full artifact identities and rerun commands are in [delivery evidence](delivery.md#final-parent-native-qualification). This is cached local qualification, not independent A/B, a browser inside the image, live activation or real-data qualification.
+
+Stock PocketBase update performs an eager preliminary record read before our native request hook. That read is not an accounting decision or effect and has no transaction work context; its framework errors are sanitized, but it does not itself clear cached ledger readiness on fatal storage errors. The fresh accounting lookup/transaction remains authoritative and fails closed. Whole-native-surface fatal-readiness propagation is not claimed.
 
 ## Privacy and diagnostic scope
 
@@ -75,7 +102,8 @@ Exactly-once observations cover only custom accounting routes after local final-
 
 ## Remaining gates — local acceptance is not live authorization
 
-- **Independent release reproduction:** actual local image qualification passed; fresh independent native Linux A/B builds, signed exact-main provenance and registry digest preservation remain unrun. A cached local build is not independent A/B evidence.
+- **Native local qualification:** final source/browser and fresh image/operator gates passed as scoped above. Remote-serving/synthetic startup remains a separate unimplemented packet; the ordinary service is still loopback-only with explicit initialization.
+- **Independent release reproduction:** historical baseline local image qualification passed; fresh independent native Linux A/B builds, signed exact-main provenance and registry digest preservation remain unrun. A cached local build is not independent A/B evidence.
 - **Independent review:** completed by Luna after full-body inspection of the specified accounting/HTTP/telemetry/lifecycle/smoke and disabled delivery boundaries. It reported no actionable defects and independently passed tests, race checks, vet, checksum verification, offline delivery tests and compiled curl smoke. Its source review did not establish image/platform/live properties; subsequent image evidence above is separately parent-verified.
 - **SDK internal defaults:** the OTel SDK evaluates/caches default resources despite an explicit resource. Actual outbound allowlisting passed; literal absence of all internal discovery remains unqualified. No SDK fork or global environment mutation was introduced.
 - **Prior release:** none exists, so previous-release compatibility is not testable yet. Restart/v1 migration rollback and incompatible-state refusal do not prove upgrade compatibility.
