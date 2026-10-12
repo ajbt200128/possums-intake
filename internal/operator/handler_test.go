@@ -29,7 +29,8 @@ func fixture(t *testing.T) (*ledger.Service, core.App, http.Handler) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "state")
 	if err := ledger.InitOperator(context.Background(), dir, ledger.OperatorCredentials{Email: testEmail, Password: testPassword}); err != nil {
-		t.Fatal("operator init unavailable")
+		d := ledger.Failure(err)
+		t.Fatalf("synthetic operator init unavailable: code=%s stage=%s constraint=%s outcome=%s", d.Code, d.Stage, d.Constraint, d.Outcome)
 	}
 	s, err := ledger.Open(context.Background(), dir)
 	if err != nil {
