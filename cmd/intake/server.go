@@ -15,15 +15,18 @@ import (
 )
 
 const (
-	codeAdminKey    ledger.Code = "LEDGER_RUNTIME_KEY_INVALID"
-	codeListen      ledger.Code = "LEDGER_LISTEN_INVALID"
-	codeBind        ledger.Code = "LEDGER_LISTENER_START_UNAVAILABLE"
-	codeServe       ledger.Code = "LEDGER_HTTP_SERVE_UNAVAILABLE"
-	codeShutdown    ledger.Code = "LEDGER_HTTP_SHUTDOWN_UNAVAILABLE"
-	codeHandler     ledger.Code = "LEDGER_HTTP_HANDLER_UNAVAILABLE"
-	codeRuntime     ledger.Code = "LEDGER_RUNTIME_UNAVAILABLE"
-	cleanupInterval             = 10 * time.Second
-	pruneInterval               = 60 * time.Second
+	codeSyntheticOptions ledger.Code = "LEDGER_SYNTHETIC_OPTIONS_INVALID"
+	codeScratch          ledger.Code = "LEDGER_SYNTHETIC_TEMP_UNAVAILABLE"
+	codeScratchCleanup   ledger.Code = "LEDGER_SYNTHETIC_CLEANUP_UNAVAILABLE"
+	codeAdminKey         ledger.Code = "LEDGER_RUNTIME_KEY_INVALID"
+	codeListen           ledger.Code = "LEDGER_LISTEN_INVALID"
+	codeBind             ledger.Code = "LEDGER_LISTENER_START_UNAVAILABLE"
+	codeServe            ledger.Code = "LEDGER_HTTP_SERVE_UNAVAILABLE"
+	codeShutdown         ledger.Code = "LEDGER_HTTP_SHUTDOWN_UNAVAILABLE"
+	codeHandler          ledger.Code = "LEDGER_HTTP_HANDLER_UNAVAILABLE"
+	codeRuntime          ledger.Code = "LEDGER_RUNTIME_UNAVAILABLE"
+	cleanupInterval                  = 10 * time.Second
+	pruneInterval                    = 60 * time.Second
 )
 
 func runtimeFailure(code ledger.Code, stage, constraint, outcome, next string) *ledger.Diagnostic {
@@ -31,10 +34,17 @@ func runtimeFailure(code ledger.Code, stage, constraint, outcome, next string) *
 }
 
 func validateListen(address string) error {
+	return validateModeListen(address, false)
+}
+
+func validateModeListen(address string, synthetic bool) error {
 	host, port, err := net.SplitHostPort(address)
 	ip, ipErr := netip.ParseAddr(host)
 	n, portErr := strconv.ParseUint(port, 10, 16)
-	if err != nil || ipErr != nil || !ip.IsLoopback() || ip.Zone() != "" || portErr != nil || strconv.FormatUint(n, 10) != port {
+	if err != nil || ipErr != nil || !(ip.IsLoopback() || (synthetic && ip.IsUnspecified())) || ip.Zone() != "" || portErr != nil || strconv.FormatUint(n, 10) != port {
+		if synthetic {
+			return runtimeFailure(codeListen, "startup", "numeric_loopback_or_wildcard_and_port", "no_effect", "Select a numeric loopback or wildcard address and numeric port for synthetic-serve. Hostnames, zones and other interfaces are not permitted.")
+		}
 		return runtimeFailure(codeListen, "startup", "numeric_loopback_and_port", "no_effect", "Select a numeric loopback address and port for local acceptance. Wildcard, remote and hostname listeners are not authorized.")
 	}
 	return nil
@@ -89,7 +99,7 @@ func maintain(ctx context.Context, service maintenanceLedger, ticks <-chan time.
 func serve(ctx context.Context, service maintenanceLedger, handler http.Handler, address string) (result error) {
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return runtimeFailure(codeBind, "listener_start", "available_loopback_listener", "no_effect", "Listener could not open; underlying cause unknown. Check local port availability and permissions privately. No accounting HTTP operation ran; money and reservation rows are preserved.")
+		return runtimeFailure(codeBind, "listener_start", "available_numeric_listener", "no_effect", "Listener could not open; underlying cause unknown. Check local port availability and permissions privately. No accounting HTTP operation ran; money and reservation rows are preserved.")
 	}
 	work, cancel := context.WithCancel(ctx)
 	defer cancel()
