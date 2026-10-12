@@ -1,0 +1,30 @@
+{
+  "dompurify-3.2.4.txt": {
+    "origin": "https://raw.githubusercontent.com/cure53/DOMPurify/3.2.4/LICENSE",
+    "sha256": "1b02e03c3fb4f87d476c128f0eb9def1f5a1709d28b180465228bd41574623b7"
+  },
+  "ibm-plex.txt": {
+    "origin": "https://raw.githubusercontent.com/IBM/plex/master/LICENSE.txt",
+    "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+  },
+  "prism-1.30.0.txt": {
+    "origin": "https://raw.githubusercontent.com/PrismJS/prism/v1.30.0/LICENSE",
+    "sha256": "2b947f0901a7ffcf08a89957da9783c0e9c6e72cb6ce8e959f501ab5409e4d2b"
+  },
+  "remixicon-4.6.0.txt": {
+    "origin": "https://raw.githubusercontent.com/Remix-Design/RemixIcon/v4.6.0/License",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "shablon.txt": {
+    "origin": "https://raw.githubusercontent.com/ganigeorgiev/shablon/master/LICENSE.md",
+    "sha256": "e9291061ef4e09108a8ef085ef58e57f1d794e1d4df10fe510e49b7a564a6ff8"
+  },
+  "tinymce-6.8.6.txt": {
+    "origin": "https://raw.githubusercontent.com/tinymce/tinymce/6.8.6/LICENSE.TXT",
+    "sha256": "55cc2df5c872aa8f94bb8d05839e736003069d84317bda2e4ada4c03b604871a"
+  },
+  "uplot-1.6.32.txt": {
+    "origin": "https://raw.githubusercontent.com/leeoniya/uPlot/1.6.32/LICENSE",
+    "sha256": "8f989229699b4fe2f1a0432d0e9edc338a8a911e250e2d1b01ecd770a5f5b1bd"
+  }
+}

@@ -1,0 +1,332 @@
+--- a/index.html
++++ b/index.html
+@@ -15,6 +15,7 @@
+     <script src="/libs/prism/prism.js" data-manual></script>
+ </head>
+ <body>
++    <aside>Synthetic account edits only. Stored balance is NOT available balance. Absolute edits are not funding or credit receipts; schema and other mutations are disabled.</aside>
+     <script type="module" src="/src/main.js"></script>
+ </body>
+ </html>
+--- a/src/auth/pageSuperuserLogin.js
++++ b/src/auth/pageSuperuserLogin.js
+@@ -4,8 +4,8 @@
+     const data = store({
+         authMethods: {},
+ 
+-        identity: route.query.demoEmail?.[0] || "",
+-        password: route.query.demoPassword?.[0] || "",
++        identity: "",
++        password: "",
+         showPassword: false,
+ 
+         otpId: "",
+@@ -101,27 +101,7 @@
+         app.store.errors = null;
+         window.location.hash = "#/";
+     } catch (err) {
+-        if (err.status == 401) {
+-            data.mfaId = err.response.mfaId;
+-
+-            // show the otp forms
+-            if (
+-                // if the identity field is just the email use it to directly send an otp request
+-                data.authMethods?.password?.identityFields?.length == 1
+-                && data.authMethods.password.identityFields[0] == "email"
+-            ) {
+-                // prefill and request
+-                data.otpEmail = data.identity;
+-                await requestOTP(data);
+-            } else if (/^[^@\s]+@[^@\s]+$/.test(data.identity)) {
+-                // only prefill
+-                data.otpEmail = data.identity;
+-            }
+-        } else if (err.status != 400) {
+-            app.checkApiError(err);
+-        } else {
+-            app.toasts.error("Invalid login credentials.");
+-        }
++        app.checkApiError(err);
+     }
+ 
+     data.isPasswordAuthSubmitting = false;
+@@ -197,14 +177,7 @@
+                     ),
+                 ),
+             ),
+-            t.a(
+-                {
+-                    href: "#/request-password-reset",
+-                    className: "link-hint m-t-5",
+-                    onclick: (e) => e.stopPropagation(),
+-                },
+-                t.small(null, "Forgotten password"),
+-            ),
++
+         ),
+         t.div(
+             { className: "col-12" },
+--- a/src/main.js
++++ b/src/main.js
+@@ -1,3 +1,4 @@
++import "./operator-memory";
+ import "./css/_main.css";
+ 
+ import "./utils";
+@@ -141,7 +142,7 @@
+         app.store._ready = true;
+     },
+     onerror: (err) => {
+-        console.warn("Failed to load extensions:", err);
++        (() => {})("Failed to load extensions:", err);
+         app.store._ready = true;
+     },
+ }));
+--- /dev/null
++++ b/src/operator-memory.js
+@@ -0,0 +1,8 @@
++// All native UI preferences and drafts are page-memory only as well as auth.
++window.app = window.app || {};
++const values = new Map();
++window.app.operatorStorage = {
++    getItem: (key) => values.get(key) ?? null,
++    setItem: (key, value) => values.set(key, String(value)),
++    removeItem: (key) => values.delete(key),
++};
+--- a/src/pb.js
++++ b/src/pb.js
+@@ -1,16 +1,12 @@
+-import PocketBase, { isTokenExpired, LocalAuthStore } from "pocketbase";
++import PocketBase, { BaseAuthStore } from "pocketbase";
+ 
+ const LOGIN_PATH = "#/login";
+-
+-const currentPath = window.location.pathname.endsWith("/")
+-    ? window.location.pathname.substring(0, window.location.pathname.length - 1)
+-    : window.location.pathname;
+ 
+ window.app = window.app || {};
+ window.app.pb = new PocketBase(
+     import.meta.env.PB_BACKEND_URL,
+     // concatenate the path in case hosted under subpath alongside other apps
+-    new LocalAuthStore("__pb_superusers__" + currentPath),
++    new BaseAuthStore(),
+ );
+ 
+ // add UI specific header to all requests
+@@ -34,7 +30,7 @@
+     app.pb.collection(app.pb.authStore.record?.collectionName || "_superusers")
+         .authRefresh()
+         .catch((err) => {
+-            console.warn("Failed to refresh the existing auth token:", err);
++            (() => {})("Failed to refresh the existing auth token:", err);
+ 
+             // clear the store only on invalidated/expired token
+             const status = err?.status << 0;
+@@ -116,69 +112,7 @@
+ // File token helpers
+ // -------------------------------------------------------------------
+ 
+-const LAST_FILE_TOKEN_KEY = "pbLastFileToken";
+-let isFileTokenLoading = false;
+-let fileTokenPromises = [];
+-
+-// clear stored token on logout
+-app.pb.authStore.onChange((_, record) => {
+-    if (!record?.id) {
+-        window.localStorage.removeItem(LAST_FILE_TOKEN_KEY);
+-    }
+-});
+-
+-/**
+- * Return a superuser file token.
+- * Optionally you can provide a collection identifier, to avoid unnecessary
+- * calls in case the collection doesn't have protected files.
+- *
+- * @param  {String} optCollectionIdORName
+- * @return {Promise<string>}
+- */
+-window.app.getFileToken = async function(optCollectionIdORName = "") {
+-    // check if the collection needs a file token
+-    const collection = optCollectionIdORName
+-        && app.store.collections?.find((c) => c.id == optCollectionIdORName || c.name == optCollectionIdORName);
+-    if (collection) {
+-        const hasProtectedFile = collection.fields?.find((f) => f.type == "file" && f.protected);
+-        if (!hasProtectedFile) {
+-            return;
+-        }
+-    }
+-
+-    let token = window.localStorage.getItem(LAST_FILE_TOKEN_KEY);
+-
+-    if (!token || isTokenExpired(token, 60)) {
+-        token = await fetchFileToken();
+-    }
+-
+-    return token;
+-};
+-
+-async function fetchFileToken() {
+-    return new Promise(async (resolve, reject) => {
+-        fileTokenPromises.push({ resolve, reject });
+-
+-        if (isFileTokenLoading) {
+-            return;
+-        }
+-
+-        isFileTokenLoading = true;
+-
+-        try {
+-            const token = await app.pb.files.getToken();
+-
+-            window.localStorage.setItem(LAST_FILE_TOKEN_KEY, token);
+-
+-            fileTokenPromises.forEach((p) => p.resolve(token));
+-        } catch (err) {
+-            fileTokenPromises.forEach((p) => p.reject(err));
+-        }
+-
+-        isFileTokenLoading = false;
+-        fileTokenPromises = [];
+-    });
+-}
++window.app.getFileToken = async function() { return ""; };
+ 
+ /**
+  * Generic API error handler that loads the response error into the app store
+@@ -200,33 +134,12 @@
+  * @param {boolean} [showToast]
+  */
+ window.app.checkApiError = function(err, showToast = true) {
+-    if (!err || !(err instanceof Error) || err.isAbort) {
+-        console.warn("checkApiError - unexpected error type:", err);
+-        return;
+-    }
+-
+-    const statusCode = err?.status << 0;
+-    const response = err?.response || {};
+-
+-    // add toast error notification
+-    let msg = showToast && (response.message || err.message || "Something went wrong!");
+-    if (msg) {
+-        app.toasts.error(msg);
+-    }
+-
+-    // unknown client-side error
+-    if (statusCode == 0) {
+-        console.log(err);
+-    }
+-
+-    // populate form field errors
+-    if (!app.utils.isEmpty(response.data)) {
+-        app.store.errors = response.data;
+-    }
+-
+-    // unauthorized
+-    if (statusCode === 401 && window.location.hash != LOGIN_PATH) {
++    if (err?.isAbort) return;
++    const status = [400, 401, 403, 404, 413, 429, 500, 503].includes(err?.status) ? err.status : 0;
++    if (showToast) app.toasts.error(`OPERATOR_UI_REQUEST_UNAVAILABLE; stage=native_request; status=${status}; cause unknown. Check the restricted route or login; no automatic retry.`);
++    app.store.errors = {};
++    if (status === 401 && window.location.hash != LOGIN_PATH) {
+         app.pb.cancelAllRequests();
+-        return app.pb.authStore.clear();
++        app.pb.authStore.clear();
+     }
+ };
+--- a/src/router.js
++++ b/src/router.js
+@@ -1,6 +1,5 @@
+ import { pageSuperuserLogin } from "@/auth/pageSuperuserLogin";
+ import { pageCollections } from "@/collections/pageCollections";
+-import { pageLogs } from "@/logs/pageLogs";
+ import { pageApplicationSettings } from "@/settings/application/pageApplicationSettings";
+ import { pageBackupsSettings } from "@/settings/backups/pageBackupsSettings";
+ import { pageCronsSettings } from "@/settings/crons/pageCronsSettings";
+@@ -126,43 +125,8 @@
+ 
+ // -------------------------------------------------------------------
+ 
+-app.routes.guestOnly("#/pbinstall/{token}", async (route) => {
+-    const { pageInstaller } = await import("@/auth/pageInstaller");
+-    return pageInstaller(route);
+-});
+-app.routes.guestOnly("#/login", (route) => {
+-    return pageSuperuserLogin(route);
+-});
+-app.routes.guestOnly("#/request-password-reset", async (route) => {
+-    const { pageRequestSuperuserPasswordReset } = await import("@/auth/pageRequestSuperuserPasswordReset");
+-    return pageRequestSuperuserPasswordReset(route);
+-});
+-
+-// email confirmation actions
+-app.routes.blank("#/auth/confirm-password-reset/{token}", async (route) => {
+-    const { pageConfirmPasswordReset } = await import("@/auth/pageConfirmPasswordReset");
+-    return pageConfirmPasswordReset(route);
+-});
+-app.routes.blank("#/auth/confirm-verification/{token}", async (route) => {
+-    const { pageConfirmVerification } = await import("@/auth/pageConfirmVerification");
+-    return pageConfirmVerification(route);
+-});
+-app.routes.blank("#/auth/confirm-email-change/{token}", async (route) => {
+-    const { pageConfirmEmailChange } = await import("@/auth/pageConfirmEmailChange");
+-    return pageConfirmEmailChange(route);
+-});
+-
+-// oauth2 redirect pages
+-app.routes.blank("#/auth/oauth2-redirect-success", async (route) => {
+-    const { pageOAuth2RedirectSuccess } = await import("@/auth/pageOAuth2RedirectSuccess");
+-    return pageOAuth2RedirectSuccess(route);
+-});
+-app.routes.blank("#/auth/oauth2-redirect-failure", async (route) => {
+-    const { pageOAuth2RedirectFailure } = await import("@/auth/pageOAuth2RedirectFailure");
+-    return pageOAuth2RedirectFailure(route);
+-});
++app.routes.guestOnly("#/login", (route) => pageSuperuserLogin(route));
+ 
+ app.routes.superuserOnly("#/collections", pageCollections);
+-app.routes.superuserOnly("#/logs", pageLogs);
+ app.routes.superuserOnly("#/settings", pageApplicationSettings);
+ app.routes.superuserOnly("#/settings/mail", pageMailSettings);
+--- a/src/store.js
++++ b/src/store.js
+@@ -62,11 +62,6 @@
+             icon: "ri-database-2-line",
+             label: "Collections",
+         },
+-        {
+-            href: "#/logs",
+-            icon: "ri-bar-chart-box-line",
+-            label: "Logs",
+-        },
+         {
+             href: "#/settings",
+             icon: "ri-settings-3-line",
+--- a/src/records/recordUpsertModal.js
++++ b/src/records/recordUpsertModal.js
+@@ -316,6 +316,16 @@
+             });
+         }
+ 
++        // The upstream editor normally resends every loaded value. On the
++        // synthetic ledger, send only changed fields so a concurrent credit or
++        // settlement isn't overwritten by an unchanged stale balance.
++        if (!data.isNew && collection.name === "ledger_accounts") {
++            for (const field of collection.fields) {
++                if (payload[field.name] === data.originalRecord[field.name]) {
++                    delete payload[field.name];
++                }
++            }
++        }
+         return payload;
+     }
+ 
+@@ -374,7 +384,7 @@
+             if (!err?.isAbort) {
+                 data.isSaving = false;
+                 app.checkApiError(err, false);
+-                app.toasts.error(err.message || "Failed to save record.", { key: "recordSave" });
++                app.toasts.error("OPERATOR_UI_ACCOUNT_SAVE_UNAVAILABLE; inspect the closed response outcome privately. No automatic retry; absolute synthetic edits are not credit receipts.", { key: "recordSave" });
+             }
+         }
+     }

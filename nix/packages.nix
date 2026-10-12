@@ -8,6 +8,9 @@ let
     };
   });
   buildGoModule = pkgs.buildGoModule.override { inherit go; };
+  operatorAssets = builtins.attrNames (builtins.fromJSON (builtins.readFile (root + "/internal/operator/ui/assets.json")));
+  operatorInputs = [ "internal/operator/ui/assets.json" ]
+    ++ map (name: "internal/operator/ui/dist/" + name) operatorAssets;
   # Only declared build inputs: never private state, .git, env, or documentation.
   src = pkgs.lib.cleanSourceWith {
     src = root;
@@ -16,13 +19,14 @@ let
       in type == "directory" && (rel == "cmd" || rel == "internal" || rel == "nix"
         || pkgs.lib.hasPrefix "cmd/" rel || pkgs.lib.hasPrefix "internal/" rel)
         || builtins.elem rel [ "go.mod" "go.sum" "nix/image-smoke.go" ]
+        || builtins.elem rel operatorInputs
         || (pkgs.lib.hasSuffix ".go" rel && (pkgs.lib.hasPrefix "cmd/" rel || pkgs.lib.hasPrefix "internal/" rel));
   };
   common = {
     pname = "possums-intake";
     version = "0.1.0-local";
     inherit src;
-    vendorHash = "sha256-YM0n3UpmFibFID6Ita1rj7cZQiVxtAdUOaK86P9VchU=";
+    vendorHash = "sha256-7P04sWzaA5Mwd58oYvJfwyNm7ME+nhmJn637wXx5t68=";
     env.CGO_ENABLED = "0";
     env.GOTOOLCHAIN = "local";
     # This nixpkgs buildGoModule revision duplicates a top-level GOFLAGS

@@ -1,0 +1,86 @@
+[
+  {
+    "component": "dompurify-3.2.4.txt",
+    "license_file": "licenses/dompurify-3.2.4.txt",
+    "origin": "https://raw.githubusercontent.com/cure53/DOMPurify/3.2.4/LICENSE",
+    "scope": "static_upstream_library_or_font",
+    "sha256": "1b02e03c3fb4f87d476c128f0eb9def1f5a1709d28b180465228bd41574623b7"
+  },
+  {
+    "component": "ibm-plex.txt",
+    "license_file": "licenses/ibm-plex.txt",
+    "origin": "https://raw.githubusercontent.com/IBM/plex/master/LICENSE.txt",
+    "scope": "static_upstream_library_or_font",
+    "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+  },
+  {
+    "component": "prism-1.30.0.txt",
+    "license_file": "licenses/prism-1.30.0.txt",
+    "origin": "https://raw.githubusercontent.com/PrismJS/prism/v1.30.0/LICENSE",
+    "scope": "static_upstream_library_or_font",
+    "sha256": "2b947f0901a7ffcf08a89957da9783c0e9c6e72cb6ce8e959f501ab5409e4d2b"
+  },
+  {
+    "component": "remixicon-4.6.0.txt",
+    "license_file": "licenses/remixicon-4.6.0.txt",
+    "origin": "https://raw.githubusercontent.com/Remix-Design/RemixIcon/v4.6.0/License",
+    "scope": "static_upstream_library_or_font",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  {
+    "component": "shablon.txt",
+    "license_file": "licenses/shablon.txt",
+    "origin": "https://raw.githubusercontent.com/ganigeorgiev/shablon/master/LICENSE.md",
+    "scope": "static_upstream_library_or_font",
+    "sha256": "e9291061ef4e09108a8ef085ef58e57f1d794e1d4df10fe510e49b7a564a6ff8"
+  },
+  {
+    "component": "tinymce-6.8.6.txt",
+    "license_file": "licenses/tinymce-6.8.6.txt",
+    "origin": "https://raw.githubusercontent.com/tinymce/tinymce/6.8.6/LICENSE.TXT",
+    "scope": "static_upstream_library_or_font",
+    "sha256": "55cc2df5c872aa8f94bb8d05839e736003069d84317bda2e4ada4c03b604871a"
+  },
+  {
+    "component": "uplot-1.6.32.txt",
+    "license_file": "licenses/uplot-1.6.32.txt",
+    "origin": "https://raw.githubusercontent.com/leeoniya/uPlot/1.6.32/LICENSE",
+    "scope": "static_upstream_library_or_font",
+    "sha256": "8f989229699b4fe2f1a0432d0e9edc338a8a911e250e2d1b01ecd770a5f5b1bd"
+  },
+  {
+    "component": "PocketBase UI and upstream graphical assets",
+    "license_file": "licenses/pocketbase.txt",
+    "origin": "github.com/pocketbase/pocketbase",
+    "scope": "upstream_source_and_assets",
+    "sha256": "efa4c6c6d4e5989ce58a349f900be406368eddd7b1474757db9b6eb46afc1b43",
+    "version": "v0.40.5"
+  },
+  {
+    "component": "leaflet",
+    "license": "BSD-2-Clause",
+    "license_file": "licenses/npm-leaflet-LICENSE",
+    "origin": "pinned package-lock.json",
+    "scope": "bundled_package",
+    "sha256": "53e8dc25862014e4324741ca18fbe3611e11d42ef69f59f86ea8c5389647d4cb",
+    "version": "1.9.4"
+  },
+  {
+    "component": "pocketbase",
+    "license": "MIT",
+    "license_file": "licenses/npm-pocketbase-LICENSE.md",
+    "origin": "pinned package-lock.json",
+    "scope": "bundled_package",
+    "sha256": "efa4c6c6d4e5989ce58a349f900be406368eddd7b1474757db9b6eb46afc1b43",
+    "version": "0.28.1"
+  },
+  {
+    "component": "vite",
+    "license": "MIT",
+    "license_file": "licenses/npm-vite-LICENSE.md",
+    "origin": "pinned package-lock.json",
+    "scope": "generated_modulepreload_helper",
+    "sha256": "387dd7baa307083401a27c58c362c30832f5ba1dba84f10cc22c33401523f45c",
+    "version": "8.2.1"
+  }
+]

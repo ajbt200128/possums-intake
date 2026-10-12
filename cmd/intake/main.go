@@ -13,6 +13,7 @@ import (
 
 	"possums-intake/internal/httpapi"
 	"possums-intake/internal/ledger"
+	"possums-intake/internal/operator"
 	"possums-intake/internal/telemetry"
 )
 
@@ -37,6 +38,7 @@ func executeContext(ctx context.Context, args []string) (result error) {
 	flags.SetOutput(io.Discard)
 	dir := flags.String("state", "", "Explicit absolute state directory (no default)")
 	listen := flags.String("listen", "127.0.0.1:8090", "Numeric loopback listener")
+	operatorMode := flags.Bool("operator", false, "Opt-in restricted synthetic native dashboard (init/serve only)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !filepath.IsAbs(*dir) {
 		return &ledger.Diagnostic{Code: ledger.CodePath, Stage: "startup", Constraint: "explicit_command_and_absolute_state", Outcome: "no_effect", NextStep: "Use init or serve with --state and a deliberately selected absolute directory. Credentials are runtime environment only."}
 	}
@@ -46,7 +48,13 @@ func executeContext(ctx context.Context, args []string) (result error) {
 		if listenSet {
 			return runtimeFailure(codeListen, "startup", "serve_only_listener", "no_effect", "Use --listen only with serve; init creates empty state and starts no listener.")
 		}
-		if err := ledger.Init(ctx, *dir); err != nil {
+		var err error
+		if *operatorMode {
+			err = ledger.InitOperator(ctx, *dir, ledger.OperatorCredentials{Email: os.Getenv("LEDGER_OPERATOR_EMAIL"), Password: os.Getenv("LEDGER_OPERATOR_PASSWORD")})
+		} else {
+			err = ledger.Init(ctx, *dir)
+		}
+		if err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, `{"status":"initialized_empty"}`)
@@ -75,6 +83,16 @@ func executeContext(ctx context.Context, args []string) (result error) {
 	handler, err := httpapi.NewHandler(service, func() bool { return ctx.Err() == nil && service.Ready() }, key, metrics)
 	if err != nil {
 		return runtimeFailure(codeHandler, "startup", "custom_accounting_handler", "no_effect", "Handler construction failed; cause unknown. Check runtime key and the qualified custom route build privately.")
+	}
+	if *operatorMode {
+		app, err := service.OperatorApp()
+		if err != nil {
+			return err
+		}
+		handler, err = operator.NewHandler(handler, app, service)
+		if err != nil {
+			return runtimeFailure(codeHandler, "operator_setup", "restricted_native_router", "no_effect", "Native operator router unavailable; cause unknown. Check the qualified pinned build privately. Serve never creates or resets a login.")
+		}
 	}
 	return serve(ctx, service, handler, *listen)
 }

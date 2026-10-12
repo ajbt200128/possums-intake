@@ -1,0 +1,37 @@
+Possums intake restricted synthetic PocketBase native dashboard
+
+Origin: checksum-qualified PocketBase v0.40.5 ui tree and its exact npm lock.
+The license inventory and asset manifest accompany this distribution.
+
+Bundled runtime packages: PocketBase JavaScript SDK 0.28.1 (MIT), Leaflet
+1.9.4 (BSD-2-Clause), and Vite's generated modulepreload helper (MIT;
+full Vite package license/third-party notices supplied). npm build tools
+not emitted into browser assets are not distributed as runtime packages.
+A build-time chunk-module inventory rejects newly bundled npm dependencies.
+
+Copied public libraries: TinyMCE 6.8.6 (MIT), DOMPurify 3.2.4 (Apache-2.0
+or MPL-2.0; both upstream license texts retained, Apache option used),
+PrismJS 1.30.0 (MIT), uPlot 1.6.32 (MIT), Shablon (0BSD), Remix Icon
+4.6.0 (Apache-2.0), IBM Plex Sans/Mono (SIL Open Font License 1.1).
+Shablon's vendored file has no version header; its exact bytes are pinned by
+PocketBase's source-tree hash. IBM Google-font filenames identify Sans v23
+and Mono v20 distributions, not an independently verified IBM source revision.
+Their family licenses are preserved. Public license snapshots without a
+release tag are checksum-pinned in licenses/sources.json, not floating build
+inputs. Original copyright notices and full required license texts accompany
+all components, including unchanged TinyMCE plugins/themes/skins/models/icons.
+
+TinyMCE's upstream header explicitly identifies modified DOMPurify code.
+Possums changes source-input console fallbacks in TinyMCE, Prism, uPlot,
+Shablon, Leaflet and the PocketBase SDK to suppress raw browser logging.
+The PocketBase UI source is patched to remove installer/recovery paths,
+credential URL prefills, persistent browser auth/preferences/drafts and raw
+error fallbacks, to add the synthetic stored-total warning, and to omit
+unchanged account values from native update payloads. This is not an upstream
+PocketBase release. No font names or font files were modified.
+
+The PocketBase-authored UI/logo and copied provider SVG marks originate in
+its pinned MIT-distributed source tree. Brand names/marks remain third-party
+trademarks; these notices grant no endorsement or trademark rights. None is
+fetched from a CDN at runtime. See the separate application documentation for
+privacy and native browser/password-manager/DevTools/history boundaries.

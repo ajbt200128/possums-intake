@@ -1,0 +1,8 @@
+{
+  "module": "github.com/pocketbase/pocketbase",
+  "version": "v0.40.5",
+  "source_tree_sha256": "28306285a0c9415effff1bcaaddb4e29eb4d5882e16191036bef72d941f73955",
+  "package_lock_sha256": "f29ea2fc090d15392b40f583d5aee82ce0d0f263a6b1e061456637d929b7284c",
+  "node": "v24.13.0",
+  "npm": "11.6.2"
+}
