@@ -29,19 +29,20 @@ type Money string
 var moneyPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)
 
 func ParseMoney(s string) (Money, error) {
-	if !moneyPattern.MatchString(s) {
-		return "", diagnostic(CodeInput)
-	}
-	if _, err := strconv.ParseUint(s, 10, 64); err != nil {
-		return "", diagnostic(CodeInput)
+	if _, err := Money(s).units(); err != nil {
+		return "", err
 	}
 	return Money(s), nil
 }
 func (m Money) units() (uint64, error) {
-	if _, err := ParseMoney(string(m)); err != nil {
-		return 0, err
+	if !moneyPattern.MatchString(string(m)) {
+		return 0, diagnostic(CodeInput)
 	}
-	return strconv.ParseUint(string(m), 10, 64)
+	units, err := strconv.ParseUint(string(m), 10, 64)
+	if err != nil {
+		return 0, diagnostic(CodeInput)
+	}
+	return units, nil
 }
 func add(a, b uint64) (uint64, error) {
 	if math.MaxUint64-a < b {
