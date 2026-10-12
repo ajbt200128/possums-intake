@@ -24,6 +24,15 @@ func newService(app core.App) *Service {
 	return s
 }
 
+// A comparable callback token identifies observed rollback without comparing
+// arbitrary SDK errors, whose underlying values may be slices or maps.
+type callbackFailure struct {
+	cause error
+}
+
+func (*callbackFailure) Error() string { return "LEDGER_TRANSACTION_CALLBACK_ABORTED" }
+func (e *callbackFailure) Unwrap() error { return e.cause }
+
 type transaction struct {
 	app core.App
 	ctx context.Context
@@ -63,6 +72,7 @@ func (s *Service) run(ctx context.Context, fn func(*transaction) error, withCloc
 	work, cancelWork := context.WithTimeout(ctx, WorkBudget)
 	defer cancelWork()
 	var callbackErr, completionErr error
+	var callbackAbort *callbackFailure
 	var entered, completionObserved, commitAttempted bool
 	// dbx rolls back then re-panics. Do not propagate panic payloads; without
 	// completion evidence the outcome is conservatively unknown.
@@ -91,7 +101,11 @@ func (s *Service) run(ctx context.Context, fn func(*transaction) error, withCloc
 			callbackErr = work.Err()
 		}
 		commitAttempted = callbackErr == nil
-		return callbackErr
+		if commitAttempted {
+			return nil
+		}
+		callbackAbort = &callbackFailure{cause: callbackErr}
+		return callbackAbort
 	})
 	if fatalStorage(err) || fatalStorage(completionErr) || fatalStorage(callbackErr) {
 		s.ready.Store(false)
@@ -100,7 +114,7 @@ func (s *Service) run(ctx context.Context, fn func(*transaction) error, withCloc
 		// An after-completion error cannot erase observed successful commit.
 		return nil
 	}
-	if entered && completionObserved && !commitAttempted && completionErr == callbackErr {
+	if entered && completionObserved && !commitAttempted && completionErr == callbackAbort {
 		if d, ok := callbackErr.(*Diagnostic); ok {
 			if d.Code == CodeCorrupt || d.Code == CodeSchema {
 				s.ready.Store(false)
