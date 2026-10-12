@@ -2,7 +2,7 @@
 
 ## Selected scope
 
-The operator requested a **new disposable CPU-only enclave**, using the published minimum **2 CPUs / 8192 MB**, with native PocketBase operator login and fake-account creation. No gateway cutover, real funds, payments, Honeycomb export or persistent volume. State loss is deliberately acceptable for this first test; it is not an encrypted-volume, financial restore or durability qualification.
+The operator requested a **new disposable CPU-only enclave**, using the published minimum **2 CPUs / 8192 MB**, with native PocketBase operator login and direct native fake-account creation/editing. The operator explicitly declined a custom account form and approved a native account collection. No gateway cutover, real funds, payments, Honeycomb export or persistent volume. State loss is deliberately acceptable for this first test; it is not an encrypted-volume, financial restore or durability qualification.
 
 The verified standalone baseline is pushed to the private `ajbt200128/possums-intake` repository. Its successful local checks are recorded in [verification](verification.md). The newly requested operator/dashboard surface is a separate local implementation/qualification packet, not yet accepted or deployed. Production publication/replacement workflows remain disabled.
 
@@ -17,8 +17,8 @@ No configuration/cost selections have been recorded. These two decisions remain 
 
 ## Next executable packet
 
-1. Locally qualify the opt-in native dashboard and explicitly labelled ledger-account form, including actual login, key/token separation, disabled native mutation/backup/log/installer surfaces, browser/server diagnostics and auxiliary-state privacy. The account form must use the current accounting API; no stock CRUD balance edits.
-2. Freeze and qualify a fresh image/source identity. The old archive's acceptance does not cover added UI or remote-serving behavior.
+1. Locally qualify the opt-in native dashboard and supported native account collection/editor: actual login, exact-text uint64 money, immutable external account identity, serialized writes, balance-edit/active-hold race protection, key/token separation, denied unrelated native CRUD/backup/log/installer surfaces, browser/server diagnostics and auxiliary-state privacy. Only direct synthetic account edits are authorized; custom accounting routes still require the shared key. No custom account form.
+2. Freeze and qualify a fresh image/source identity. The old archive's acceptance does not cover added UI, fresh schema v2 or remote-serving behavior. Refuse old v1 state without bootstrap migration/reset; no deployed old ledger exists, and existing-state migration remains a separate packet.
 3. Deliberately implement and test the synthetic startup/listener profile. The existing service only binds loopback and refuses missing state; it is not currently a reachable Tinfoil deployment. A synthetic profile may explicitly initialize a new disposable temporary state directory, but must not weaken ordinary `serve`, reset an existing ledger, infer production initialization or attach a volume. Keep export off, no egress, nonroot/read-only root and bounded writable scratch.
 4. After the decisions above, prepare the reviewed public config with the actual immutable image digest, supported CVM version, exact HTTP path exposure and dedicated secret names. Keep debug off. Use supported signed release/provenance evidence and preserve independent matching application builds; do not activate dormant production adapters by changing a false gate.
 5. Confirm the selected release, host, resource shape, rate and no-volume/no-debug policy, then create **one** new instance. Unknown/interrupted creation must be reconciled using passive authoritative status before any retry. Do not replace existing instances or promote a repository-wide latest release by default.
