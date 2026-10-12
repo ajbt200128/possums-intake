@@ -1,0 +1,61 @@
+# Hard-disabled replacement blueprint. No target, secret name or unlock policy
+# is borrowed from the gateway. Live adapter and environment remain unqualified.
+name: Replace intake ledger
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        type: string
+        required: true
+      release:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+      image:
+        type: string
+        required: true
+      manifest:
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+  deployments: read
+  attestations: read
+concurrency:
+  group: intake-original-authority-replacement
+  cancel-in-progress: false
+env:
+  RELEASE_AUTOMATION_ENABLED: 'false'
+  PRODUCTION_DEPLOYMENT_ENABLED: 'false'
+jobs:
+  preflight:
+    # No environment binding or platform credential here; qualify the EXISTING
+    # protected environment before referencing it in the protected job.
+    if: ${{ false && vars.PRODUCTION_DEPLOYMENT_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/deploy.py preflight
+  protected-replacement:
+    needs: preflight
+    # This unresolved reference is not permission to create an environment.
+    environment: ${{ vars.INTAKE_DEPLOYMENT_ENVIRONMENT }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Recheck authenticated approval/current main and admit one replacement
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # No live credentials or mutating transport exist in this packet.
+        run: python3 scripts/deploy.py protected

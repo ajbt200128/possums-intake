@@ -1,0 +1,30 @@
+name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: intake-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
+        with:
+          diagnostic-endpoint: ""
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_delivery.py
+      - run: nix flake check
+      - name: Build actual image and separate exec-only probe
+        run: nix build .#ledger-image .#image-smoke-probe --out-link result-image
+      - name: Qualify generated archive offline, not just source tests
+        run: |
+          image=$(nix build .#ledger-image --no-link --print-out-paths)
+          probe=$(nix build .#image-smoke-probe --no-link --print-out-paths)
+          nix shell --inputs-from . nixpkgs#skopeo --command python3 scripts/image-smoke.py "$image" "$probe/bin/nix"

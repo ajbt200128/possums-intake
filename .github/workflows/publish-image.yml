@@ -1,0 +1,94 @@
+# Local disabled artifact. Enabling requires a separately reviewed live adapter,
+# repository/registry policy and exact immutable release-config/tag preparation.
+name: Build reproducible intake image
+run-name: Intake image source ${{ github.sha }}
+# Manual exact-main admission avoids a privileged workflow_run trigger. The
+# source gate still requires successful exact-main check.yml evidence.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: intake-image-publication
+  cancel-in-progress: false
+env:
+  RELEASE_AUTOMATION_ENABLED: 'false'
+  PRODUCTION_DEPLOYMENT_ENABLED: 'false'
+jobs:
+  source-checks:
+    if: ${{ false && vars.RELEASE_AUTOMATION_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source: ${{ steps.source.outputs.source }}
+    steps:
+      # Trusted default-branch implementation, never PR artifacts.
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DELIVERY_REPOSITORY: ${{ vars.INTAKE_DELIVERY_REPOSITORY }}
+        run: python3 scripts/release.py source
+  build:
+    needs: source-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [a, b]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ needs.source-checks.outputs.source }}
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3
+        with:
+          diagnostic-endpoint: ""
+      # No application cache restore or shared remote builders.
+      - name: Prewarm external dependencies only
+        run: nix build .#release-build-deps --no-link
+      - name: Refuse valid application and image-stage outputs
+        run: python3 scripts/image-smoke-build.py
+      - name: Fresh native Linux build
+        run: nix build .#ledger-image --option substitute false --option builders "" --out-link result-image
+      - name: Record exact OCI digest and archive identity
+        run: |
+          cp -L result-image image.tar.gz
+          nix shell --inputs-from . nixpkgs#skopeo --command skopeo inspect --raw docker-archive:image.tar.gz > image-manifest.json
+          python3 -c 'import hashlib,pathlib; p=pathlib.Path; p("digest").write_text("sha256:"+hashlib.sha256(p("image-manifest.json").read_bytes()).hexdigest()+"\n"); p("archive-sha256").write_text(hashlib.sha256(p("image.tar.gz").read_bytes()).hexdigest()+"\n")'
+      - name: Qualify this exact fresh A image
+        if: matrix.builder == 'a'
+        run: |
+          probe=$(nix build .#image-smoke-probe --no-link --print-out-paths)
+          nix shell --inputs-from . nixpkgs#skopeo --command python3 scripts/image-smoke.py image.tar.gz "$probe/bin/nix" > qualification.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: intake-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.source-checks.outputs.source }}-${{ matrix.builder }}
+          path: |
+            digest
+            archive-sha256
+            qualification.json
+          retention-days: 1
+      - if: matrix.builder == 'a'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: intake-archive-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.source-checks.outputs.source }}
+          path: image.tar.gz
+          compression-level: 0
+          retention-days: 1
+  publication-admission:
+    needs: [source-checks, build]
+    runs-on: ubuntu-latest
+    # No publication credential or write permissions before missing policy is resolved.
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Fail closed until immutable release/config and live adapter are approved
+        run: python3 scripts/release.py prepare
