@@ -24,13 +24,13 @@ actual response writes, outside accounting transactions. All accounting goes thr
 ## Request contract
 
 Every accounting route is `POST`, exactly one JSON object, `Content-Type:
-application/json` (one header, no parameters), body ≤ `MaxBodyBytes = 4096`,
+application/json` (one header; standard media-type parameters accepted), body ≤ `MaxBodyBytes = 4096`,
 no `Content-Encoding` other than `identity`, no query parameters and no
 trailing data. A single `Idempotency-Key` header is required on `/credits` and
-`/reservations`. The decoder rejects duplicate keys, unknown fields, null
-required fields, missing required fields, non-object JSON, non-UTF-8 bytes
-(including invalid byte sequences — no replacement), unpaired UTF-16 surrogate
-escapes, malformed escapes and
+`/reservations`. Extra fields are ignored, never bound/persisted/echoed/exported.
+The decoder rejects duplicate keys, null required fields, missing required fields,
+non-object JSON, non-UTF-8 bytes (including invalid byte sequences — no replacement),
+unpaired UTF-16 surrogate escapes in known values, malformed escapes and
 type-mismatched fields. All of these are a closed `LEDGER_HTTP_INPUT_REJECTED`
 400. Valid surrogate pairs, escaped literal backslashes and literal U+FFFD remain
 valid; account identity is never normalized. Duplicate Authorization, Content-Type,
@@ -41,7 +41,12 @@ Error text is always locally authored and never derived from the request.
 Money strings use the exact ledger parser `^(0|[1-9][0-9]{0,19})$` checked
 against `18446744073709551615`; `amount`/`maximum` must be positive and
 `charged_amount` may be zero. `timeout_seconds` must be a JSON integer 1–1800,
-not a fraction, exponent or string.
+not a fraction, exponent or string. These monetary/timeout semantics are checked
+once by the ledger core, yielding `LEDGER_INPUT_INVALID` 400; HTTP checks JSON
+shape/presence/types, not pricing, usage or duplicate financial rules. Opaque account
+IDs preserve the gateway's 1–128 UTF-8-byte identity, including controls escaped in
+JSON. Native PocketBase mutation bodies remain separately strict against unknown
+fields/modifiers; they are not the gateway accounting interface.
 
 ## Routes and success shapes
 
@@ -108,7 +113,9 @@ isolated ledger where state matters and stubs for error/privacy boundaries:
   sets, pending-row list, account scoping and expired-row receipt;
 - every accounting route without/with a wrong/duplicated key, and the key never
   echoed;
-- duplicate keys, unknown/null/missing fields, non-object and trailing JSON,
+- ignored additive fields on all seven routes, changed extras on idempotent retries,
+  JSON media-type parameters and exact escaped-control account identity;
+- duplicate keys, null/missing known fields, non-object and trailing JSON,
   malformed UTF-8, oversized/compressed/query inputs, money/timeout wire rules;
 - pinned status for each closed ledger code, unexpected errors and panics as
   unknown-outcome 503, closed 404 for unknown/native routes and methods;

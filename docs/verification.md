@@ -92,6 +92,10 @@ After that correction, the parent again passed full race/vet/module verification
 
 Stock PocketBase update performs an eager preliminary record read before our native request hook. That read is not an accounting decision or effect and has no transaction work context; its framework errors are sanitized, but it does not itself clear cached ledger readiness on fatal storage errors. The fresh accounting lookup/transaction remains authoritative and fails closed. Whole-native-surface fatal-readiness propagation is not claimed.
 
+## Subsequent gateway-boundary compatibility pass
+
+The operator requested simpler, additive-compatible inputs without duplicated gateway work. The parent removed extra-field rejection, exact content-type text matching, duplicate HTTP semantic validation and an account-character restriction absent from the gateway. Ledger accounting invariants remain; no gateway changes or adapter integration occurred. Full race/vet, 53 offline tests, compiled curl, actual Chromium and a fresh generated-image/runtime run passed, with independent focused review/tests. The newer source/image identities and honest initial-test/compatibility limits are recorded in [the compatibility pass](gateway-compatibility.md#local-verification). They supersede the preceding native artifact identities for current source. Existing gateway main remains memory-only; this is not end-to-end integration or arbitrary future-version compatibility.
+
 ## Privacy and diagnostic scope
 
 Authority: intake [accounting boundaries](../PRIVACY.md#accounting-and-processor-boundaries), [forbidden defaults](../PRIVACY.md#forbidden-collection-and-defaults), [telemetry failure behavior](../PRIVACY.md#export-retention-and-failure-behavior), [required evidence](../PRIVACY.md#required-acceptance-evidence); gateway [data boundaries](../../possums/PRIVACY.md#data-handling-boundaries), [forbidden telemetry](../../possums/PRIVACY.md#telemetry-permitted-signals-and-forbidden-data), [aggregation](../../possums/PRIVACY.md#aggregation-is-necessary-not-sufficient) and [verification](../../possums/PRIVACY.md#required-evidence-for-every-telemetry-change).

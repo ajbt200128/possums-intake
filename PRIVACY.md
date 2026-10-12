@@ -11,6 +11,7 @@ These restrictions apply to real data in every environment. A Honeycomb destinat
 ## Accounting and processor boundaries
 
 - Persist only account totals, necessary reservations and bounded idempotency/terminal records described in [PLAN.md](PLAN.md). Never receive prompts, responses, tools, conversation history, inference model/token metadata or client recovery credentials.
+- Accounting JSON parsers ignore additive unknown fields for compatibility, without binding/persisting/echoing/exporting them. A malformed or newer caller may supply extras transiently within the bounded body; ignoring them is not permission for the gateway to send content, credentials or unnecessary request metadata. Known fields alone enter accounting. Native mutation and telemetry allowlists remain closed.
 - Necessary accounting is not telemetry. Account-scoped balance responses are first-party data; they are not support artifacts or observability exports.
 - The encrypted disk/WAL/deleted pages and optional manually downloaded snapshots are persistence boundaries. Deleting a row is not secure erasure. No scheduled backups or external backup destination by default.
 - Optional manual snapshots contain sensitive accounting and potentially PocketBase authentication/settings state. Downloading moves that state outside the enclave. No automatic uploads, support bundles or routine financial restore claims.
