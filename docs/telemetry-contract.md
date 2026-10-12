@@ -27,6 +27,12 @@ Dependencies: OpenTelemetry Go API/metrics SDK and supported `otlpmetrichttp` ex
 
 `(*Runtime).Shutdown()` cancels and **joins** owned work; it is safe concurrently/repeatedly. It drops pending batches and partial windows, never invokes exporter ForceFlush and never performs a final collection. Parent-context cancellation also closes observation hooks and discards partial/pending state. No secret-bearing sender continues after Shutdown returns. This API is deliberately blocking: export attempts have a two-second context/client timeout, but standard DNS and OS numeric methods have no hard whole-process completion guarantee. Do not abandon Shutdown in a detached goroutine and claim shutdown has completed. There is no hot toggle/flush/diagnostic-triggered work API.
 
+## Approved interface-error extension — implementation pending
+
+The operator approved [mandatory typed boundary classification and complete five-minute error-only aggregates](../PRIVACY.md#mandatory-interface-failure-classification-and-error-aggregates) across intake↔PocketBase and the intake side of intake↔gateway, including native/operator/background failures. This is a new family, not permission to extend the existing custom-route terminal/latency population or collect native activity/success/financial counters. No raw exceptions, dynamic type names, detailed diagnostic auto-export or endpoint/status/operation cross-breakdowns are permitted.
+
+The four-instrument schema and historical evidence below remain the currently qualified implementation. The new error metric's exact numeric enum/labels, failure-owner map, complete-window/final-sanitizer schema and source/wire/runtime evidence must be pinned before claiming it is recorded or exported. Every controlled failure still requires a safe classification when export is disabled or a complete window cannot be delivered. Startup, shutdown, unknown completion and external framework limitations must remain explicit; aggregation never establishes accounting success or guaranteed error delivery.
+
 ## Exact release schema
 
 All four instruments are **gauges**, not cumulative counters or an OTLP histogram:
