@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://devenv.sh/devenv.schema.json
+#
+# Local development inputs. nixpkgs is pinned to an exact revision so the Go
+# 1.27 toolchain required by the pinned PocketBase v0.40.5 is reproducible.
+# The revision below is the first nixpkgs snapshot observed to expose `go_1_27`
+# (1.27.2); devenv 2.0.4's bundled nixpkgs predates it.
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/6510408d147d8c5e6d76043e899e9251756f6a75

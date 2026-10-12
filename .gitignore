@@ -1,0 +1,28 @@
+# devenv / Nix development state
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# Nix build outputs
+result
+result-*
+
+# Go build and test artifacts
+/bin/
+*.test
+*.out
+coverage.html
+
+# Local secrets (never commit)
+.env
+.env.local
+*.pem
+*.key
+
+# Local ledger state (sensitive; the service's chosen path is documented in docs/local-development.md)
+*.db
+*.db-wal
+*.db-shm
