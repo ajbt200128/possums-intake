@@ -3,6 +3,8 @@ package telemetry
 import (
 	"math"
 	"time"
+
+	"possums-intake/internal/failuretype"
 )
 
 // StatusClass is deliberately numeric: callers cannot supply label text.
@@ -46,6 +48,78 @@ type processRelease struct {
 type batch struct {
 	request *requestRelease
 	process *processRelease
+	errors  *failureRelease
+}
+
+type failureWindow struct {
+	start, last time.Time
+	valid       bool
+	counts      [failuretype.Count]int64
+}
+type failureRelease struct {
+	start, end time.Time
+	counts     [failuretype.Count]int64
+}
+
+func newFailureWindow(now time.Time) failureWindow {
+	start := now.Truncate(requestPeriod)
+	return failureWindow{start: start, last: now, valid: now.Equal(start)}
+}
+
+// Failures have independent completeness, certified by the same runtime clock,
+// never by failure observations (including quiet, all-zero windows).
+func (w *failureWindow) advance(now time.Time) *failureRelease {
+	if now.Round(0).Before(w.last.Round(0)) {
+		w.valid = false
+		return nil
+	}
+	gapOK := now.Sub(w.last) <= 2*timely && now.Round(0).Sub(w.last.Round(0)) <= 2*timely
+	end := w.start.Add(requestPeriod)
+	if now.Before(end) {
+		w.valid = w.valid && gapOK
+		w.last = now
+		return nil
+	}
+	next := now.Truncate(requestPeriod)
+	onTime := next.Equal(end) && now.Sub(end) <= timely && gapOK
+	var release *failureRelease
+	if w.valid && onTime {
+		candidate := failureRelease{start: w.start, end: end, counts: w.counts}
+		if candidate.consistent() {
+			release = &candidate
+		}
+	}
+	*w = failureWindow{start: next, last: now, valid: onTime}
+	return release
+}
+
+func (w *failureWindow) observe(kind failuretype.Type) {
+	if !kind.Valid() {
+		w.valid = false
+		return
+	}
+	total, ok := failureTotal(w.counts)
+	if !ok || total == maxExactInt {
+		w.valid = false
+		return
+	}
+	w.counts[int(kind)-1]++
+}
+
+func failureTotal(counts [failuretype.Count]int64) (int64, bool) {
+	total := int64(0)
+	for _, n := range counts {
+		if n < 0 || n > maxExactInt || total > maxExactInt-n {
+			return 0, false
+		}
+		total += n
+	}
+	return total, true
+}
+
+func (r failureRelease) consistent() bool {
+	_, ok := failureTotal(r.counts)
+	return ok && aligned(r.start, r.end, requestPeriod)
 }
 
 func newRequestWindow(now time.Time) requestWindow {

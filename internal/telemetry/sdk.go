@@ -3,6 +3,8 @@ package telemetry
 import (
 	"context"
 
+	"possums-intake/internal/failuretype"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
@@ -17,6 +19,7 @@ const (
 	bucketsName  = "possums.intake.http.latency.bucket"
 	cpuName      = "possums.intake.process.cpu"
 	rssName      = "possums.intake.process.rss"
+	errorsName   = "possums.intake.interface.errors"
 	scopeName    = "possums-intake/telemetry"
 	scopeVersion = "1"
 )
@@ -57,6 +60,11 @@ func newSDK(c config) (*sdkEngine, error) {
 		e.close()
 		return nil, err
 	}
+	failures, err := m.Int64ObservableGauge(errorsName, metric.WithUnit("{error}"))
+	if err != nil {
+		e.close()
+		return nil, err
+	}
 	_, err = m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		if r := e.current.request; r != nil {
 			for i, status := range statusLabels {
@@ -67,12 +75,18 @@ func newSDK(c config) (*sdkEngine, error) {
 				}
 			}
 		}
+		if r := e.current.errors; r != nil {
+			for i, count := range r.counts {
+				kind := failuretype.Type(i + 1)
+				o.ObserveInt64(failures, count, metric.WithAttributes(attribute.String("error_type", kind.Label())))
+			}
+		}
 		if p := e.current.process; p != nil {
 			o.ObserveFloat64(cpu, p.cpu)
 			o.ObserveFloat64(rss, p.rss)
 		}
 		return nil
-	}, req, bins, cpu, rss)
+	}, req, bins, cpu, rss, failures)
 	if err != nil {
 		e.close()
 		return nil, err
@@ -103,10 +117,10 @@ func sanitize(raw metricdata.ResourceMetrics, b batch, c config) (metricdata.Res
 	if (c.environment != "development" && c.environment != "production") || !slotPattern.MatchString(c.slot) {
 		return empty, false
 	}
-	if b.request == nil && b.process == nil {
+	if b.request == nil && b.process == nil && b.errors == nil {
 		return empty, false
 	}
-	if b.request != nil && !b.request.consistent() || b.process != nil && !b.process.valid() {
+	if b.request != nil && !b.request.consistent() || b.process != nil && !b.process.valid() || b.errors != nil && !b.errors.consistent() {
 		return empty, false
 	}
 	if raw.Resource == nil || len(raw.ScopeMetrics) != 1 {
@@ -120,7 +134,7 @@ func sanitize(raw metricdata.ResourceMetrics, b batch, c config) (metricdata.Res
 		}
 	}
 	scope := raw.ScopeMetrics[0]
-	if scope.Scope.Name != scopeName || scope.Scope.Version != scopeVersion || len(scope.Metrics) > 4 {
+	if scope.Scope.Name != scopeName || scope.Scope.Version != scopeVersion || len(scope.Metrics) > 5 {
 		return empty, false
 	}
 	clean := metricdata.ScopeMetrics{Scope: instrumentation.Scope{Name: scopeName, Version: scopeVersion}}
@@ -196,6 +210,36 @@ func sanitize(raw metricdata.ResourceMetrics, b batch, c config) (metricdata.Res
 				points = append(points, metricdata.DataPoint[int64]{Attributes: attribute.NewSet(attrs...), StartTime: r.start, Time: r.end, Value: p.Value})
 			}
 			out.Data = metricdata.Gauge[int64]{DataPoints: points}
+		case errorsName:
+			r := b.errors
+			if r == nil || m.Unit != "{error}" {
+				return empty, false
+			}
+			gauge, ok := m.Data.(metricdata.Gauge[int64])
+			if !ok || len(gauge.DataPoints) != failuretype.Count {
+				return empty, false
+			}
+			points := make([]metricdata.DataPoint[int64], 0, failuretype.Count)
+			var cells [failuretype.Count]bool
+			for _, p := range gauge.DataPoints {
+				attrs := p.Attributes.ToSlice()
+				if len(attrs) != 1 || attrs[0].Key != "error_type" || attrs[0].Value.Type() != attribute.STRING {
+					return empty, false
+				}
+				cell := -1
+				for i := 0; i < failuretype.Count; i++ {
+					if attrs[0].Value.AsString() == failuretype.Type(i+1).Label() {
+						cell = i
+						break
+					}
+				}
+				if cell < 0 || cells[cell] || p.Value < 0 || p.Value > maxExactInt || p.Value != r.counts[cell] {
+					return empty, false
+				}
+				cells[cell] = true
+				points = append(points, metricdata.DataPoint[int64]{Attributes: attribute.NewSet(attribute.String("error_type", failuretype.Type(cell+1).Label())), StartTime: r.start, Time: r.end, Value: r.counts[cell]})
+			}
+			out.Data = metricdata.Gauge[int64]{DataPoints: points}
 		case cpuName, rssName:
 			p := b.process
 			if p == nil {
@@ -219,7 +263,7 @@ func sanitize(raw metricdata.ResourceMetrics, b batch, c config) (metricdata.Res
 		}
 		clean.Metrics = append(clean.Metrics, out)
 	}
-	if b.request != nil && (!seen[requestsName] || !seen[bucketsName]) || b.process != nil && (!seen[cpuName] || !seen[rssName]) {
+	if b.request != nil && (!seen[requestsName] || !seen[bucketsName]) || b.process != nil && (!seen[cpuName] || !seen[rssName]) || b.errors != nil && !seen[errorsName] {
 		return empty, false
 	}
 	return metricdata.ResourceMetrics{Resource: expectedResource, ScopeMetrics: []metricdata.ScopeMetrics{clean}}, true

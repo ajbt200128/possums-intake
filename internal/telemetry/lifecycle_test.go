@@ -48,6 +48,8 @@ func TestObservedDuplicateOrLostTerminalInvalidatesWholeWindow(t *testing.T) {
 				r.ObserveTerminal(Status2xx, 0)
 			}
 			r.InvalidateRequests()
+			// Isolate this request-only lifecycle assertion from quiet error windows.
+			r.InvalidateFailures()
 			for i := 1; i <= 300; i++ {
 				now = epoch.Add(time.Duration(i) * time.Second)
 				r.tick(context.Background())

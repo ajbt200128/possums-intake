@@ -4,7 +4,7 @@
 
 The operator approved mandatory typed classifications at every project-controlled intake↔PocketBase and intake↔gateway failure boundary, including native operator and background failures. The intake side is in scope; gateway implementation remains deferred. See [the privacy extension](../PRIVACY.md#mandatory-interface-failure-classification-and-error-aggregates), [forbidden collection](../PRIVACY.md#forbidden-collection-and-defaults), [failure/export rules](../PRIVACY.md#export-retention-and-failure-behavior) and the sibling gateway's [closed error-category requirement](../../possums/PRIVACY.md#telemetry-permitted-signals-and-forbidden-data).
 
-**This is the selected implementation contract, not complete coverage or export evidence.** The metric foundation is being implemented; boundary mappings, observation ownership and integrated source/wire/image qualification remain pending. Existing qualified metrics are documented in [the telemetry contract](telemetry-contract.md). Live Honeycomb export remains unauthorized; the disposable synthetic startup remains unconditionally telemetry-off.
+**This is the selected implementation contract, not complete coverage or export evidence.** The metric foundation passed parent synthetic source/window/SDK/wire checks. Boundary mappings, observation ownership and integrated image/runtime qualification remain pending. The ordinary runtime statically withholds this family until coverage is qualified; neither accepted exporter configuration nor an HTTP-only test fixture can enable unqualified error zeros. Existing qualified metrics are documented in [the telemetry contract](telemetry-contract.md). Live Honeycomb export remains unauthorized; the disposable synthetic startup remains unconditionally telemetry-off.
 
 ## Classification contract
 
@@ -70,6 +70,20 @@ Pin exact call-site/type/owner mappings and test duplicate/lost observations bef
 PocketBase can consume errors internally before project hooks receive them. The stock token-loading middleware, dummy-password lookup and auxiliary cleanup paths require scoped supported-API inspection; do not recover categories by intercepting logger text or recreate authentication. Native PATCH's preliminary SDK lookup precedes the accounting hook, so transaction-scoped negative tests do not qualify that lookup's readiness behavior. dbx's panic rollback path does not expose every rollback error. Process termination, fatal runtime failures and pre-handler transport failures are external interception limits, not generic-success cases. Preserve the existing disclosed SDK default-resource evaluation boundary.
 
 Required remaining evidence: canonical hostile-diagnostic tests; typed SQLite/context and unknown begin/work/rollback/completion tests; known-commit/later-hook/delivery/cleanup races; native authentication/read/write and preliminary lookup tests; once-only propagation; actual HTTP/stdio/auxiliary-state privacy; complete sparse/zero/invalid/partial windows; actual maximal OTLP protobuf/TLS/one-attempt wire checks; off/outage/shutdown independence; generated-image/runtime qualification. All fixtures must be isolated and synthetic, with no live export or gateway inference.
+
+### Parent-observed foundation evidence
+
+The parent inspected the enum, window, runtime, SDK sanitizer and tests. Full Go race tests, vet and module verification passed with the initial foundation and compiled synthetic startup. After the production coverage gate and HTTP-only fixture correction, parent failuretype/telemetry race tests passed three times, with focused vet. The actual supported loopback-TLS protobuf fixture emitted 81 points, five gauges, exactly 39 error labels, **6,205 bytes** and one origin attempt, below the unchanged 16 KiB cap; hostile metadata/credentials were absent from its datapoints.
+
+Independent source review identified misleading zero-error release without boundary hooks. Production construction now disables this family before worker startup; observations do not read its clock or change its state, and ticks do not advance it. Follow-up review confirmed that correction and identified one-shot invalidation in the HTTP-only fixture as insufficient across future windows. That fixture now uses the same disabled-coverage construction; a parent-passed two-window regression checks both paths while preserving existing request metrics. These are source/test-only results, not live Honeycomb or generated-image evidence. No boundary hooks or complete interface coverage follow from this foundation.
+
+Repeatable checks:
+
+`devenv shell -- env OTEL_SDK_DISABLED=true GOFLAGS=-mod=readonly go test -race ./internal/failuretype ./internal/telemetry -count=3 -timeout=120s`
+
+`devenv shell -- env OTEL_SDK_DISABLED=true GOFLAGS=-mod=readonly go vet ./internal/failuretype ./internal/telemetry`
+
+`devenv shell -- env OTEL_SDK_DISABLED=true GOFLAGS=-mod=readonly go test ./internal/telemetry -run '^TestFailureMaximumSupportedTLSProtobufOneRequest$' -v -count=1`
 
 ### Confirmed local prerequisite fix
 

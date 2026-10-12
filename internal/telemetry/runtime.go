@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"possums-intake/internal/failuretype"
+
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
@@ -16,8 +18,10 @@ type exporterFactory func(context.Context, config) (sdkmetric.Exporter, func(), 
 type Runtime struct {
 	mu         sync.Mutex
 	state      State
-	closed     bool
-	requests   requestWindow
+	closed          bool
+	failureCoverage bool
+	requests        requestWindow
+	failures   failureWindow
 	process    processWindow
 	nextSample time.Time
 	source     processSource
@@ -32,10 +36,15 @@ type Runtime struct {
 // runtime can later export complete windows, so real config requires approval.
 func New(ctx context.Context) *Runtime {
 	c, state := runtimeConfig()
-	return newRuntime(ctx, c, state, productionExporter, currentProcess, time.Now, true)
+	// Boundary owners are not integrated yet. Do not publish healthy zeros for
+	// an unobserved population; enable this only after coverage qualification.
+	return newRuntimeWithFailureCoverage(ctx, c, state, productionExporter, currentProcess, time.Now, true, false)
 }
 func newRuntime(parent context.Context, c config, state State, factory exporterFactory, source processSource, now func() time.Time, runClock bool) *Runtime {
-	r := &Runtime{state: state, source: source, now: now}
+	return newRuntimeWithFailureCoverage(parent, c, state, factory, source, now, runClock, true)
+}
+func newRuntimeWithFailureCoverage(parent context.Context, c config, state State, factory exporterFactory, source processSource, now func() time.Time, runClock, failureCoverage bool) *Runtime {
+	r := &Runtime{state: state, source: source, now: now, failureCoverage: failureCoverage}
 	if state != Enabled {
 		return r
 	}
@@ -65,6 +74,9 @@ func newRuntime(parent context.Context, c config, state State, factory exporterF
 	}
 	start := now()
 	r.requests = newRequestWindow(start)
+	if failureCoverage {
+		r.failures = newFailureWindow(start)
+	}
 	r.process = newProcessWindow(start)
 	r.nextSample = start.Truncate(samplePeriod).Add(samplePeriod)
 	r.queue = make(chan batch, 1)
@@ -113,6 +125,38 @@ func (r *Runtime) InvalidateRequests() {
 		r.requests.valid = false
 	}
 }
+
+// ObserveFailure accepts only a closed numeric classification, outside accounting
+// transactions. Boundary mapping and once-only observation ownership are separate.
+// Invalid types or counts withhold only the failure family.
+func (r *Runtime) ObserveFailure(kind failuretype.Type) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state != Enabled || r.closed || !r.failureCoverage {
+		return
+	}
+	start, heartbeat := r.failures.start, r.failures.last
+	release := r.failures.advance(r.now())
+	// Observations cannot certify quiet-window coverage or retain event times.
+	if r.failures.start.Equal(start) {
+		r.failures.last = heartbeat
+	} else {
+		r.failures.last = r.failures.start
+	}
+	r.failures.observe(kind)
+	if release != nil {
+		r.enqueue(batch{errors: release})
+	}
+}
+
+// InvalidateFailures withholds the current error family on known integrity loss.
+func (r *Runtime) InvalidateFailures() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == Enabled && !r.closed && r.failureCoverage {
+		r.failures.valid = false
+	}
+}
 func (r *Runtime) enqueue(b batch) {
 	select {
 	case r.queue <- b:
@@ -142,6 +186,10 @@ func (r *Runtime) tick(ctx context.Context) {
 	}
 	now := r.now()
 	req := r.requests.advance(now)
+	var failures *failureRelease
+	if r.failureCoverage {
+		failures = r.failures.advance(now)
+	}
 	due := r.nextSample
 	sample := !now.Before(due)
 	if sample {
@@ -161,8 +209,8 @@ func (r *Runtime) tick(ctx context.Context) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.closed && (req != nil || proc != nil) {
-		r.enqueue(batch{request: req, process: proc})
+	if !r.closed && (req != nil || proc != nil || failures != nil) {
+		r.enqueue(batch{request: req, process: proc, errors: failures})
 	}
 }
 func (r *Runtime) send(ctx context.Context, engine *sdkEngine, exporter sdkmetric.Exporter, cleanup func()) {
@@ -171,6 +219,7 @@ func (r *Runtime) send(ctx context.Context, engine *sdkEngine, exporter sdkmetri
 		r.mu.Lock()
 		r.closed = true
 		r.requests = requestWindow{}
+		r.failures = failureWindow{}
 		r.process = processWindow{}
 		r.discard()
 		r.mu.Unlock()
@@ -222,6 +271,7 @@ func (r *Runtime) Shutdown() {
 	r.mu.Lock()
 	r.closed = true
 	r.requests = requestWindow{}
+	r.failures = failureWindow{}
 	r.process = processWindow{}
 	cancel := r.cancel
 	r.mu.Unlock()
