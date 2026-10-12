@@ -85,6 +85,14 @@ Repeatable checks:
 
 `devenv shell -- env OTEL_SDK_DISABLED=true GOFLAGS=-mod=readonly go test ./internal/telemetry -run '^TestFailureMaximumSupportedTLSProtobufOneRequest$' -v -count=1`
 
+### Parent-observed typed helper evidence
+
+`ledger.Diagnostic.Kind`, `FailureKind` and opt-in `CanonicalFailure` now carry only private numeric classification metadata. Supported context and SQLite causes are inspected without calling `Error`; unknown, typed-nil and panicking `As`/`Is`/`Unwrap` fixtures use closed fallbacks. Canonicalization reconstructs core public templates instead of copying hostile exported fields. `CodeWork` alone does not establish cancellation. Unknown non-completion boundaries use `INTAKE_BOUNDARY_UNAVAILABLE` with an owner's closed stage, not a misleading commit-failure code; the conservative unknown outcome does not erase previously observed accounting results. Legacy `Failure`, initialization/runtime variants and HTTP callers have not been switched to this helper.
+
+The parent inspected the helper implementation and actual SQLite BUSY/LOCKED/extended-CONSTRAINT/NOTADB tests. Full sequential-package race tests, vet and module verification passed; independent source review confirmed the non-accounting fallback correction. One concurrent-package race run returned `LEDGER_WORK_CANCELLED` during an operator fixture's initialization; its cause was not established from that diagnostic alone. The isolated test passed three times and the complete `-p 1` race run passed without changing accounting budgets. This is source-only helper evidence, not whole-boundary observation coverage or new image/export qualification. Transaction reporting remains under separate review.
+
+`devenv shell -- env OTEL_SDK_DISABLED=true GOFLAGS=-mod=readonly go test -p 1 -race ./... -count=1 -timeout=180s`
+
 ### Confirmed local prerequisite fix
 
 An actual regression test reproduced arbitrary non-comparable callback errors becoming `LEDGER_COMMIT_UNKNOWN` because comparison of error interfaces panicked after an observed rollback. A comparable callback-abort token now preserves the supported SDK's rollback evidence without formatting the cause. `TestNonComparableCallbackFailurePreservesObservedRollback` uses an error whose `Error()` panics, verifies `LEDGER_STORAGE_UNAVAILABLE`/`no_effect`, retained readiness and absence of the rolled-back row. The parent passed the full ledger race suite and ledger vet afterward. This scoped fix does not establish new metric coverage or whole-service/image acceptance.

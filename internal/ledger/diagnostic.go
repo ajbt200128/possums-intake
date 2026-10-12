@@ -1,5 +1,7 @@
 package ledger
 
+import "possums-intake/internal/failuretype"
+
 // Code is a closed component-specific category, never an upstream error string.
 type Code string
 
@@ -23,14 +25,17 @@ const (
 	CodeRandom       Code = "LEDGER_RESERVATION_ID_UNAVAILABLE"
 	CodeCorrupt      Code = "LEDGER_STATE_INVALID"
 	CodeCommit       Code = "LEDGER_COMMIT_UNKNOWN"
-	CodeClosed       Code = "LEDGER_NOT_READY"
-	CodeClose        Code = "LEDGER_STORAGE_CLOSE_UNAVAILABLE"
-	CodeStartup      Code = "LEDGER_STARTUP_STORAGE"
-	CodeMissing      Code = "LEDGER_STARTUP_MISSING_STATE"
-	CodeExisting     Code = "LEDGER_INIT_NONEMPTY"
-	CodeSchema       Code = "LEDGER_STARTUP_SCHEMA"
-	CodePath         Code = "LEDGER_STATE_PATH_INVALID"
-	CodeRoutes       Code = "LEDGER_HTTP_NOT_IMPLEMENTED"
+	// CodeBoundary requires an owner's closed stage and numeric classification.
+	// It does not imply that an accounting commit was attempted.
+	CodeBoundary Code = "INTAKE_BOUNDARY_UNAVAILABLE"
+	CodeClosed   Code = "LEDGER_NOT_READY"
+	CodeClose    Code = "LEDGER_STORAGE_CLOSE_UNAVAILABLE"
+	CodeStartup  Code = "LEDGER_STARTUP_STORAGE"
+	CodeMissing  Code = "LEDGER_STARTUP_MISSING_STATE"
+	CodeExisting Code = "LEDGER_INIT_NONEMPTY"
+	CodeSchema   Code = "LEDGER_STARTUP_SCHEMA"
+	CodePath     Code = "LEDGER_STATE_PATH_INVALID"
+	CodeRoutes   Code = "LEDGER_HTTP_NOT_IMPLEMENTED"
 )
 
 // Diagnostic retains no wrapped cause, offending value or internal stack. HTTP
@@ -41,11 +46,12 @@ type Diagnostic struct {
 	Constraint string `json:"constraint"`
 	Outcome    string `json:"outcome"`
 	NextStep   string `json:"next_step"`
+	kind       failuretype.Type
 }
 
 func (d *Diagnostic) Error() string { return string(d.Code) }
 func diagnostic(code Code) *Diagnostic {
-	d := &Diagnostic{Code: code, Outcome: "no_effect", NextStep: "Correct the request; retry only the original identity."}
+	d := &Diagnostic{Code: code, kind: defaultFailureKind(code), Outcome: "no_effect", NextStep: "Correct the request; retry only the original identity."}
 	switch code {
 	case CodeNativeHold:
 		d.Stage = "native_account_write"
