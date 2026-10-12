@@ -436,7 +436,7 @@ class DeliveryTests(unittest.TestCase):
                 p = root / name
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text("synthetic public source")
-            for name in (".env", ".devenv/state/private.db", ".git/config", "private.db"):
+            for name in (".env", ".devenv/state/private.db", ".git/config", "private.db", "scripts/__pycache__/generated.py"):
                 p = root / name
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text("private-fixture-sentinel")
@@ -449,6 +449,7 @@ class DeliveryTests(unittest.TestCase):
             self.assertFalse((a / ".git").exists())
             self.assertFalse((a / ".devenv").exists())
             self.assertFalse((a / ".env").exists())
+            self.assertFalse((a / "scripts/__pycache__").exists())
             self.assertEqual(result_a["git_commit"], "unavailable")
             self.stop("source_snapshot", lambda: source_snapshot.snapshot(root, a))
             self.assertTrue((a / "source-manifest.json").is_file())
@@ -580,6 +581,50 @@ class DeliveryTests(unittest.TestCase):
         self.assertIn("OTEL_SDK_DISABLED=true", flags)
         self.assertIn("type=volume,src=synthetic-volume,dst=/state", flags)
         self.assertNotIn("--privileged", flags)
+
+    def test_native_operator_uses_real_entrypoint_and_fresh_state(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe", "/synthetic-assets.json")
+        with patch.object(fixture, "volume", return_value="synthetic-new-state"), \
+                patch.object(fixture, "once") as once, \
+                patch.object(fixture, "start", return_value="synthetic-server") as start, \
+                patch.object(fixture, "exec") as execute, patch.object(fixture, "stop") as stop:
+            fixture.native_operator()
+        self.assertEqual(once.call_args_list, [call("synthetic-new-state", "init", operator=True),
+                                              call("synthetic-new-state", "operator-privacy", probe=True)])
+        start.assert_called_once_with("synthetic-new-state", operator=True)
+        execute.assert_called_once_with("synthetic-server", "operator")
+        stop.assert_called_once_with("synthetic-server")
+
+    def test_native_probe_failure_cannot_qualify_privacy_or_hide_failure(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
+        with patch.object(fixture, "volume", return_value="synthetic-new-state"), \
+                patch.object(fixture, "once") as once, patch.object(fixture, "start"), \
+                patch.object(fixture, "exec", side_effect=r.Stop("image_runtime")):
+            self.stop("image_runtime", fixture.native_operator)
+        once.assert_called_once_with("synthetic-new-state", "init", operator=True)
+
+    def test_native_init_credentials_runtime_only_and_controls_preserved(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe", "/synthetic-assets.json")
+        result = subprocess.CompletedProcess([], 0, b'{"status":"initialized_empty"}', b"")
+        with patch("pathlib.Path.is_file", return_value=True), patch.object(smoke, "command", return_value=result) as cmd:
+            fixture.once("synthetic-new-state", "init", operator=True)
+        args = cmd.call_args.args[0]
+        self.assertNotIn("--entrypoint", args)
+        self.assertEqual(args[-4:], ["init", "--state", "/state", "--operator"])
+        self.assertIn("LEDGER_OPERATOR_EMAIL=" + fixture.operator_email, args)
+        self.assertIn("LEDGER_OPERATOR_PASSWORD=" + fixture.operator_password, args)
+        self.assertIn("type=bind,src=/synthetic-assets.json,dst=/asset-manifest.json,readonly", args)
+        for flag in ("--read-only", "--network", "--cap-drop", "--security-opt", "--log-driver"):
+            self.assertIn(flag, args)
+        self.assertEqual(args[args.index("--network") + 1], "none")
+        self.assertEqual(args[args.index("--log-driver") + 1], "none")
+        self.assertNotIn("0.0.0.0", " ".join(args))
+
+    def test_native_operator_requires_frozen_manifest(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
+        with patch.object(smoke, "command") as cmd:
+            self.stop("image_archive", lambda: fixture.once("synthetic-new-state", "init", operator=True))
+        cmd.assert_not_called()
 
     def test_delivery_workflows_hard_disabled_and_serialized(self):
         root = Path(__file__).resolve().parents[1]

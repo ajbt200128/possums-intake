@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,10 @@ func request(path, body string, status int, key string) ([]byte, error) {
 	if path == "/healthz" || body == "" {
 		method = http.MethodGet
 	}
+	return exchange(method, path, body, status, key, 8192)
+}
+
+func exchange(method, path, body string, status int, key string, limit int64) ([]byte, error) {
 	req, err := http.NewRequest(method, "http://127.0.0.1:8090"+path, bytes.NewBufferString(body))
 	if err != nil {
 		return nil, err
@@ -29,7 +34,7 @@ func request(path, body string, status int, key string) ([]byte, error) {
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
-	if path == "/credits" {
+	if path == "/credits" || path == "/reservations" {
 		req.Header.Set("Idempotency-Key", "v1."+strconv.FormatInt(time.Now().UnixMilli(), 10)+".11111111111111111111111111111111")
 	}
 	client := http.Client{Timeout: 3 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
@@ -38,8 +43,8 @@ func request(path, body string, status int, key string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8193))
-	if err != nil || len(raw) > 8192 || resp.StatusCode != status {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil || int64(len(raw)) > limit || resp.StatusCode != status {
 		return nil, fmt.Errorf("unexpected synthetic response")
 	}
 	return raw, nil
@@ -81,6 +86,115 @@ func database(mode string) error {
 		return fmt.Errorf("unsupported fixture")
 	}
 	return err
+}
+
+// Actual stock API fields, not an alternative account writer or schema.
+func operator() error {
+	key := os.Getenv("LEDGER_ADMIN_KEY")
+	login, _ := json.Marshal(map[string]string{"identity": os.Getenv("LEDGER_OPERATOR_EMAIL"), "password": os.Getenv("LEDGER_OPERATOR_PASSWORD")})
+	raw, err := request("/api/collections/_superusers/auth-with-password", string(login), 200, "")
+	if err != nil {
+		return err
+	}
+	var auth struct {
+		Token string `json:"token"`
+	}
+	if json.Unmarshal(raw, &auth) != nil || auth.Token == "" || auth.Token == key {
+		return fmt.Errorf("native authentication unconfirmed")
+	}
+	token := auth.Token
+	for _, credential := range []string{"", token} {
+		if _, err := request("/balance", `{"account_id":"native-image-fixture"}`, 401, credential); err != nil {
+			return err
+		}
+	}
+	path := "/api/collections/ledger_accounts/records"
+	if _, err := request(path, "", 401, key); err != nil {
+		return err
+	}
+	raw, err = request(path, `{"id":"","collectionId":"ledgeraccounts1","collectionName":"ledger_accounts","account_id":"native-image-fixture","balance":"100","enabled":true}`, 200, token)
+	if err != nil {
+		return err
+	}
+	var account struct {
+		ID             string `json:"id"`
+		AccountID      string `json:"account_id"`
+		Balance        string `json:"balance"`
+		Enabled        bool   `json:"enabled"`
+		CollectionID   string `json:"collectionId"`
+		CollectionName string `json:"collectionName"`
+	}
+	if json.Unmarshal(raw, &account) != nil || len(account.ID) != 15 || account.AccountID != "native-image-fixture" || account.Balance != "100" || !account.Enabled || account.CollectionID != "ledgeraccounts1" || account.CollectionName != "ledger_accounts" {
+		return fmt.Errorf("native account evidence mismatch")
+	}
+	path += "/" + account.ID
+	if _, err := exchange(http.MethodPatch, path, `{"balance":"90"}`, 200, token, 8192); err != nil {
+		return err
+	}
+	if _, err := request("/reservations", `{"account_id":"native-image-fixture","maximum":"20","timeout_seconds":600}`, 200, key); err != nil {
+		return err
+	}
+	raw, err = exchange(http.MethodPatch, path, `{"balance":"89"}`, 409, token, 8192)
+	var diagnostic struct {
+		Code string `json:"code"`
+	}
+	if err != nil || json.Unmarshal(raw, &diagnostic) != nil || diagnostic.Code != "LEDGER_NATIVE_BALANCE_HELD" || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
+		return fmt.Errorf("held balance refusal unconfirmed")
+	}
+	if _, err := exchange(http.MethodPatch, path, `{"enabled":false}`, 200, token, 8192); err != nil {
+		return err
+	}
+	raw, err = request("/balance", `{"account_id":"native-image-fixture"}`, 200, key)
+	var balance struct {
+		Available string `json:"available"`
+		Accounts  []struct {
+			Balance string `json:"balance"`
+			Enabled bool   `json:"enabled"`
+		} `json:"account_balance"`
+		Pending []json.RawMessage `json:"pending_reservations"`
+	}
+	if err != nil || json.Unmarshal(raw, &balance) != nil || balance.Available != "70" || len(balance.Accounts) != 1 || balance.Accounts[0].Balance != "90" || balance.Accounts[0].Enabled || len(balance.Pending) != 1 || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
+		return fmt.Errorf("custom balance evidence mismatch")
+	}
+	for _, denied := range []string{"/api/logs?superuserRequests=0", "/api/logs/stats"} {
+		if _, err := request(denied, "", 403, token); err != nil {
+			return err
+		}
+	}
+	if _, err := exchange(http.MethodPatch, "/api/settings", `{"logs":{"maxDays":5}}`, 403, token, 8192); err != nil {
+		return err
+	}
+	// Every frozen generated asset, including license texts, must be identical
+	// through the Linux operator HTTP surface. This is not browser execution.
+	manifest, err := os.ReadFile("/asset-manifest.json")
+	var assets map[string]string
+	if err != nil || json.Unmarshal(manifest, &assets) != nil || len(assets) == 0 {
+		return fmt.Errorf("frozen asset manifest unavailable")
+	}
+	for name, digest := range assets {
+		assetPath := "/_/" + name
+		if name == "index.html" {
+			assetPath = "/_/"
+		}
+		raw, err := exchange(http.MethodGet, assetPath, "", 200, "", 4<<20)
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != digest || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
+			return fmt.Errorf("native asset binding mismatch")
+		}
+	}
+	return nil
+}
+
+func authOrigins() error {
+	db, err := sql.Open("sqlite", "file:/state/data.db?mode=ro")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM _authOrigins").Scan(&count); err != nil || count != 0 {
+		return fmt.Errorf("native auth origins must be empty")
+	}
+	return nil
 }
 
 func run(mode string) error {
@@ -128,6 +242,13 @@ func run(mode string) error {
 		if err != nil || bytes.Contains(raw, []byte("hostile-fixture")) || bytes.Contains(raw, []byte("secret-fixture")) || bytes.Contains(raw, []byte(key)) {
 			return fmt.Errorf("unsafe diagnostic")
 		}
+	case "operator":
+		return operator()
+	case "operator-privacy":
+		if err := database("logs"); err != nil {
+			return err
+		}
+		return authOrigins()
 	case "logs", "unsupported-schema", "schema-drift", "migration-rollback":
 		return database(mode)
 	default:

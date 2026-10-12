@@ -23,9 +23,38 @@ def inputs(root):
         base = root / folder
         r.require(not base.is_symlink(), "source_snapshot")
         for path in base.rglob("*"):
+            if "__pycache__" in path.relative_to(base).parts:
+                continue
             r.require(not path.is_symlink(), "source_snapshot")
             if path.is_file() and path.suffix in extensions:
                 files.append(path)
+    operator = root / "internal/operator"
+    if operator.exists():
+        manifest_path = operator / "ui/assets.json"
+        try:
+            assets = json.loads(manifest_path.read_text())
+        except (OSError, ValueError):
+            raise r.Stop("source_snapshot") from None
+        for name, digest in assets.items():
+            relative = Path(name)
+            r.require(not relative.is_absolute() and ".." not in relative.parts, "source_snapshot")
+            asset = operator / "ui/dist" / relative
+            r.require(asset.is_file() and not asset.is_symlink()
+                      and hashlib.sha256(asset.read_bytes()).hexdigest() == digest, "source_snapshot")
+            files.append(asset)
+        files.extend(operator / name for name in ("ui/assets.json", "ui/source.json",
+                     "ui/upstream.patch", "ui/build.py", "ui/LICENSE.pocketbase.txt",
+                     "ui/licenses.json", "ui/licenses/sources.json", "ui/licenses/NOTICE.txt", "ui/test_build.py", "browser-test.mjs"))
+        try:
+            licenses = json.loads((operator / "ui/licenses/sources.json").read_text())
+        except (OSError, ValueError):
+            raise r.Stop("source_snapshot") from None
+        for name, entry in licenses.items():
+            r.require(Path(name).name == name and name.endswith(".txt"), "source_snapshot")
+            license_file = operator / "ui/licenses" / name
+            r.require(license_file.is_file() and not license_file.is_symlink()
+                      and hashlib.sha256(license_file.read_bytes()).hexdigest() == entry["sha256"], "source_snapshot")
+            files.append(license_file)
     r.require(all(path.is_file() and not path.is_symlink() for path in files), "source_snapshot")
     return sorted(files)
 

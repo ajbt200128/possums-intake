@@ -108,8 +108,11 @@ def loaded_image_identity(config_identity):
 
 
 class Fixture:
-    def __init__(self, image, probe):
+    def __init__(self, image, probe, asset_manifest=None):
         self.image, self.probe = image, probe
+        self.asset_manifest = asset_manifest
+        self.operator_email = "synthetic-image-operator@example.invalid"
+        self.operator_password = "synthetic-only-" + uuid.uuid4().hex
         self.key = "synthetic-image-credential-" + uuid.uuid4().hex
         self.prefix = "intake-local-fixture-" + uuid.uuid4().hex
         self.containers = []
@@ -122,22 +125,31 @@ class Fixture:
         success(["docker", "volume", "create", name])
         return name
 
-    def flags(self, volume):
-        return ["--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+    def flags(self, volume, *, operator=False):
+        flags = ["--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                 "--ulimit", "core=0", "--log-driver", "none", "--mount", "type=volume,src=" + volume + ",dst=/state",
                 "--mount", "type=bind,src=" + self.probe + ",dst=/probe,readonly",
                 "-e", "LEDGER_ADMIN_KEY=" + self.key, "-e", "OTEL_SDK_DISABLED=true"]
+        if operator:
+            if self.asset_manifest is None or not Path(self.asset_manifest).is_file():
+                raise r.Stop("image_archive")
+            flags += ["--mount", "type=bind,src=" + self.asset_manifest + ",dst=/asset-manifest.json,readonly",
+                      "-e", "LEDGER_OPERATOR_EMAIL=" + self.operator_email,
+                      "-e", "LEDGER_OPERATOR_PASSWORD=" + self.operator_password]
+        return flags
 
-    def once(self, volume, mode, *, probe=False, failure=None, file_limit=None):
+    def once(self, volume, mode, *, probe=False, failure=None, file_limit=None, operator=False):
         name = self.prefix + "-once-" + str(len(self.containers))
         self.containers.append(name)
-        args = ["docker", "run", "--rm", "--name", name, *self.flags(volume)]
+        args = ["docker", "run", "--rm", "--name", name, *self.flags(volume, operator=operator)]
         if file_limit is not None:
             args += ["--ulimit", "fsize=" + str(file_limit) + ":" + str(file_limit)]
         if probe:
             args += ["--entrypoint", "/probe", self.image, mode]
         else:
             args += [self.image, mode, "--state", "/state"]
+            if operator:
+                args += ["--operator"]
         result = command(args)
         if failure:
             r.require(result.returncode == 1 and result.stdout == b"", "image_runtime")
@@ -166,10 +178,21 @@ class Fixture:
         self.once(volume, "init", failure="LEDGER_INIT_NONEMPTY")
         self.once(volume, "logs", probe=True)
 
-    def start(self, volume):
+    def native_operator(self):
+        volume = self.volume()
+        self.once(volume, "init", operator=True)
+        server = self.start(volume, operator=True)
+        self.exec(server, "operator")
+        self.stop(server)
+        self.once(volume, "operator-privacy", probe=True)
+
+    def start(self, volume, *, operator=False):
         name = self.prefix + "-server-" + str(len(self.containers))
         self.containers.append(name)
-        success(["docker", "create", "--name", name, *self.flags(volume), self.image])
+        args = ["docker", "create", "--name", name, *self.flags(volume, operator=operator), self.image]
+        if operator:
+            args += ["serve", "--operator", "--state", "/state", "--listen", "127.0.0.1:8090"]
+        success(args)
         # Attach with daemon log driver NONE. Output is inspected in memory and
         # never dumped or persisted by this script, even on hostile errors.
         self.process = subprocess.Popen(["docker", "start", "-a", name], stdin=subprocess.DEVNULL,
@@ -231,7 +254,10 @@ def qualify(archive, probe):
         local_probe = Path(directory) / "probe"
         shutil.copyfile(probe, local_probe)
         local_probe.chmod(0o555)
-        fixture = Fixture(image, str(local_probe.resolve()))
+        # Manifest comes from the frozen public source, never from live UI or
+        # another app/cache. Probe hashes every actual HTTP-served asset.
+        manifest = Path(__file__).resolve().parents[1] / "internal/operator/ui/assets.json"
+        fixture = Fixture(image, str(local_probe.resolve()), str(manifest))
         try:
             volume = fixture.volume()
             fixture.once(volume, "serve", failure="LEDGER_STARTUP_MISSING_STATE")
@@ -253,6 +279,7 @@ def qualify(archive, probe):
                 fixture.once(bad, mode, probe=True)
                 fixture.once(bad, "serve", failure="LEDGER_STARTUP_SCHEMA")
             fixture.migration_failure()
+            fixture.native_operator()
         finally:
             fixture.cleanup()
     # Public artifact identities only, no fixture/control-plane/private state.
@@ -266,7 +293,11 @@ def qualify(archive, probe):
     # and refusal of the same partial state. No previous release exists.
     return {"image": digest, "config_identity": config_identity, "docker_runtime_identity": image,
             "archive_sha256": archive_hash, "platform": "linux/" + architecture,
-            "cases": cases, "previous_release_compatibility": "unknown"}
+            "cases": cases, "native_operator": {"actual_entrypoint": True, "native_login_create_patch": True,
+                "shared_key_separation": True, "held_balance_refused": True,
+                "logs_settings_blocked": True, "empty_logs_auth_origins_stdio": True,
+                "frozen_asset_http_hashes": True, "browser_inside_image": "not_run"},
+            "previous_release_compatibility": "unknown"}
 
 
 def main():
