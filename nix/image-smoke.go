@@ -31,6 +31,9 @@ func exchange(method, path, body string, status int, key string, limit int64) ([
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if path == "/balance" {
+		req.Header.Set("Content-Type", "APPLICATION/JSON; charset=UTF-8")
+	}
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -216,7 +219,7 @@ func run(mode string) error {
 		_, err := request("/credits", `{"account_id":"image-fixture","amount":"17"}`, 200, key)
 		return err
 	case "balance":
-		raw, err := request("/balance", `{"account_id":"image-fixture"}`, 200, key)
+		raw, err := request("/balance", `{"account_id":"image-fixture","future":{"nested":[true,null],"ignored":"synthetic-extension-fixture"}}`, 200, key)
 		if err != nil {
 			return err
 		}
@@ -226,7 +229,7 @@ func run(mode string) error {
 				Balance string `json:"balance"`
 			} `json:"account_balance"`
 		}
-		if json.Unmarshal(raw, &view) != nil || view.Available != "17" || len(view.Accounts) != 1 || view.Accounts[0].Balance != "17" {
+		if json.Unmarshal(raw, &view) != nil || view.Available != "17" || len(view.Accounts) != 1 || view.Accounts[0].Balance != "17" || bytes.Contains(raw, []byte("synthetic-extension-fixture")) {
 			return fmt.Errorf("persistence evidence mismatch")
 		}
 	case "privacy":
@@ -238,7 +241,7 @@ func run(mode string) error {
 		if _, err := request("/balance", `{"account_id":"image-fixture"}`, 401, ""); err != nil {
 			return err
 		}
-		raw, err := request("/balance", `{"account_id":"hostile-fixture","unknown":"secret-fixture"}`, 400, key)
+		raw, err := request("/balance", `{"account_id":{"private":"hostile-fixture"},"unknown":"secret-fixture"}`, 400, key)
 		if err != nil || bytes.Contains(raw, []byte("hostile-fixture")) || bytes.Contains(raw, []byte("secret-fixture")) || bytes.Contains(raw, []byte(key)) {
 			return fmt.Errorf("unsafe diagnostic")
 		}

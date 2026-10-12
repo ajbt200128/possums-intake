@@ -194,7 +194,7 @@ func TestUnknownAndNativeRoutesAreClosed(t *testing.T) {
 	requireStatus(t, recorder, http.StatusOK)
 }
 
-func TestStrictBodyContract(t *testing.T) {
+func TestRequiredBodyContract(t *testing.T) {
 	handler := newTestHandler(t, stubLedger{}, func() bool { return true })
 	valid := authHeaders("application/json")
 
@@ -209,7 +209,6 @@ func TestStrictBodyContract(t *testing.T) {
 		{"trailing", valid, `{"account_id":"a"} {}`},
 		{"trailing token", valid, `{"account_id":"a"} trailing`},
 		{"duplicate key", valid, `{"account_id":"a","account_id":"b"}`},
-		{"unknown field", valid, `{"account_id":"a","extra":"x"}`},
 		{"null required", valid, `{"account_id":null}`},
 		{"missing required", valid, `{}`},
 		{"malformed utf8", valid, "{\"account_id\":\"a\xffb\"}"},
@@ -241,8 +240,8 @@ func TestStrictBodyContract(t *testing.T) {
 	recorder = request(t, handler, http.MethodPost, "/balance?account_id=a", valid, `{"account_id":"a"}`)
 	requireStatus(t, recorder, http.StatusBadRequest)
 
-	// Content type must be exactly application/json and singleton.
-	for _, contentType := range []string{"", "text/plain", "application/json; charset=utf-8", "APPLICATION/JSON"} {
+	// Content type must identify JSON; it need not use one textual spelling.
+	for _, contentType := range []string{"", "text/plain", "application/json; broken"} {
 		headers := authHeaders(contentType)
 		if contentType == "" {
 			delete(headers, "Content-Type")
@@ -253,7 +252,7 @@ func TestStrictBodyContract(t *testing.T) {
 }
 
 func TestMoneyAndTimeoutWireValidation(t *testing.T) {
-	handler := newTestHandler(t, stubLedger{}, func() bool { return true })
+	handler := newTestHandler(t, newTestLedger(t), func() bool { return true })
 	valid := authHeaders("application/json")
 	valid["Idempotency-Key"] = key(9)
 
@@ -297,9 +296,10 @@ func TestMoneyAndTimeoutWireValidation(t *testing.T) {
 	requireStatus(t, recorder, http.StatusBadRequest)
 	recorder = request(t, handler, http.MethodPost, "/reservations", noKey, `{"account_id":"a","maximum":"1","timeout_seconds":600}`)
 	requireStatus(t, recorder, http.StatusBadRequest)
-	// Settle/refund/lookup do not require the header.
-	recorder = request(t, handler, http.MethodPost, "/reservations/lookup", valid, `{"reservation_id":"`+strings.Repeat("a", 32)+`"}`)
-	requireStatus(t, recorder, http.StatusOK)
+	// Settle/refund/lookup do not require the header. Missing evidence is a
+	// ledger decision, not a missing-header rejection.
+	recorder = request(t, handler, http.MethodPost, "/reservations/lookup", noKey, `{"reservation_id":"`+strings.Repeat("a", 32)+`"}`)
+	requireStatus(t, recorder, http.StatusGone)
 }
 
 func TestLedgerDiagnosticsMapToPinnedStatuses(t *testing.T) {

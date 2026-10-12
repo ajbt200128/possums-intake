@@ -12,15 +12,14 @@ var (
 	errNotObject = errors.New("not one object")
 	errDuplicate = errors.New("duplicate key")
 	errTrailing  = errors.New("trailing data")
-	errUnknown   = errors.New("unknown field")
 	errNull      = errors.New("null required field")
 )
 
 func bytesReader(body []byte) io.Reader { return bytes.NewReader(body) }
 
 // bindFields maps the decoded top-level object onto target's exported fields
-// using their json tags. Unknown keys, nulls and (when required) absent fields
-// are rejected. target must be a pointer to a struct with only string, *int64
+// using their json tags. Extra keys are ignored for additive compatibility;
+// nulls and (when required) absent known fields are rejected. target must be a pointer to a struct with only string, *int64
 // or int64 fields; the closed request structs in handler.go satisfy this.
 func bindFields(fields map[string]json.RawMessage, target any, requireAll bool) error {
 	value := reflect.ValueOf(target)
@@ -29,7 +28,6 @@ func bindFields(fields map[string]json.RawMessage, target any, requireAll bool) 
 	}
 	structure := value.Elem()
 	typ := structure.Type()
-	seen := make(map[string]bool, typ.NumField())
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 		name := field.Tag.Get("json")
@@ -43,8 +41,7 @@ func bindFields(fields map[string]json.RawMessage, target any, requireAll bool) 
 			}
 			continue
 		}
-		seen[name] = true
-		if isNull(raw) {
+		if isNull(raw) || !validUnicodeEscapes(raw) {
 			return errNull
 		}
 		slot := structure.Field(i)
@@ -65,11 +62,6 @@ func bindFields(fields map[string]json.RawMessage, target any, requireAll bool) 
 			if err := json.Unmarshal(raw, slot.Addr().Interface()); err != nil {
 				return err
 			}
-		}
-	}
-	for key := range fields {
-		if !seen[key] {
-			return errUnknown
 		}
 	}
 	return nil

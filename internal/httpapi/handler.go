@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"time"
 
@@ -205,7 +206,8 @@ func (h *handler) accountingRequest(next http.HandlerFunc) http.Handler {
 			writeDiagnostic(w, http.StatusBadRequest, diagContentEncoding)
 			return
 		}
-		if headerValue(r.Header, "Content-Type") != "application/json" {
+		mediaType, _, err := mime.ParseMediaType(headerValue(r.Header, "Content-Type"))
+		if err != nil || mediaType != "application/json" {
 			writeDiagnostic(w, http.StatusBadRequest, diagContentType)
 			return
 		}
@@ -269,14 +271,9 @@ func (h *handler) credit(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
-	amount, err := ledger.ParseMoney(req.Amount)
-	if err != nil || amount == "0" {
-		writeDiagnostic(w, http.StatusBadRequest, diagInput)
-		return
-	}
 	credit, err := h.accounting.Credit(r.Context(), ledger.CreditInput{
 		AccountID:      req.AccountID,
-		Amount:         amount,
+		Amount:         ledger.Money(req.Amount),
 		IdempotencyKey: key,
 	})
 	if err != nil {
@@ -300,18 +297,9 @@ func (h *handler) reserve(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
-	if req.TimeoutSeconds == nil || *req.TimeoutSeconds < 1 || *req.TimeoutSeconds > 1800 {
-		writeDiagnostic(w, http.StatusBadRequest, diagInput)
-		return
-	}
-	maximum, err := ledger.ParseMoney(req.Maximum)
-	if err != nil || maximum == "0" {
-		writeDiagnostic(w, http.StatusBadRequest, diagInput)
-		return
-	}
 	reservation, err := h.accounting.Reserve(r.Context(), ledger.ReserveInput{
 		AccountID:      req.AccountID,
-		Maximum:        maximum,
+		Maximum:        ledger.Money(req.Maximum),
 		TimeoutSeconds: *req.TimeoutSeconds,
 		IdempotencyKey: key,
 	})
@@ -330,14 +318,9 @@ func (h *handler) settle(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
-	charged, err := ledger.ParseMoney(req.ChargedAmount)
-	if err != nil {
-		writeDiagnostic(w, http.StatusBadRequest, diagInput)
-		return
-	}
 	reservation, err := h.accounting.Settle(r.Context(), ledger.SettleInput{
 		ReservationID: req.ReservationID,
-		ChargedAmount: charged,
+		ChargedAmount: ledger.Money(req.ChargedAmount),
 	})
 	if d, ok := err.(*ledger.Diagnostic); ok && d.Code == ledger.CodeExpired {
 		// Authoritative expired row is preserved separately from the diagnostic.

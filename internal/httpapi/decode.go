@@ -37,7 +37,7 @@ var (
 	diagContentType = diagnostic{
 		Code: "LEDGER_HTTP_CONTENT_TYPE_REJECTED", Stage: "validation",
 		Constraint: "application_json", Outcome: "no_effect",
-		NextStep: "Set exactly one Content-Type: application/json header.",
+		NextStep: "Set one Content-Type: application/json header; standard media-type parameters are accepted.",
 	}
 	diagDuplicateHeader = diagnostic{
 		Code: "LEDGER_HTTP_HEADER_REJECTED", Stage: "validation",
@@ -51,8 +51,8 @@ var (
 	}
 	diagInput = diagnostic{
 		Code: "LEDGER_HTTP_INPUT_REJECTED", Stage: "validation",
-		Constraint: "exact_single_object_schema", Outcome: "no_effect",
-		NextStep: "Send exactly one JSON object with only the defined fields, no nulls, duplicate keys or trailing data.",
+		Constraint: "single_object_required_fields", Outcome: "no_effect",
+		NextStep: "Send one JSON object with correctly typed required fields, no duplicate keys or trailing data. Extra fields are ignored.",
 	}
 	diagUnknown = diagnostic{
 		Code: "LEDGER_HTTP_OUTCOME_UNKNOWN", Stage: "dispatch",
@@ -83,19 +83,11 @@ func statusFor(code ledger.Code) int {
 	}
 }
 
-// decode enforces the exact body contract and decodes one object into target.
+// decode reads one bounded object, requiring known fields and ignoring extras.
 // When requireAll is true every field in the target must be present and non-null.
 func (h *handler) decode(w http.ResponseWriter, r *http.Request, target any, requireAll bool) bool {
 	body, ok := readBounded(r)
-	if !ok {
-		writeDiagnostic(w, http.StatusBadRequest, diagInput)
-		return false
-	}
-	if !utf8.Valid(body) {
-		writeDiagnostic(w, http.StatusBadRequest, diagInput)
-		return false
-	}
-	if err := decodeStrict(body, target, requireAll); err != nil {
+	if !ok || decodeStrict(body, target, requireAll) != nil {
 		writeDiagnostic(w, http.StatusBadRequest, diagInput)
 		return false
 	}
@@ -113,10 +105,10 @@ func readBounded(r *http.Request) ([]byte, bool) {
 }
 
 // decodeStrict rejects empty bodies, trailing data, duplicate object keys,
-// unknown fields, nulls for required fields and JSON that is not exactly one
-// object. It uses only the standard token decoder and the target's json tags.
+// nulls for required fields and JSON that is not exactly one object. Extra
+// fields are ignored, not bound to accounting inputs. It uses only the standard token decoder and the target's json tags.
 func decodeStrict(body []byte, target any, requireAll bool) error {
-	if !utf8.Valid(body) || !json.Valid(body) || !validUnicodeEscapes(body) {
+	if !utf8.Valid(body) || !json.Valid(body) {
 		return errNotObject
 	}
 	decoder := json.NewDecoder(bytesReader(body))

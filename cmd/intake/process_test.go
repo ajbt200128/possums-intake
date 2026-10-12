@@ -230,11 +230,11 @@ func TestProcessAuthNativeRoutesPrivacyAndRestart(t *testing.T) {
 			}
 		}
 	}
-	status, _ := rpc(t, p, "/balance", `{"account_id":"SYNTHETIC_HOSTILE_PRIVATE_VALUE","unexpected":true}`, syntheticAdminKey, "")
+	status, _ := rpc(t, p, "/balance", `{"account_id":{"private":"SYNTHETIC_HOSTILE_PRIVATE_VALUE"},"unexpected":true}`, syntheticAdminKey, "")
 	if status != 400 {
 		t.Fatal("hostile invalid body accepted")
 	}
-	successRPC(t, p, "/accounts/provision", `{"account_id":"synthetic-a"}`, "")
+	successRPC(t, p, "/accounts/provision", `{"account_id":"synthetic-a","future":{"ignored":true}}`, "")
 	creditKey := processKey(1)
 	successRPC(t, p, "/credits", `{"account_id":"synthetic-a","amount":"100"}`, creditKey)
 	reserveKey := processKey(2)

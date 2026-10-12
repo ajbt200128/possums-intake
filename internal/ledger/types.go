@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"time"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -154,15 +153,7 @@ func validNewKey(issued, now int64) error {
 	return nil
 }
 func validAccount(id string) bool {
-	if len(id) < 1 || len(id) > 128 || !utf8.ValidString(id) {
-		return false
-	}
-	for _, r := range id {
-		if unicode.IsControl(r) {
-			return false
-		}
-	}
-	return true
+	return len(id) >= 1 && len(id) <= 128 && utf8.ValidString(id)
 }
 func retention(issued, terminal int64) Millis {
 	return Millis(max(issued+KeyWindowMS, terminal+KeyWindowMS))

@@ -78,11 +78,11 @@ func TestNativeAccountStrictInputBeforeFieldCoercion(t *testing.T) {
 	} {
 		expectClosed(t, request(t, h, "POST", accountRecords, body, token), 400, "native_account_input")
 	}
-	for _, id := range []string{strings.Repeat("猫", 43), "control\nidentity"} {
+	for _, id := range []string{strings.Repeat("猫", 43), strings.Repeat("a", 129)} {
 		body, _ := json.Marshal(map[string]any{"account_id": id, "balance": "1", "enabled": false})
 		rec := request(t, h, "POST", accountRecords, string(body), token)
 		if rec.Code != 400 || strings.Contains(rec.Body.String(), id) {
-			t.Fatal("byte/control identity invalid or leaked")
+			t.Fatal("oversized identity invalid or leaked")
 		}
 	}
 	_, err := s.Balance(context.Background(), "native-synthetic")

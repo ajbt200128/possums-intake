@@ -57,7 +57,7 @@ func TestInvalidUnicodeAndMissingFieldsNeverDispatch(t *testing.T) {
 		`{"account_id":"\ud800x"}`, `{"account_id":"\ud800\u0061"}`,
 		`{"account_id":"\ud800\ud800"}`, `{"account_id":"\udc00\ud800"}`,
 		`{"account_id":"\ud800\\udc00"}`, `{"account_id":"\ud800\udc00\udc00"}`,
-		`{"account_\ud800id":"a"}`, `{"account_id":"a","extra":"\udfff"}`,
+		`{"account_\ud800id":"a"}`,
 	}
 	for _, body := range invalid {
 		r := postJSON(t, h, "/accounts/provision", body)
@@ -92,6 +92,9 @@ func TestPairedUnicodePreservesOpaqueAccounts(t *testing.T) {
 		{`{"account_id":"\ufffd"}`, "�"},
 		{`{"account_id":"e\u0301"}`, "e\u0301"},
 		{`{"account_id":"é"}`, "é"},
+		{`{"account_id":"a\u0000b"}`, "a\x00b"},
+		{`{"account_id":"control\nidentity"}`, "control\nidentity"},
+		{`{"account_id":"\\t"}`, `\t`},
 	} {
 		r := postJSON(t, h, "/accounts/provision", fixture.body)
 		requireStatus(t, r, 200)

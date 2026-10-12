@@ -105,13 +105,15 @@ func TestMoneyAndKeyBoundaries(t *testing.T) {
 		_, e := keyIssued(s)
 		codeIs(t, e, CodeKey)
 	}
-	for _, id := range []string{"", strings.Repeat("a", 129), "a\x00b", string([]byte{0xff})} {
+	for _, id := range []string{"", strings.Repeat("a", 129), string([]byte{0xff})} {
 		if validAccount(id) {
 			t.Fatal("invalid account accepted")
 		}
 	}
-	if !validAccount("opaque Unicode 🐾") {
-		t.Fatal("valid opaque account rejected")
+	for _, id := range []string{"opaque Unicode 🐾", "a\x00b", "control\nidentity", "\t", strings.Repeat("a", 128)} {
+		if !validAccount(id) {
+			t.Fatal("gateway-compatible opaque account rejected")
+		}
 	}
 }
 func TestFullUint64OverflowAndRollback(t *testing.T) {
