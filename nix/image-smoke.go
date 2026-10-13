@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -26,7 +28,11 @@ func request(path, body string, status int, key string) ([]byte, error) {
 }
 
 func exchange(method, path, body string, status int, key string, limit int64) ([]byte, error) {
-	req, err := http.NewRequest(method, "http://127.0.0.1:8090"+path, bytes.NewBufferString(body))
+	return exchangeHost("127.0.0.1:8090", method, path, body, status, key, limit)
+}
+
+func exchangeHost(host, method, path, body string, status int, key string, limit int64) ([]byte, error) {
+	req, err := http.NewRequest(method, "http://"+host+path, bytes.NewBufferString(body))
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +193,108 @@ func operator() error {
 	return nil
 }
 
+// syntheticWildcard proves the actual container listener is reachable on an
+// address other than 127.0.0.1. It never prints the address and never opens an
+// external network path.
+func syntheticWildcard() error {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return fmt.Errorf("synthetic interface evidence unavailable")
+	}
+	target := ""
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err != nil || ip.IsLoopback() || ip.To4() == nil {
+			continue
+		}
+		target = ip.String()
+		break
+	}
+	if target == "" {
+		// A --network none namespace exposes only 127.0.0.1/8. A secondary
+		// loopback address still distinguishes a wildcard bind from a
+		// loopback-only bind without any external network.
+		target = "127.0.0.2"
+	}
+	raw, err := exchangeHost(target+":8090", http.MethodGet, "/healthz", "", 200, "", 8192)
+	if err != nil {
+		return err
+	}
+	view := make(map[string]string)
+	if json.Unmarshal(raw, &view) != nil || len(view) != 1 || view["status"] != "ok" {
+		return fmt.Errorf("synthetic wildcard listener evidence mismatch")
+	}
+	return nil
+}
+
+// syntheticFresh runs after a restart with no state initialization. A missing
+// account then a successful native create prove the state was not persisted.
+func syntheticFresh() error {
+	key := os.Getenv("LEDGER_ADMIN_KEY")
+	raw, err := request("/balance", `{"account_id":"native-image-fixture"}`, 404, key)
+	if err != nil {
+		return err
+	}
+	var missing struct {
+		Code    string `json:"code"`
+		Outcome string `json:"outcome"`
+	}
+	if json.Unmarshal(raw, &missing) != nil || missing.Code != "LEDGER_ACCOUNT_UNKNOWN" || missing.Outcome != "no_effect" || bytes.Contains(raw, []byte(key)) {
+		return fmt.Errorf("synthetic fresh account evidence mismatch")
+	}
+	login, _ := json.Marshal(map[string]string{"identity": os.Getenv("LEDGER_OPERATOR_EMAIL"), "password": os.Getenv("LEDGER_OPERATOR_PASSWORD")})
+	raw, err = request("/api/collections/_superusers/auth-with-password", string(login), 200, "")
+	if err != nil {
+		return err
+	}
+	var auth struct {
+		Token string `json:"token"`
+	}
+	if json.Unmarshal(raw, &auth) != nil || auth.Token == "" || auth.Token == key {
+		return fmt.Errorf("synthetic fresh authentication unconfirmed")
+	}
+	_, err = request("/api/collections/ledger_accounts/records", `{"id":"","collectionId":"ledgeraccounts1","collectionName":"ledger_accounts","account_id":"native-image-fixture","balance":"100","enabled":true}`, 200, auth.Token)
+	return err
+}
+
+// syntheticPrivacy inspects only the single disposable scratch directory and
+// reads the auxiliary stores read-only while the server is live.
+func syntheticPrivacy() error {
+	entries, err := os.ReadDir("/tmp")
+	if err != nil {
+		return fmt.Errorf("synthetic scratch evidence unavailable")
+	}
+	scratch := ""
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "possums-intake-synthetic-") {
+			continue
+		}
+		if scratch != "" {
+			return fmt.Errorf("multiple synthetic scratch directories")
+		}
+		scratch = entry.Name()
+	}
+	if scratch == "" {
+		return fmt.Errorf("synthetic scratch evidence unavailable")
+	}
+	for _, check := range []struct{ name, query string }{
+		{"data.db", "SELECT COUNT(*) FROM _authOrigins"},
+		{"auxiliary.db", "SELECT COUNT(*) FROM _logs"},
+	} {
+		db, err := sql.Open("sqlite", "file:/tmp/"+scratch+"/"+check.name+"?mode=ro")
+		if err != nil {
+			return fmt.Errorf("synthetic privacy evidence unavailable")
+		}
+		var count int
+		queryErr := db.QueryRow(check.query).Scan(&count)
+		db.Close()
+		if queryErr != nil || count != 0 {
+			return fmt.Errorf("synthetic privacy evidence mismatch")
+		}
+	}
+	return nil
+}
+
 func authOrigins() error {
 	db, err := sql.Open("sqlite", "file:/state/data.db?mode=ro")
 	if err != nil {
@@ -247,6 +355,12 @@ func run(mode string) error {
 		}
 	case "operator":
 		return operator()
+	case "synthetic-wildcard":
+		return syntheticWildcard()
+	case "synthetic-fresh":
+		return syntheticFresh()
+	case "synthetic-privacy":
+		return syntheticPrivacy()
 	case "operator-privacy":
 		if err := database("logs"); err != nil {
 			return err
