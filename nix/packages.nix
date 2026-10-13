@@ -87,7 +87,15 @@ in {
     { name = "go"; path = go; }
     { name = "vendor"; path = ledger.goModules; }
     { name = "ca"; path = pkgs.cacert; }
-    # Image ownership and Python-check hooks need external tools, not app outputs.
+    # Output runtime closures alone omit the builders' setup/tool inputs. With
+    # substitutes disabled later, missing inputs would rebuild the bootstrap.
+    { name = "app-stdenv"; path = linuxLedger.stdenv; }
+    { name = "image-stdenv"; path = pkgs.stdenvNoCC; }
+    { name = "image-compressor"; path = pkgs.pigz; }
+    { name = "image-json"; path = pkgs.jq; }
+    { name = "image-wrapper"; path = pkgs.makeWrapper; }
+    # This pinned vendor script contains no application/configuration references.
+    { name = "image-stream-tool"; path = image.stream.streamScript; }
     { name = "fakeroot"; path = pkgs.fakeroot; }
     { name = "dash"; path = pkgs.dash; }
   ]).overrideAttrs (_: {
