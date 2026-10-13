@@ -460,8 +460,34 @@ class DeliveryTests(unittest.TestCase):
         shown = {"derivations": {drvs[0]: {"outputs": {"out": {"path": "/nix/store/fixture-output"}}}}}
         with patch.object(r, "read_command", side_effect=[json.dumps(drvs).encode(), json.dumps(shown).encode()]) as cmd:
             with patch("pathlib.Path.exists", return_value=True):
-                self.stop("build", fresh_build.fresh)
+                self.stop("fresh_cached", fresh_build.fresh)
             self.assertEqual([c.args[0][1] for c in cmd.call_args_list], ["eval", "derivation"])
+
+    def test_fresh_guard_normalizes_supported_nix_store_basenames_without_building(self):
+        drvs = ["/nix/store/fixture-" + str(i) + ".drv" for i in range(7)]
+        basename = "0" * 32 + "-fixture-output"
+        for version in (3, 4):
+            shown = {"version": version, "derivations": {"fixture.drv": {
+                "version": version, "outputs": {"out": {"path": basename}}}}}
+            replies = [json.dumps(drvs).encode()] + [json.dumps(shown).encode()] * len(drvs)
+            with patch.object(r, "read_command", side_effect=replies) as cmd, \
+                    patch("pathlib.Path.exists", return_value=False) as exists:
+                self.assertTrue(fresh_build.fresh()["passed"])
+                self.assertEqual(exists.call_count, len(drvs))
+                self.assertTrue(all(call.args[0][1] in ("eval", "derivation") for call in cmd.call_args_list))
+            with patch.object(r, "read_command", side_effect=replies), patch("pathlib.Path.exists", return_value=True):
+                self.stop("fresh_cached", fresh_build.fresh)
+            self.assertEqual(fresh_build.output_paths(shown), ["/nix/store/" + basename])
+
+    def test_fresh_guard_rejects_unknown_or_unresolved_output_metadata(self):
+        basename = "0" * 32 + "-fixture-output"
+        for version, path in ((5, basename), (True, basename), (4, None), (4, "../outside"),
+                              (4, "/nix/store/" + basename), (4, "bad/" + basename), (2, basename)):
+            shown = {"version": version, "derivations": {"fixture.drv": {
+                "version": version, "outputs": {"out": {"path": path}}}}}
+            self.stop("fresh_metadata", lambda shown=shown: fresh_build.output_paths(shown))
+        self.assertEqual(fresh_build.output_paths({"fixture.drv": {
+            "outputs": {"out": {"path": "/nix/store/fixture-output"}}}}), ["/nix/store/fixture-output"])
 
     def test_archive_metadata_refuses_embedded_secret_and_mutable_epoch(self):
         settings: dict[str, Any] = {"User": "65532:65532", "WorkingDir": "/",
@@ -618,7 +644,7 @@ class DeliveryTests(unittest.TestCase):
             self.assertIn(flag, args)
         self.assertEqual(args[args.index("--network") + 1], "none")
         self.assertEqual(args[args.index("--log-driver") + 1], "none")
-        self.assertNotIn("0.0.0.0", " ".join(args))
+        self.assertNotIn("0.0.0.0", " ".join(args))  # noqa: S104 - this assertion forbids wildcard binding.
 
     def test_native_operator_requires_frozen_manifest(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
