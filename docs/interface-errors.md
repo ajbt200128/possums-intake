@@ -103,6 +103,14 @@ Failed-rollback cause extraction is qualified only with a labeled synthetic `dbx
 
 The report seam is **not connected to HTTP/native/maintenance/lifecycle observation owners** and records no metrics by itself. Mandatory transaction classifications are computed even without a report. The production error-family gate remains closed; this source qualification is not complete interface coverage, generated-image qualification or permission for live export.
 
+### Parent-observed validation/read classification evidence
+
+Storage and operator validation now distinguish failed queries or schema-metadata marshaling from successfully observed layout/configuration mismatches. Actual mismatches still produce schema/state or operator-policy refusals. Required-object `sql.ErrNoRows` has absence meaning only at the qualified DDL/collection lookups; an unrelated count/read failure does not prove absence. Invalid runtime operator credentials carry `request_invalid`; proven unsupported operator configuration/counts carry `policy_refused`. Failed native reads preserve their typed cause category or `native_read_unknown`, without exposing an app or changing credentials.
+
+Parent source inspection, full sequential-package race tests, vet and module verification passed. Independent review found no blocker and confirmed the pinned collection lookup's direct no-rows contract. Fixtures include actual SQLite BUSY/NOTADB/CANTOPEN and context failures, a real schema-metadata marshal failure, persisted collection mismatches/absence and explicitly labeled query/method injection seams. An unreadable SQLite file now yields `INTAKE_BOUNDARY_UNAVAILABLE`/`state_validation`/`unavailable`, not a guessed schema rejection; the actual CLI stderr test requires this closed diagnostic with cause-unknown guidance and no private path/driver text. Failed `Open` still exposes no service and does not reset state.
+
+This packet does not qualify bootstrap/init/Open secondary cleanup errors or panic ownership. It introduces no telemetry owner, exporter hook or complete coverage/image claim; the production error-family gate remains closed.
+
 ### Confirmed local prerequisite fix
 
 An actual regression test reproduced arbitrary non-comparable callback errors becoming `LEDGER_COMMIT_UNKNOWN` because comparison of error interfaces panicked after an observed rollback. A comparable callback-abort token now preserves the supported SDK's rollback evidence without formatting the cause. `TestNonComparableCallbackFailurePreservesObservedRollback` uses an error whose `Error()` panics, verifies `LEDGER_STORAGE_UNAVAILABLE`/`no_effect`, retained readiness and absence of the rolled-back row. The parent passed the full ledger race suite and ledger vet afterward. This scoped fix does not establish new metric coverage or whole-service/image acceptance.

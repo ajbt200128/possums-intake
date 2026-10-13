@@ -2,7 +2,10 @@ package ledger
 
 import (
 	"context"
+	"database/sql"
 	"unicode/utf8"
+
+	"possums-intake/internal/failuretype"
 
 	"github.com/pocketbase/ozzo-validation/v4/is"
 	"github.com/pocketbase/pocketbase/core"
@@ -13,7 +16,11 @@ import (
 type OperatorCredentials struct{ Email, Password string }
 
 func operatorFailure(constraint string) *Diagnostic {
-	return &Diagnostic{Code: "LEDGER_OPERATOR_SETUP_INVALID", Stage: "operator_setup", Constraint: constraint, Outcome: "no_effect", NextStep: "Use disposable synthetic state. Supply valid runtime operator credentials only during explicit init --operator; serve never creates or resets a login."}
+	kind := failuretype.PolicyRefused
+	if constraint == "runtime_email_and_password_8_to_71_bytes" {
+		kind = failuretype.RequestInvalid
+	}
+	return &Diagnostic{Code: "LEDGER_OPERATOR_SETUP_INVALID", Stage: "operator_setup", Constraint: constraint, Outcome: "no_effect", kind: kind, NextStep: "Use disposable synthetic state. Supply valid runtime operator credentials only during explicit init --operator; serve never creates or resets a login."}
 }
 
 func (c OperatorCredentials) Validate() error {
@@ -61,12 +68,26 @@ func (s *Service) OperatorApp() (core.App, error) {
 	if !s.Ready() {
 		return nil, diagnostic(CodeClosed)
 	}
+	readFailure := func(err error) *Diagnostic {
+		d := CanonicalFailure(&Diagnostic{kind: FailureKind(err, failuretype.NativeReadUnknown)}, failuretype.NativeReadUnknown)
+		d.Outcome = "unavailable"
+		return d
+	}
 	c, err := s.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
-	if err != nil || c.AuthAlert.Enabled || c.OTP.Enabled || c.MFA.Enabled || c.OAuth2.Enabled || !c.PasswordAuth.Enabled || len(c.PasswordAuth.IdentityFields) != 1 || c.PasswordAuth.IdentityFields[0] != "email" {
+	if err == sql.ErrNoRows {
+		return nil, operatorFailure("explicit_password_only_initialization_required")
+	}
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	if c.AuthAlert.Enabled || c.OTP.Enabled || c.MFA.Enabled || c.OAuth2.Enabled || !c.PasswordAuth.Enabled || len(c.PasswordAuth.IdentityFields) != 1 || c.PasswordAuth.IdentityFields[0] != "email" {
 		return nil, operatorFailure("explicit_password_only_initialization_required")
 	}
 	count, err := s.app.CountRecords(c)
-	if err != nil || count != 1 {
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	if count != 1 {
 		return nil, operatorFailure("one_explicitly_initialized_native_superuser")
 	}
 	return s.app, nil

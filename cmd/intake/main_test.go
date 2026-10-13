@@ -79,8 +79,9 @@ func TestCLIExplicitInitExistingServeAndPrivateErrors(t *testing.T) {
 		out, stderr, success = runCLI(t, args...)
 		checkFailure(t, out, stderr, success, ledger.CodePath)
 	}
-	// A regular nonempty but invalid SQLite file fails the shared exact-layout
-	// guard before bootstrap. Raw driver error/path stays private.
+	// A regular nonempty but invalid SQLite file fails the validation read
+	// before bootstrap; that is not proof of a schema mismatch. Driver text and
+	// the path stay private.
 	corrupt := filepath.Join(t.TempDir(), "SYNTHETIC_PRIVATE_SENTINEL")
 	if e := os.Mkdir(corrupt, 0700); e != nil {
 		t.Fatal("fixture directory failed")
@@ -91,5 +92,9 @@ func TestCLIExplicitInitExistingServeAndPrivateErrors(t *testing.T) {
 		}
 	}
 	out, stderr, success = runCLI(t, "serve", "--state", corrupt)
-	checkFailure(t, out, stderr, success, ledger.CodeSchema)
+	checkFailure(t, out, stderr, success, ledger.CodeBoundary)
+	var d ledger.Diagnostic
+	if err := json.Unmarshal([]byte(stderr), &d); err != nil || d.Stage != "state_validation" || d.Outcome != "unavailable" || d.Constraint != "authoritative_boundary_evidence" || !strings.Contains(d.NextStep, "cause unknown") {
+		t.Fatal("unreadable SQLite was mislabeled as a proven schema mismatch")
+	}
 }

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"possums-intake/internal/failuretype"
+
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	_ "github.com/pocketbase/pocketbase/migrations"
@@ -228,26 +230,54 @@ func migrateV1(tx *transaction) error {
 }
 
 func validateAccountCollection(tx *transaction) error {
+	readFailure := func(err error) *Diagnostic {
+		d := diagnostic(CodeStorage)
+		d.kind = FailureKind(err, failuretype.StorageValidationUnknown)
+		return d
+	}
 	c, err := tx.app.FindCollectionByNameOrId(AccountCollectionID)
-	if err != nil {
+	if err == sql.ErrNoRows {
+		// The pinned collection lookup proves this required object is absent.
 		return diagnostic(CodeSchema)
+	}
+	if err != nil {
+		return readFailure(err)
 	}
 	want := accountCollection()
 	fields, e1 := json.Marshal(c.Fields)
+	if e1 != nil {
+		return readFailure(e1)
+	}
 	expected, e2 := json.Marshal(want.Fields)
-	if e1 != nil || e2 != nil || string(fields) != string(expected) || c.Id != want.Id || c.Name != want.Name || c.Type != want.Type || c.System || c.ListRule != nil || c.ViewRule != nil || c.CreateRule != nil || c.UpdateRule != nil || c.DeleteRule != nil || len(c.Indexes) != 1 || c.Indexes[0] != accountIndex {
+	if e2 != nil {
+		return readFailure(e2)
+	}
+	if string(fields) != string(expected) || c.Id != want.Id || c.Name != want.Name || c.Type != want.Type || c.System || c.ListRule != nil || c.ViewRule != nil || c.CreateRule != nil || c.UpdateRule != nil || c.DeleteRule != nil || len(c.Indexes) != 1 || c.Indexes[0] != accountIndex {
 		return diagnostic(CodeSchema)
 	}
 	var count int
-	if err := tx.query("SELECT count(*) FROM _collections WHERE name LIKE 'ledger_%'", nil).Row(&count); err != nil || count != 1 {
+	if err := tx.query("SELECT count(*) FROM _collections WHERE name LIKE 'ledger_%'", nil).Row(&count); err != nil {
+		return readFailure(err)
+	}
+	if count != 1 {
 		return diagnostic(CodeSchema)
 	}
 	return nil
 }
 
 func validateDDL(query func(string, dbx.Params) *dbx.Query) error {
+	readFailure := func(err error) *Diagnostic {
+		// Preflight has no transaction outcome. Retain only numeric cause
+		// metadata; the transaction owner reconstructs its observed outcome.
+		d := CanonicalFailure(&Diagnostic{kind: FailureKind(err, failuretype.StorageValidationUnknown)}, failuretype.StorageValidationUnknown)
+		d.Outcome = "unavailable"
+		return d
+	}
 	var objects int
-	if err := query("SELECT count(*) FROM sqlite_schema WHERE (name LIKE 'ledger_%' OR tbl_name LIKE 'ledger_%') AND sql IS NOT NULL", nil).Row(&objects); err != nil || objects != 9 {
+	if err := query("SELECT count(*) FROM sqlite_schema WHERE (name LIKE 'ledger_%' OR tbl_name LIKE 'ledger_%') AND sql IS NOT NULL", nil).Row(&objects); err != nil {
+		return readFailure(err)
+	}
+	if objects != 9 {
 		return diagnostic(CodeSchema)
 	}
 	for _, statement := range strings.Split(schemaV1, ";") {
@@ -261,7 +291,14 @@ func validateDDL(query func(string, dbx.Params) *dbx.Query) error {
 			name = parts[3]
 		}
 		var stored string
-		if err := query("SELECT sql FROM sqlite_schema WHERE name={:name}", dbx.Params{"name": name}).Row(&stored); err != nil || stored != statement {
+		err := query("SELECT sql FROM sqlite_schema WHERE name={:name}", dbx.Params{"name": name}).Row(&stored)
+		if err == sql.ErrNoRows {
+			return diagnostic(CodeSchema)
+		}
+		if err != nil {
+			return readFailure(err)
+		}
+		if stored != statement {
 			return diagnostic(CodeSchema)
 		}
 	}
@@ -274,7 +311,9 @@ func preflightLayout(ctx context.Context, dir string) error {
 	uri := (&url.URL{Scheme: "file", Path: filepath.Join(dir, "data.db")}).String()
 	db, err := dbx.Open("sqlite", uri+"?mode=ro")
 	if err != nil {
-		return diagnostic(CodeSchema)
+		d := CanonicalFailure(&Diagnostic{kind: FailureKind(err, failuretype.StorageOpenUnknown)}, failuretype.StorageOpenUnknown)
+		d.Outcome = "unavailable"
+		return d
 	}
 	defer db.Close()
 	return validateDDL(func(statement string, params dbx.Params) *dbx.Query {
@@ -287,6 +326,11 @@ func preflightLayout(ctx context.Context, dir string) error {
 // earlier disposable layouts with the same version still fail exact checks.
 func (s *Service) validate(ctx context.Context) error {
 	return s.run(ctx, func(tx *transaction) error {
+		readFailure := func(err error) *Diagnostic {
+			d := diagnostic(CodeStorage)
+			d.kind = FailureKind(err, failuretype.StorageValidationUnknown)
+			return d
+		}
 		for _, p := range []struct {
 			name     string
 			expected any
@@ -295,7 +339,10 @@ func (s *Service) validate(ctx context.Context) error {
 			{"busy_timeout", int64(BusyWaitMS)}, {"temp_store", int64(2)},
 		} {
 			var got any
-			if err := tx.query("PRAGMA "+p.name, nil).Row(&got); err != nil || got != p.expected {
+			if err := tx.query("PRAGMA "+p.name, nil).Row(&got); err != nil {
+				return readFailure(err)
+			}
+			if got != p.expected {
 				return diagnostic(CodeSchema)
 			}
 		}
@@ -306,13 +353,16 @@ func (s *Service) validate(ctx context.Context) error {
 			FKID   int           `db:"fkid"`
 		}
 		if err := tx.query("PRAGMA foreign_key_check", nil).All(&violations); err != nil {
-			return diagnostic(CodeSchema)
+			return readFailure(err)
 		}
 		if len(violations) > 0 {
 			return diagnostic(CodeCorrupt)
 		}
 		var integrity string
-		if err := tx.query("PRAGMA quick_check", nil).Row(&integrity); err != nil || integrity != "ok" {
+		if err := tx.query("PRAGMA quick_check", nil).Row(&integrity); err != nil {
+			return readFailure(err)
+		}
+		if integrity != "ok" {
 			return diagnostic(CodeCorrupt)
 		}
 		// Schema version alone cannot certify missing constraints or indexes.
@@ -324,23 +374,23 @@ func (s *Service) validate(ctx context.Context) error {
 			return err
 		}
 		if err := tx.clock(); err != nil {
-			return err
+			return CanonicalFailure(err, failuretype.StorageValidationUnknown)
 		}
 		var accounts []Account
 		if err := tx.query("SELECT account_id,balance,enabled FROM ledger_accounts ORDER BY account_id", nil).All(&accounts); err != nil {
-			return diagnostic(CodeSchema)
+			return readFailure(err)
 		}
 		for _, a := range accounts {
 			if err := validateAccount(a); err != nil {
 				return err
 			}
 			if _, _, err := tx.active(a, false); err != nil {
-				return err
+				return CanonicalFailure(err, failuretype.StorageValidationUnknown)
 			}
 		}
 		var reservations []Reservation
 		if err := tx.query("SELECT "+reservationColumns+" FROM ledger_reservations", nil).All(&reservations); err != nil {
-			return diagnostic(CodeSchema)
+			return readFailure(err)
 		}
 		for _, r := range reservations {
 			if err := validateReservation(r); err != nil {
@@ -349,7 +399,7 @@ func (s *Service) validate(ctx context.Context) error {
 		}
 		var credits []Credit
 		if err := tx.query("SELECT "+creditColumns+" FROM ledger_credits", nil).All(&credits); err != nil {
-			return diagnostic(CodeSchema)
+			return readFailure(err)
 		}
 		for _, c := range credits {
 			if err := validateCredit(c); err != nil {
