@@ -334,7 +334,8 @@ func TestLedgerDiagnosticsMapToPinnedStatuses(t *testing.T) {
 			t.Fatalf("%s: status = %d, want %d", test.code, recorder.Code, test.status)
 		}
 		body := closedDiagnostic(t, recorder)
-		if body["code"] != string(test.code) || body["stage"] != "s" {
+		canonical := ledger.CanonicalFailure(diagnostic, 0)
+		if body["code"] != string(test.code) || body["stage"] != canonical.Stage || body["constraint"] != canonical.Constraint || body["outcome"] != canonical.Outcome || body["next_step"] != canonical.NextStep {
 			t.Fatalf("%s body = %v", test.code, body)
 		}
 	}

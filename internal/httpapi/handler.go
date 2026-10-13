@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"possums-intake/internal/failuretype"
 	"possums-intake/internal/ledger"
 	"possums-intake/internal/telemetry"
 )
@@ -26,6 +27,7 @@ const MinAdminKeyBytes = 32
 const MaxBodyBytes = 4 * 1024
 
 type diagnostic struct {
+	kind       failuretype.Type
 	Code       string `json:"code"`
 	Stage      string `json:"stage"`
 	Constraint string `json:"constraint"`
@@ -83,6 +85,7 @@ type balanceResponse struct {
 // alongside the closed settlement diagnostic. The reservation is not the
 // requested effect; callers must inspect its state.
 type expiredSettlementResponse struct {
+	kind        failuretype.Type
 	Code        string          `json:"code"`
 	Stage       string          `json:"stage"`
 	Constraint  string          `json:"constraint"`
@@ -143,26 +146,55 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, custom := h.routes[r.URL.Path]
 	custom = custom && r.Method == http.MethodPost
 	complete := terminalCompletion(h.observer, time.Now())
+	var report *ledger.FailureReport
+	if custom {
+		ctx, fresh := ledger.WithFailureReport(r.Context())
+		r = r.WithContext(ctx)
+		report = fresh // one fresh report, at most one Accounting call
+	}
 	defer func() {
-		panicked := recover() != nil
+		panicValue := recover()
+		panicked := panicValue != nil
 		if panicked {
-			buffered.reset()
-			writeDiagnostic(buffered, http.StatusServiceUnavailable, diagUnknown)
+			// Never format a panic. Deliberate HTTP aborts/shutdown are not new
+			// exceptions. A result already encoded remains authoritative.
+			expected := false
+			if err, ok := panicValue.(error); ok {
+				expected = expectedHTTPError(err)
+			}
+			if !expected {
+				// This caught panic is independent of any reported run primary.
+				buffered.failures.add(failuretype.RequestDispatchUnknown)
+			}
+			if !buffered.wroteHeader || len(buffered.body) == 0 {
+				buffered.reset()
+				// Render only: the panic is already owned above, or excluded as
+				// deliberate control flow. Do not count its fallback again.
+				writeJSON(buffered, http.StatusServiceUnavailable, diagUnknown)
+			}
 		}
 		classified := buffered.wroteHeader && len(buffered.body) > 0
 		if !classified {
+			buffered.failures.add(failuretype.RequestDispatchUnknown)
 			buffered.reset()
-			writeDiagnostic(buffered, http.StatusServiceUnavailable, diagUnknown)
+			writeJSON(buffered, http.StatusServiceUnavailable, diagUnknown)
 			if custom {
 				invalidateRequests(h.observer)
 			}
 		}
-		delivered := buffered.flush(w)
 		if custom {
+			buffered.collectAccounting(report)
+		}
+		delivered, deliveryFault := buffered.flush(w)
+		if custom {
+			if deliveryFault.Valid() {
+				buffered.deliveryFailure(deliveryFault)
+			}
 			class := telemetry.Unknown
 			if classified && !panicked && delivered && r.Context().Err() == nil {
 				class = statusClass(buffered.status)
 			}
+			observeFailures(h.observer, buffered.failures)
 			complete(class)
 		}
 	}()
@@ -250,9 +282,10 @@ func (h *handler) provision(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
+	accountingInvoked(w)
 	account, err := h.accounting.Provision(r.Context(), req.AccountID)
-	if err != nil {
-		h.writeFailure(w, err)
+	if d := accountingReturned(w, r, err); d != nil {
+		h.writeFailure(w, d)
 		return
 	}
 	writeJSON(w, http.StatusOK, accountResponse{AccountBalance: []accountJSON{toAccount(account)}})
@@ -271,13 +304,14 @@ func (h *handler) credit(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
+	accountingInvoked(w)
 	credit, err := h.accounting.Credit(r.Context(), ledger.CreditInput{
 		AccountID:      req.AccountID,
 		Amount:         ledger.Money(req.Amount),
 		IdempotencyKey: key,
 	})
-	if err != nil {
-		h.writeFailure(w, err)
+	if d := accountingReturned(w, r, err); d != nil {
+		h.writeFailure(w, d)
 		return
 	}
 	writeJSON(w, http.StatusOK, creditResponse{Credit: toCredit(credit)})
@@ -297,14 +331,15 @@ func (h *handler) reserve(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
+	accountingInvoked(w)
 	reservation, err := h.accounting.Reserve(r.Context(), ledger.ReserveInput{
 		AccountID:      req.AccountID,
 		Maximum:        ledger.Money(req.Maximum),
 		TimeoutSeconds: *req.TimeoutSeconds,
 		IdempotencyKey: key,
 	})
-	if err != nil {
-		h.writeFailure(w, err)
+	if d := accountingReturned(w, r, err); d != nil {
+		h.writeFailure(w, d)
 		return
 	}
 	writeJSON(w, http.StatusOK, reservationResponse{Reservation: toReservation(reservation)})
@@ -318,20 +353,22 @@ func (h *handler) settle(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
+	accountingInvoked(w)
 	reservation, err := h.accounting.Settle(r.Context(), ledger.SettleInput{
 		ReservationID: req.ReservationID,
 		ChargedAmount: ledger.Money(req.ChargedAmount),
 	})
-	if d, ok := err.(*ledger.Diagnostic); ok && d.Code == ledger.CodeExpired {
+	d := accountingReturned(w, r, err)
+	if d != nil && d.Code == ledger.CodeExpired && reservation.State == ledger.Expired && reservation.ReservationID != "" {
 		// Authoritative expired row is preserved separately from the diagnostic.
 		writeJSON(w, statusFor(d.Code), expiredSettlementResponse{
-			Code: string(d.Code), Stage: d.Stage, Constraint: d.Constraint,
+			kind: d.Kind(), Code: string(d.Code), Stage: d.Stage, Constraint: d.Constraint,
 			Outcome: d.Outcome, NextStep: d.NextStep, Reservation: toReservation(reservation),
 		})
 		return
 	}
-	if err != nil {
-		h.writeFailure(w, err)
+	if d != nil {
+		h.writeFailure(w, d)
 		return
 	}
 	writeJSON(w, http.StatusOK, reservationResponse{Reservation: toReservation(reservation)})
@@ -344,9 +381,10 @@ func (h *handler) refund(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
+	accountingInvoked(w)
 	reservation, err := h.accounting.Refund(r.Context(), req.ReservationID)
-	if err != nil {
-		h.writeFailure(w, err)
+	if d := accountingReturned(w, r, err); d != nil {
+		h.writeFailure(w, d)
 		return
 	}
 	writeJSON(w, http.StatusOK, reservationResponse{Reservation: toReservation(reservation)})
@@ -359,9 +397,10 @@ func (h *handler) lookup(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
+	accountingInvoked(w)
 	reservation, err := h.accounting.Lookup(r.Context(), req.ReservationID)
-	if err != nil {
-		h.writeFailure(w, err)
+	if d := accountingReturned(w, r, err); d != nil {
+		h.writeFailure(w, d)
 		return
 	}
 	writeJSON(w, http.StatusOK, reservationResponse{Reservation: toReservation(reservation)})
@@ -374,9 +413,10 @@ func (h *handler) balance(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &req, true) {
 		return
 	}
+	accountingInvoked(w)
 	snapshot, err := h.accounting.Balance(r.Context(), req.AccountID)
-	if err != nil {
-		h.writeFailure(w, err)
+	if d := accountingReturned(w, r, err); d != nil {
+		h.writeFailure(w, d)
 		return
 	}
 	// The core returns one account object; the wire contract is a list of at
@@ -392,14 +432,36 @@ func (h *handler) balance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (h *handler) writeFailure(w http.ResponseWriter, err error) {
-	d, ok := err.(*ledger.Diagnostic)
-	if !ok {
-		writeDiagnostic(w, http.StatusServiceUnavailable, diagUnknown)
+func accountingInvoked(w http.ResponseWriter) {
+	if b, ok := w.(*responseBuffer); ok {
+		b.accountingInvoked = true
+	}
+}
+
+func accountingReturned(w http.ResponseWriter, r *http.Request, err error) *ledger.Diagnostic {
+	d := ledger.CanonicalFailure(err, failuretype.RequestDispatchUnknown)
+	if b, ok := w.(*responseBuffer); ok {
+		b.accountingReturned = true
+		b.requestInterruption = 0
+		if d != nil {
+			b.primary = d.Kind()
+			b.requestInterruption = matchingRequestInterruption(b.primary, r)
+		}
+	}
+	return d
+}
+
+func (h *handler) writeFailure(w http.ResponseWriter, d *ledger.Diagnostic) {
+	if d.Code == ledger.CodeBoundary {
+		// Raw dispatch failures keep the HTTP owner's closed cause-unknown
+		// template and unknown financial outcome, with typed context evidence.
+		local := diagUnknown
+		local.kind = d.Kind()
+		writeDiagnostic(w, http.StatusServiceUnavailable, local)
 		return
 	}
-	writeJSON(w, statusFor(d.Code), diagnostic{
-		Code: string(d.Code), Stage: d.Stage, Constraint: d.Constraint,
+	writeDiagnostic(w, statusFor(d.Code), diagnostic{
+		kind: d.Kind(), Code: string(d.Code), Stage: d.Stage, Constraint: d.Constraint,
 		Outcome: d.Outcome, NextStep: d.NextStep,
 	})
 }
@@ -461,16 +523,24 @@ func formatMillis(m ledger.Millis) string {
 }
 
 func writeDiagnostic(w http.ResponseWriter, status int, d diagnostic) {
+	if b, ok := w.(*responseBuffer); ok && !b.accountingInvoked {
+		b.failures.add(d.kind)
+	}
 	writeJSON(w, status, d)
 }
 
 // responseBuffer captures the complete closed response before it is sent. It
 // lets the top-level recover replace a partial response after a panic.
 type responseBuffer struct {
-	header      http.Header
-	status      int
-	body        []byte
-	wroteHeader bool
+	header              http.Header
+	status              int
+	body                []byte
+	wroteHeader         bool
+	failures            failureBatch
+	primary             failuretype.Type
+	requestInterruption failuretype.Type
+	accountingInvoked   bool
+	accountingReturned  bool
 }
 
 func (b *responseBuffer) Header() http.Header { return b.header }
@@ -497,12 +567,16 @@ func (b *responseBuffer) reset() {
 	b.wroteHeader = false
 }
 
-func (b *responseBuffer) flush(w http.ResponseWriter) (delivered bool) {
+func (b *responseBuffer) flush(w http.ResponseWriter) (delivered bool, fault failuretype.Type) {
 	// A writer can panic as well as return an error. Neither is a receipt, and
 	// neither may escape to net/http's raw panic reporter.
 	defer func() {
-		if recover() != nil {
+		if value := recover(); value != nil {
 			delivered = false
+			err, _ := value.(error)
+			if !expectedHTTPError(err) {
+				fault = deliveryKind(err)
+			}
 		}
 	}()
 	for key, values := range b.header {
@@ -513,24 +587,51 @@ func (b *responseBuffer) flush(w http.ResponseWriter) (delivered bool) {
 	w.WriteHeader(b.status)
 	n, err := w.Write(b.body)
 	if err != nil || n != len(b.body) {
-		return false
+		if err != nil && expectedHTTPError(err) {
+			return false, 0
+		}
+		return false, deliveryKind(err)
 	}
 	// net/http can buffer small JSON writes. Surface a supported final flush
 	// error before observation; even a successful flush is not a peer receipt.
 	err = http.NewResponseController(w).Flush()
-	return err == nil || errors.Is(err, http.ErrNotSupported)
+	if err == nil || safeErrorIs(err, http.ErrNotSupported) {
+		return true, 0
+	}
+	if expectedHTTPError(err) {
+		return false, 0
+	}
+	return false, deliveryKind(err)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	body, err := json.Marshal(value)
-	if err != nil {
-		// Locally authored values always marshal; never emit a partial or raw
-		// error. This is an unexpected local failure, not an accounting outcome.
-		body = []byte(`{"code":"LEDGER_HTTP_RESPONSE_UNAVAILABLE","stage":"response","constraint":"serializable_closed_response","outcome":"unavailable","next_step":"Response construction failed; cause unknown. Delivery is not an accounting receipt."}`)
+	body, encoded := marshalResponse(value)
+	if !encoded {
+		if b, ok := w.(*responseBuffer); ok {
+			b.failures.add(failuretype.ResponseEncodingUnknown)
+			if b.accountingReturned && b.wroteHeader && len(b.body) > 0 {
+				return // retain an already encoded authoritative result
+			}
+			b.reset() // numeric faults survive replacement
+		}
+		// Scalar production DTOs cannot currently trigger marshal failures.
+		// Unknown construction faults cannot establish rollback or erase a
+		// previously observed result; callers must resolve the original identity.
+		body = []byte(`{"code":"LEDGER_HTTP_RESPONSE_UNAVAILABLE","stage":"response_encoding","constraint":"serializable_closed_response","outcome":"unknown","next_step":"Response construction failed; cause unknown. Previously observed accounting outcomes are unchanged. Delivery is not an accounting receipt; resolve uncertainty using the original identity."}`)
 		status = http.StatusServiceUnavailable
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+func marshalResponse(value any) (body []byte, encoded bool) {
+	defer func() {
+		if recover() != nil {
+			body, encoded = nil, false
+		}
+	}()
+	body, err := json.Marshal(value)
+	return body, err == nil
 }
