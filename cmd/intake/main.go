@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"possums-intake/internal/failureowner"
+	"possums-intake/internal/failuretype"
 	"possums-intake/internal/httpapi"
 	"possums-intake/internal/ledger"
 	"possums-intake/internal/operator"
@@ -23,15 +25,28 @@ func execute(args []string) error {
 	return executeContext(ctx, args)
 }
 
-func executeContext(ctx context.Context, args []string) (result error) {
+func executeContext(ctx context.Context, args []string) error {
+	return executeObserved(ctx, args, nil)
+}
+
+func executeObserved(ctx context.Context, args []string, observer failureowner.Observer) (result error) {
+	owned := false
+	metricsObserver := independentMetricsObserver(observer)
 	synthetic := len(args) > 0 && args[0] == "synthetic-serve"
 	defer func() {
 		if recover() != nil {
-			if synthetic {
-				result = runtimeFailure(codeRuntime, "startup", "completed_local_lifecycle", "unknown", "Underlying synthetic startup cause unknown. Temporary state may remain; inspect privately and do not reuse it.")
-				return
+			fault := runtimeFailure(codeRuntime, "startup", "completed_local_lifecycle", "unavailable", "Underlying startup cause unknown. Preserve original or partial state and inspect privately; never reset it.")
+			failureowner.Observe(observer, fault.Kind())
+			if result == nil {
+				result = fault
 			}
-			result = runtimeFailure(codeRuntime, "startup", "completed_local_lifecycle", "unavailable", "Underlying startup cause unknown. Preserve original state and inspect privately; never reset it.")
+			owned = true
+		}
+		if result != nil && !owned {
+			failureowner.Observe(observer, ledger.FailureKind(result, failuretype.RuntimeSetupUnknown))
+		}
+		if drain, ok := result.(*unconfirmedHTTPDrain); ok {
+			result = drain.Diagnostic // retain the primary after scratch policy ran
 		}
 	}()
 	mode := "serve"
@@ -52,7 +67,7 @@ func executeContext(ctx context.Context, args []string) (result error) {
 		if synthetic {
 			return runtimeFailure(codeSyntheticOptions, "startup", "synthetic_listen_only", "no_effect", "Use synthetic-serve with optional --listen only. State is always newly temporary and native operator mode is mandatory.")
 		}
-		return &ledger.Diagnostic{Code: ledger.CodePath, Stage: "startup", Constraint: "explicit_command_and_absolute_state", Outcome: "no_effect", NextStep: "Use init or serve with --state and a deliberately selected absolute directory. Credentials are runtime environment only."}
+		return ledger.CanonicalFailure(&ledger.Diagnostic{Code: ledger.CodePath}, failuretype.RuntimeSetupUnknown)
 	}
 	if synthetic {
 		invalidOption := false
@@ -70,14 +85,19 @@ func executeContext(ctx context.Context, args []string) (result error) {
 		}
 		var err error
 		if *operatorMode {
-			err = ledger.InitOperator(ctx, *dir, ledger.OperatorCredentials{Email: os.Getenv("LEDGER_OPERATOR_EMAIL"), Password: os.Getenv("LEDGER_OPERATOR_PASSWORD")})
+			err = ledger.InitOperatorObserved(ctx, *dir, ledger.OperatorCredentials{Email: os.Getenv("LEDGER_OPERATOR_EMAIL"), Password: os.Getenv("LEDGER_OPERATOR_PASSWORD")}, observer)
 		} else {
-			err = ledger.Init(ctx, *dir)
+			err = ledger.InitObserved(ctx, *dir, observer)
 		}
+		owned = true
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stdout, `{"status":"initialized_empty"}`)
+		if _, err := fmt.Fprintln(os.Stdout, `{"status":"initialized_empty"}`); err != nil {
+			fault := ledger.CanonicalFailure(err, failuretype.ResponseDeliveryUnknown)
+			failureowner.Observe(observer, fault.Kind())
+			return fault
+		}
 		return nil
 	}
 	if err := validateModeListen(*listen, synthetic); err != nil {
@@ -99,62 +119,80 @@ func executeContext(ctx context.Context, args []string) (result error) {
 		}
 		*dir = scratch
 		defer func() {
-			if err := cleanupScratch(scratch, removeScratch); err != nil && result == nil {
-				result = err
+			if err := cleanupScratch(scratch, removeScratch); err != nil {
+				failureowner.Observe(observer, ledger.FailureKind(err, failuretype.RuntimeShutdownUnknown))
+				if result == nil {
+					result, owned = err, true
+				}
 			}
 		}()
 		// Init/Open failures may hide unconfirmed framework storage teardown.
 		// Preserve that scratch state rather than unlinking possibly open files.
-		if err := ledger.InitOperator(ctx, scratch, credentials); err != nil {
+		if err := ledger.InitOperatorObserved(ctx, scratch, credentials, observer); err != nil {
+			owned = true
 			return err
 		}
 	}
-	service, err := ledger.Open(ctx, *dir)
+	service, err := ledger.OpenObserved(ctx, *dir, observer)
 	if err != nil {
+		owned = true
 		return err
 	}
 	defer func() {
 		// Close waits for actual transaction completion. A cleanup failure must
 		// not replace a previously observed startup/listener/accounting failure.
-		panicked := false
-		if synthetic {
-			panicked = recover() != nil
-		}
-		closeErr := service.Close()
+		panicked := recover() != nil
+		closeErr := service.CloseObserved(observer)
 		if panicked {
-			result = runtimeFailure(codeRuntime, "shutdown", "completed_local_lifecycle", "unknown", "Underlying lifecycle cause unknown. Temporary state is preserved; inspect privately and do not reuse it.")
+			fault := runtimeFailure(codeRuntime, "shutdown", "completed_local_lifecycle", "unknown", "Underlying lifecycle cause unknown. Temporary state is preserved; inspect privately and do not reuse it.")
+			failureowner.Observe(observer, fault.Kind())
+			if result == nil {
+				result = fault
+			}
+			owned = true
 		}
-		removeScratch = closeErr == nil && (result == nil || (ledger.Failure(result).Code != codeShutdown && ledger.Failure(result).Code != codeRuntime))
-		if result == nil {
-			result = closeErr
+		removeScratch = closeErr == nil && !httpDrainUnconfirmed(result) && (result == nil || ledger.Failure(result).Code != codeRuntime)
+		if result == nil && closeErr != nil {
+			result, owned = closeErr, true
 		}
 	}()
 	var metrics httpapi.TerminalObserver
 	if !synthetic {
 		runtime := telemetry.New(ctx)
 		metrics = runtime
-		defer runtime.Shutdown() // cancel/join, drop partial windows; never flush
+		if observer == nil {
+			observer = runtime
+		}
+		observeMetricsSetup(runtime.State(), metricsObserver)
+		defer func() {
+			observeMetricsShutdown(runtime, metricsObserver)
+		}()
 	}
 	handler, err := httpapi.NewHandler(service, func() bool { return ctx.Err() == nil && service.Ready() }, key, metrics)
 	if err != nil {
 		return runtimeFailure(codeHandler, "startup", "custom_accounting_handler", "no_effect", "Handler construction failed; cause unknown. Check runtime key and the qualified custom route build privately.")
 	}
 	if *operatorMode {
-		app, err := service.OperatorApp()
+		app, err := service.OperatorAppObserved(observer)
 		if err != nil {
+			owned = true
 			return err
 		}
-		handler, err = operator.NewHandler(handler, app, service)
+		handler, err = operator.NewHandlerObserved(handler, app, service, observer)
 		if err != nil {
-			return runtimeFailure(codeHandler, "operator_setup", "restricted_native_router", "no_effect", "Native operator router unavailable; cause unknown. Check the qualified pinned build privately. Serve never creates or resets a login.")
+			owned = true
+			return err
 		}
 	}
-	return serve(ctx, service, handler, *listen)
+	owned = true // serve/maintenance own primary and distinct joined failures
+	return serveObserved(ctx, service, handler, *listen, observer)
 }
 
 func main() {
 	if err := execute(os.Args[1:]); err != nil {
-		_ = json.NewEncoder(os.Stderr).Encode(ledger.Failure(err))
+		if writeErr := json.NewEncoder(os.Stderr).Encode(ledger.Failure(err)); writeErr != nil {
+			_ = ledger.CanonicalFailure(writeErr, failuretype.ResponseDeliveryUnknown)
+		}
 		os.Exit(1)
 	}
 }

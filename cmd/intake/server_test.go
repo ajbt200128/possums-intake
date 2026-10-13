@@ -122,7 +122,7 @@ func TestFatalMaintenancePreservesKnownCategory(t *testing.T) {
 		ticks <- time.Now()
 		err := maintain(ctx, fixture, ticks, time.Now())
 		cancel()
-		if err != failure {
+		if err == nil || ledger.Failure(err).Code != failure.Code || ledger.Failure(err).Kind() != failure.Kind() {
 			t.Fatal("maintenance or cancellation erased observed failure")
 		}
 	}

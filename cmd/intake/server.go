@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"time"
 
+	"possums-intake/internal/failureowner"
+	"possums-intake/internal/failuretype"
 	"possums-intake/internal/ledger"
 )
 
@@ -30,7 +32,22 @@ const (
 )
 
 func runtimeFailure(code ledger.Code, stage, constraint, outcome, next string) *ledger.Diagnostic {
-	return &ledger.Diagnostic{Code: code, Stage: stage, Constraint: constraint, Outcome: outcome, NextStep: next}
+	kind := failuretype.RuntimeSetupUnknown
+	switch code {
+	case codeSyntheticOptions, codeAdminKey, codeListen, "LEDGER_OPERATOR_SETUP_INVALID":
+		kind = failuretype.RequestInvalid
+	case codeBind, codeServe:
+		kind = failuretype.RuntimeServeUnknown
+	case codeShutdown, codeScratchCleanup:
+		kind = failuretype.RuntimeShutdownUnknown
+	case codeRuntime:
+		if stage == "shutdown" {
+			kind = failuretype.RuntimeShutdownUnknown
+		}
+	}
+	d := ledger.CanonicalFailure(&ledger.Diagnostic{}, kind)
+	d.Code, d.Stage, d.Constraint, d.Outcome, d.NextStep = code, stage, constraint, outcome, next
+	return d
 }
 
 func validateListen(address string) error {
@@ -73,6 +90,16 @@ type maintenanceLedger interface {
 // One joined worker, no overlapping runs or catch-up loop. A delayed tick can
 // retain rows longer, but accounting reads/admissions enforce expiry themselves.
 func maintain(ctx context.Context, service maintenanceLedger, ticks <-chan time.Time, started time.Time) error {
+	return maintainObserved(ctx, service, ticks, started, nil)
+}
+
+func maintainObserved(ctx context.Context, service maintenanceLedger, ticks <-chan time.Time, started time.Time, observer failureowner.Observer) (result error) {
+	defer func() {
+		if recover() != nil {
+			result = ledger.CanonicalFailure(&ledger.Diagnostic{}, failuretype.MaintenanceUnknown)
+			failureowner.Observe(observer, ledger.FailureKind(result, failuretype.MaintenanceUnknown))
+		}
+	}()
 	nextPrune := started.Add(pruneInterval)
 	for {
 		select {
@@ -86,9 +113,11 @@ func maintain(ctx context.Context, service maintenanceLedger, ticks <-chan time.
 			if prune {
 				nextPrune = now.Add(pruneInterval)
 			}
-			_, err := service.Cleanup(ctx, prune)
+			runCtx, report := ledger.WithFailureReport(ctx)
+			_, err := service.Cleanup(runCtx, prune)
+			ledger.ObserveMaintenanceFailures(ctx, observer, report, err)
 			if err != nil && !service.Ready() {
-				return err
+				return ledger.CanonicalFailure(err, failuretype.MaintenanceUnknown)
 			}
 			// Contention/cancellation is not fatal. No automatic request logs,
 			// error dumps or replay; the next ordinary tick is the next batch.
@@ -96,27 +125,73 @@ func maintain(ctx context.Context, service maintenanceLedger, ticks <-chan time.
 	}
 }
 
-func serve(ctx context.Context, service maintenanceLedger, handler http.Handler, address string) (result error) {
+func serve(ctx context.Context, service maintenanceLedger, handler http.Handler, address string) error {
+	return serveObserved(ctx, service, handler, address, nil)
+}
+
+func serveObserved(ctx context.Context, service maintenanceLedger, handler http.Handler, address string, observer failureowner.Observer) (result error) {
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return runtimeFailure(codeBind, "listener_start", "available_numeric_listener", "no_effect", "Listener could not open; underlying cause unknown. Check local port availability and permissions privately. No accounting HTTP operation ran; money and reservation rows are preserved.")
+		fault := runtimeFailure(codeBind, "listener_start", "available_numeric_listener", "no_effect", "Listener could not open; underlying cause unknown. Check local port availability and permissions privately. No accounting HTTP operation ran; money and reservation rows are preserved.")
+		failureowner.Observe(observer, fault.Kind())
+		return fault
 	}
 	work, cancel := context.WithCancel(ctx)
 	defer cancel()
 	server := localServer(work, handler)
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
 	started := time.Now()
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
+	return coordinateServeObserved(ctx, work, cancel, service, server, listener, ticker.C, started, observer)
+}
+
+// The default HTTP server and focused fault fixtures use this same drain/join
+// coordinator. Cancellation never establishes completion or permits early close.
+func coordinateServeObserved(ctx, work context.Context, cancel context.CancelFunc, service maintenanceLedger, server httpLifecycle, listener net.Listener, ticks <-chan time.Time, started time.Time, observer failureowner.Observer) (result error) {
+	served := make(chan error, 1)
+	go func() { served <- serveHTTP(server, listener) }()
 	maintained := make(chan error, 1)
-	go func() { maintained <- maintain(work, service, ticker.C, started) }()
+	go func() { maintained <- maintainObserved(work, service, ticks, started, observer) }()
 	var serveDone, maintenanceDone bool
 	observeServe := func(err error) {
-		if result == nil && err != nil && !errors.Is(err, http.ErrServerClosed) {
-			result = runtimeFailure(codeServe, "http_serve", "usable_listener", "unknown", "HTTP serving stopped; cause unknown. Delivery is not an accounting receipt. Resolve uncertain mutations using their original identity.")
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fault := ledger.CanonicalFailure(err, failuretype.RuntimeServeUnknown)
+			failureowner.Observe(observer, fault.Kind())
+			if result == nil {
+				result = fault
+			}
 		}
 	}
+	defer func() {
+		if recover() != nil {
+			fault := runtimeFailure(codeRuntime, "shutdown", "joined_runtime_work", "unknown", "Runtime coordination failed; cause unknown. Preserve original state and resolve uncertain mutations by original identity.")
+			failureowner.Observe(observer, fault.Kind())
+			if result == nil {
+				result = fault
+			}
+		}
+		cancel() // Cancels request/cleanup work, never abandons commit/fsync.
+		// No deadline establishes completion. Drain and join on normal return
+		// AND coordination panic before the caller can close storage.
+		if err := shutdownHTTP(server); err != nil {
+			failureowner.Observe(observer, ledger.FailureKind(err, failuretype.RuntimeShutdownUnknown))
+			if result == nil {
+				result = err
+			} else {
+				// Preserve the primary and the separate unconfirmed-drain
+				// evidence needed by the existing scratch-retention policy.
+				result = &unconfirmedHTTPDrain{result.(*ledger.Diagnostic)}
+			}
+		}
+		if !serveDone {
+			observeServe(<-served)
+		}
+		if !maintenanceDone {
+			if err := <-maintained; err != nil && result == nil {
+				result = err
+			}
+		}
+	}()
 	select {
 	case <-ctx.Done():
 	case err := <-served:
@@ -125,20 +200,6 @@ func serve(ctx context.Context, service maintenanceLedger, handler http.Handler,
 	case err := <-maintained:
 		maintenanceDone = true
 		result = err
-	}
-	cancel() // Cancels request/cleanup work, but never abandons commit/fsync.
-	// No shutdown deadline can establish accounting completion. Shutdown waits
-	// for handlers, then we join both workers before the caller closes storage.
-	if err := server.Shutdown(context.Background()); err != nil && result == nil {
-		result = runtimeFailure(codeShutdown, "shutdown", "completed_http_drain", "unknown", "HTTP shutdown could not be confirmed; cause unknown. Preserve original state and resolve uncertain mutations by original identity.")
-	}
-	if !serveDone {
-		observeServe(<-served)
-	}
-	if !maintenanceDone {
-		if err := <-maintained; err != nil && result == nil {
-			result = err
-		}
 	}
 	return result
 }
