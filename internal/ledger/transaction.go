@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"possums-intake/internal/failuretype"
+
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"modernc.org/sqlite"
@@ -30,7 +32,7 @@ type callbackFailure struct {
 	cause error
 }
 
-func (*callbackFailure) Error() string { return "LEDGER_TRANSACTION_CALLBACK_ABORTED" }
+func (*callbackFailure) Error() string   { return "LEDGER_TRANSACTION_CALLBACK_ABORTED" }
 func (e *callbackFailure) Unwrap() error { return e.cause }
 
 type transaction struct {
@@ -52,22 +54,40 @@ func (tx *transaction) exec(sql string, params dbx.Params) error {
 // Supported RunInTransaction lacks context for begin/commit; these may outlast
 // the caller. Gate ownership is retained until authoritative completion returns.
 func (s *Service) run(ctx context.Context, fn func(*transaction) error, withClock bool) (result error) {
+	var failures transactionFailures
+	report := reportFromContext(ctx)
+	// Registered first: panic classification, work cancellation and gate release
+	// all finish before numeric evidence is made available to the outer owner.
+	defer func() { report.publish(failures) }()
+	fail := func(code Code, kind failuretype.Type) *Diagnostic {
+		d := diagnostic(code)
+		d.kind = kind
+		failures.add(kind)
+		return d
+	}
+	writerFailure := func() *Diagnostic {
+		kind := failuretype.WriterWaitExhausted
+		if cause := ctx.Err(); cause != nil {
+			kind = FailureKind(cause, kind)
+		}
+		return fail(CodeWriter, kind)
+	}
 	if !s.Ready() {
-		return diagnostic(CodeClosed)
+		return fail(CodeClosed, failuretype.NotReady)
 	}
 	wait, cancelWait := context.WithTimeout(ctx, WriterWait)
 	defer cancelWait()
 	select {
 	case s.gate <- struct{}{}:
 	case <-wait.Done():
-		return diagnostic(CodeWriter)
+		return writerFailure()
 	}
 	defer func() { <-s.gate }()
 	if !s.Ready() {
-		return diagnostic(CodeClosed)
+		return fail(CodeClosed, failuretype.NotReady)
 	}
 	if wait.Err() != nil {
-		return diagnostic(CodeWriter)
+		return writerFailure()
 	}
 	work, cancelWork := context.WithTimeout(ctx, WorkBudget)
 	defer cancelWork()
@@ -79,10 +99,31 @@ func (s *Service) run(ctx context.Context, fn func(*transaction) error, withCloc
 	defer func() {
 		if recover() != nil {
 			if completionObserved && completionErr == nil && commitAttempted {
+				failures.add(failuretype.TransactionAfterCompletionUnknown)
 				result = nil // known commit survives a later hook/presentation panic
 			} else {
 				s.ready.Store(false)
-				result = diagnostic(CodeCommit)
+				if completionObserved && callbackRollback(completionErr, callbackAbort) {
+					primary := s.rollbackFailure(callbackErr, work, &failures)
+					failures.add(failuretype.TransactionAfterCompletionUnknown)
+					// Retain the existing conservative public panic result while
+					// reporting the known primary and distinct later fault once.
+					d := diagnostic(CodeCommit)
+					d.kind = primary.Kind()
+					result = d
+				} else if cause, ok := rollbackCause(completionErr, callbackAbort); completionObserved && ok {
+					result = s.failedRollback(callbackErr, cause, &failures)
+					failures.add(failuretype.TransactionAfterCompletionUnknown)
+				} else if completionObserved && commitAttempted && completionErr != nil {
+					result = fail(CodeCommit, transactionFailureKind(completionErr, failuretype.TransactionCompletionUnknown))
+					failures.add(failuretype.TransactionAfterCompletionUnknown)
+				} else if !entered {
+					result = fail(CodeCommit, failuretype.TransactionBeginUnknown)
+				} else {
+					// dbx discards rollback errors when re-panicking. No cause or
+					// rollback result may be inferred from its panic payload.
+					result = fail(CodeCommit, failuretype.TransactionCompletionUnknown)
+				}
 			}
 		}
 	}()
@@ -112,31 +153,172 @@ func (s *Service) run(ctx context.Context, fn func(*transaction) error, withCloc
 	}
 	if completionObserved && completionErr == nil && commitAttempted {
 		// An after-completion error cannot erase observed successful commit.
+		transactionAfterFailures(err, nil, callbackAbort, &failures)
 		return nil
 	}
-	if entered && completionObserved && !commitAttempted && completionErr == callbackAbort {
-		if d, ok := callbackErr.(*Diagnostic); ok {
-			if d.Code == CodeCorrupt || d.Code == CodeSchema {
-				s.ready.Store(false)
-			}
+	if entered && completionObserved && !commitAttempted {
+		if callbackRollback(completionErr, callbackAbort) {
+			d := s.rollbackFailure(callbackErr, work, &failures)
+			transactionAfterFailures(err, completionErr, callbackAbort, &failures)
 			return d
 		}
-		if fatalStorage(callbackErr) {
-			return diagnostic(CodeStorage)
+		if cause, ok := rollbackCause(completionErr, callbackAbort); ok {
+			// dbx supplies both actual failures. Unknown effect outcome is not a
+			// third occurrence, and propagating this SDK result is not a new fault.
+			d := s.failedRollback(callbackErr, cause, &failures)
+			transactionAfterFailures(err, completionErr, callbackAbort, &failures)
+			return d
 		}
-		if errors.Is(callbackErr, context.Canceled) || errors.Is(callbackErr, context.DeadlineExceeded) || work.Err() != nil {
-			return diagnostic(CodeWork)
-		}
-		// The callback error and successful rollback are observed, not guessed from
-		// an SQL error string. Driver details never cross the public boundary.
-		return diagnostic(CodeStorage)
 	}
 	if !entered {
-		return diagnostic(CodeBegin)
+		return fail(CodeBegin, transactionFailureKind(err, failuretype.TransactionBeginUnknown))
 	}
-	return diagnostic(CodeCommit)
+	d := fail(CodeCommit, transactionFailureKind(completionErr, failuretype.TransactionCompletionUnknown))
+	if completionObserved && commitAttempted && completionErr != nil {
+		transactionAfterFailures(err, completionErr, callbackAbort, &failures)
+	}
+	return d
 }
-func fatalStorage(err error) bool {
+
+func transactionFailureKind(err error, fallback failuretype.Type) failuretype.Type {
+	if err == nil {
+		return fallback
+	}
+	return FailureKind(err, fallback)
+}
+
+func (s *Service) rollbackFailure(cause error, work context.Context, failures *transactionFailures) *Diagnostic {
+	d, kind := classifiedFailure(cause, failuretype.TransactionWorkUnknown)
+	code := CodeStorage
+	if d != nil && defaultFailureKind(d.Code).Valid() {
+		code = d.Code
+	} else if !fatalStorage(cause) && (kind == failuretype.Cancelled || kind == failuretype.DeadlineExceeded || work.Err() != nil) {
+		code = CodeWork
+		if kind == failuretype.TransactionWorkUnknown {
+			kind = FailureKind(work.Err(), kind)
+		}
+	}
+	// Classification can look through wrappers; readiness retains its existing
+	// direct core-diagnostic policy rather than expanding it in this packet.
+	if observed, ok := cause.(*Diagnostic); ok && observed != nil && (observed.Code == CodeCorrupt || observed.Code == CodeSchema) {
+		s.ready.Store(false)
+	}
+	clean := diagnostic(code)
+	clean.kind = kind
+	failures.add(kind)
+	return clean
+}
+
+func (s *Service) failedRollback(callbackErr, cause error, failures *transactionFailures) *Diagnostic {
+	kind := transactionFailureKind(callbackErr, failuretype.TransactionWorkUnknown)
+	failures.add(kind)
+	failures.add(FailureKind(cause, failuretype.TransactionRollbackUnknown))
+	// The SDK's non-unwrapping rollback wrapper did not change readiness before
+	// this packet. Report its cause without introducing a new recovery policy.
+	d := diagnostic(CodeCommit)
+	d.kind = kind
+	return d
+}
+
+func callbackRollback(err error, abort *callbackFailure) bool {
+	token, ok := err.(*callbackFailure)
+	return ok && abort != nil && token == abort
+}
+
+// Pinned dbx v1.12.0 has no Unwrap on Errors. Only its exact two-element
+// normal rollback structure establishes an independently reported cause.
+func rollbackCause(err error, abort *callbackFailure) (error, bool) {
+	causes, ok := err.(dbx.Errors)
+	if !ok || len(causes) != 2 || !callbackRollback(causes[0], abort) || causes[1] == nil {
+		return nil, false
+	}
+	return causes[1], true
+}
+
+func sameCompletionFailure(err, completion error, abort *callbackFailure) bool {
+	if abort != nil {
+		if callbackRollback(err, abort) {
+			return true
+		}
+		_, ok := rollbackCause(err, abort)
+		return ok
+	}
+	// The pinned SQLite driver returns a concrete pointer on failed commit.
+	// Compare only that typed identity, never arbitrary error interface values.
+	observed, ok := completion.(*sqlite.Error)
+	returned, matches := err.(*sqlite.Error)
+	return ok && matches && observed != nil && returned == observed
+}
+
+func transactionAfterFailures(err, completion error, abort *callbackFailure, failures *transactionFailures) {
+	if err == nil {
+		if completion != nil {
+			failures.invalid = true
+		}
+		return
+	}
+	if completion != nil && sameCompletionFailure(err, completion, abort) {
+		return
+	}
+	defer func() {
+		if recover() != nil {
+			failures.invalid = true
+		}
+	}()
+	// A single propagation wrapper is not an independently observed fault.
+	if completion != nil {
+		if wrapper, ok := err.(interface{ Unwrap() error }); ok && sameCompletionFailure(wrapper.Unwrap(), completion, abort) {
+			return
+		}
+	}
+	// Inspect only the pinned PocketBase completion wrapper, not an arbitrary
+	// recursive error graph. Its outer Join holds txErr (if any) and one fmt
+	// wrapper around Join(afterFunc errors). An uncertain shape cannot supply
+	// complete numeric evidence; it does not change the accounting outcome.
+	fault := err
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		parts := joined.Unwrap()
+		index := 0
+		if completion != nil {
+			if len(parts) == 1 && sameCompletionFailure(parts[0], completion, abort) {
+				return
+			}
+			index = 1
+		}
+		if len(parts) == index+1 {
+			if completion != nil && !sameCompletionFailure(parts[0], completion, abort) {
+				failures.invalid = true
+				return
+			}
+			fault = parts[index]
+			if wrapper, ok := fault.(interface{ Unwrap() error }); ok {
+				if after, ok := wrapper.Unwrap().(interface{ Unwrap() []error }); ok {
+					causes := after.Unwrap()
+					if len(causes) > 0 {
+						// Inspect at most one overflow slot; never silently truncate
+						// a larger SDK list into a complete report.
+						for _, cause := range causes[:min(len(causes), len(failures.kinds)+1)] {
+							failures.add(FailureKind(cause, failuretype.TransactionAfterCompletionUnknown))
+						}
+						return
+					}
+				}
+			}
+		}
+	}
+	if completion != nil {
+		failures.invalid = true
+		return
+	}
+	failures.add(FailureKind(fault, failuretype.TransactionAfterCompletionUnknown))
+}
+
+func fatalStorage(err error) (fatal bool) {
+	defer func() {
+		if recover() != nil {
+			fatal = false
+		}
+	}()
 	var failure *sqlite.Error
 	if !errors.As(err, &failure) {
 		return false
