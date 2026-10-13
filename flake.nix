@@ -33,6 +33,9 @@
           chmod -R u+w scripts
           mkdir -p .github/workflows
           cp ${./.github/workflows/qualify-synthetic-image.yml} .github/workflows/qualify-synthetic-image.yml
+          cp ${./.github/workflows/publish-image.yml} .github/workflows/publish-image.yml
+          cp ${./.github/workflows/tinfoil-release-publish.yml} .github/workflows/tinfoil-release-publish.yml
+          cp ${./.github/workflows/deploy-production.yml} .github/workflows/deploy-production.yml
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
           touch $out
         '';
