@@ -93,6 +93,10 @@ in {
     { name = "image-stdenv"; path = pkgs.stdenvNoCC; }
     { name = "image-compressor"; path = pkgs.pigz; }
     { name = "image-json"; path = pkgs.jq; }
+    # nativeBuildInputs selects getDev, not jq's default bin output.
+    { name = "image-json-dev"; path = pkgs.lib.getDev pkgs.jq; }
+    # symlinkJoin references lndir directly from its build command.
+    { name = "image-symlink-tool"; path = pkgs.lndir; }
     { name = "image-wrapper"; path = pkgs.makeWrapper; }
     # This pinned vendor script contains no application/configuration references.
     { name = "image-stream-tool"; path = image.stream.streamScript; }
