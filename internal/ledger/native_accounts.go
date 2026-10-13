@@ -11,6 +11,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
+	"possums-intake/internal/failuretype"
 )
 
 var nativeIDPattern = regexp.MustCompile(`^[a-z0-9]{15}$`)
@@ -89,7 +90,10 @@ func (tx *transaction) createAccount(in NativeAccountCreate) (*core.Record, erro
 func encodeNative(r *core.Record) ([]byte, error) {
 	raw, err := json.Marshal(r)
 	if err != nil || len(raw) > 4096 {
-		return nil, nativeFailure(CodeInput, "bounded_native_response_encoding")
+		if err == nil {
+			err = &Diagnostic{}
+		}
+		return nil, CanonicalFailure(err, failuretype.ResponseEncodingUnknown)
 	}
 	return raw, nil
 }

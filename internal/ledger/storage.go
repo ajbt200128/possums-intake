@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"possums-intake/internal/failureowner"
 	"possums-intake/internal/failuretype"
 
 	"github.com/pocketbase/dbx"
@@ -22,38 +23,63 @@ import (
 // Init creates empty disposable LOCAL state, without credits or superusers.
 // A failure preserves partial files; neither Init nor Open repairs/resets them.
 func Init(ctx context.Context, dir string) error {
-	return initialize(ctx, dir, nil)
+	return initialize(ctx, dir, nil, nil)
 }
 
-func initialize(ctx context.Context, dir string, operator *OperatorCredentials) (result error) {
+// InitObserved adds only numeric error observation to explicit empty-state init.
+func InitObserved(ctx context.Context, dir string, observer failureowner.Observer) error {
+	return initialize(ctx, dir, nil, observer)
+}
+
+func initialize(ctx context.Context, dir string, operator *OperatorCredentials, observer failureowner.Observer) (result error) {
+	owned := false
+	defer func() {
+		if recover() != nil {
+			result = lifecycleFailure(&Diagnostic{}, failuretype.InitializationUnknown)
+			owned = false
+		}
+		if result != nil && !owned {
+			d := CanonicalFailure(result, failuretype.InitializationUnknown)
+			if d.Code == CodeBoundary {
+				d.Outcome = "unavailable"
+			}
+			result = d
+			failureowner.Observe(observer, d.Kind())
+		}
+	}()
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) == string(filepath.Separator) {
 		return diagnostic(CodePath)
 	}
 	if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, os.ErrExist) {
-		return diagnostic(CodeStartup)
+		return lifecycleFailure(err, failuretype.InitializationUnknown)
 	}
 	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil {
+		return lifecycleFailure(err, failuretype.InitializationUnknown)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return diagnostic(CodePath)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return diagnostic(CodeStartup)
+		return lifecycleFailure(err, failuretype.InitializationUnknown)
 	}
 	if len(entries) != 0 {
 		return diagnostic(CodeExisting)
 	}
-	app, err := bootstrap(dir, true)
+	app, err := bootstrapObserved(dir, true, observer)
 	if err != nil {
+		owned = true // bootstrap owns its failure and any distinct teardown fault
 		return err
 	}
 	defer func() {
-		if err := app.ClearBootstrap(); err != nil && result == nil {
-			result = diagnostic(CodeClose)
+		if err := clearStorage(app.ClearBootstrap, observer); err != nil && result == nil {
+			result, owned = err, true
 		}
 	}()
 	s := newService(app)
-	if err := s.run(ctx, func(tx *transaction) error {
+	runCtx, report := WithFailureReport(ctx)
+	err = s.run(runCtx, func(tx *transaction) error {
 		if err := migrateV1(tx); err != nil {
 			return err
 		}
@@ -61,17 +87,24 @@ func initialize(ctx context.Context, dir string, operator *OperatorCredentials) 
 			return initializeOperator(tx, *operator)
 		}
 		return nil
-	}, false); err != nil {
+	}, false)
+	ObserveRunFailures(observer, report, err, failuretype.InitializationUnknown)
+	if err != nil {
+		owned = true
 		return initFailure(err)
 	}
-	if err := s.validate(ctx); err != nil {
+	runCtx, report = WithFailureReport(ctx)
+	err = s.validate(runCtx)
+	ObserveRunFailures(observer, report, err, failuretype.StorageValidationUnknown)
+	if err != nil {
+		owned = true
 		return initFailure(err)
 	}
 	return nil
 }
 
 func initFailure(err error) *Diagnostic {
-	d := *Failure(err)
+	d := *CanonicalFailure(err, failuretype.InitializationUnknown)
 	d.Stage = "init"
 	d.NextStep = "Initialization incomplete or unconfirmed. Preserve partial state; do not re-run init on it. Inspect privately or select a different empty disposable directory."
 	return &d
@@ -80,33 +113,77 @@ func initFailure(err error) *Diagnostic {
 // Open refuses missing/partial ledger state before PocketBase bootstrap can
 // create a new data database. Never use Init as storage-loss recovery.
 func Open(ctx context.Context, dir string) (*Service, error) {
+	return OpenObserved(ctx, dir, nil)
+}
+
+func OpenObserved(ctx context.Context, dir string, observer failureowner.Observer) (*Service, error) {
+	return openObserved(ctx, dir, observer, bootstrapObserved)
+}
+
+func openObserved(ctx context.Context, dir string, observer failureowner.Observer, bootstrapFn func(string, bool, failureowner.Observer) (*core.BaseApp, error)) (service *Service, result error) {
+	owned := false
+	defer func() {
+		if recover() != nil {
+			service = nil
+			result = lifecycleFailure(&Diagnostic{}, failuretype.StorageOpenUnknown)
+			owned = false
+		}
+		if result != nil && !owned {
+			d := CanonicalFailure(result, failuretype.StorageOpenUnknown)
+			if d.Code == CodeBoundary {
+				d.Outcome = "unavailable"
+			}
+			result = d
+			failureowner.Observe(observer, d.Kind())
+		}
+	}()
 	if !filepath.IsAbs(dir) {
 		return nil, diagnostic(CodePath)
 	}
 	info, err := os.Lstat(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, lifecycleFailure(err, failuretype.StorageOpenUnknown)
+	}
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, diagnostic(CodeMissing)
 	}
 	for _, name := range []string{"data.db", "auxiliary.db"} {
 		info, err = os.Lstat(filepath.Join(dir, name))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, lifecycleFailure(err, failuretype.StorageOpenUnknown)
+		}
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 			return nil, diagnostic(CodeMissing)
 		}
 	}
 	// Apply the same exact-layout checks before framework bootstrap can touch
 	// incompatible disposable state. No version-specific legacy or upgrade path.
-	if err := preflightLayout(ctx, dir); err != nil {
+	if err := preflightObserved(ctx, dir, observer); err != nil {
+		owned = true
 		return nil, err
 	}
-	app, err := bootstrap(dir, false)
+	app, err := bootstrapFn(dir, false, observer)
 	if err != nil {
+		owned = true
 		return nil, err
 	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			if err := clearStorage(app.ClearBootstrap, observer); err != nil && result == nil {
+				result, owned = err, true
+			}
+		}
+	}()
 	s := newService(app)
-	if err := s.validate(ctx); err != nil {
-		app.ClearBootstrap()
+	runCtx, report := WithFailureReport(ctx)
+	err = s.validate(runCtx)
+	ObserveRunFailures(observer, report, err, failuretype.StorageValidationUnknown)
+	if err != nil {
+		owned = true
 		return nil, err
 	}
+	accepted = true
 	return s, nil
 }
 
@@ -121,6 +198,47 @@ func connect(path string, create bool) (*dbx.DB, error) {
 	return dbx.Open("sqlite", uri+"?mode="+mode+"&_pragma=busy_timeout(250)&_pragma=journal_mode(WAL)&_pragma=journal_size_limit(200000000)&_pragma=synchronous(FULL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-32000)&_defensive=1")
 }
 func bootstrap(dir string, create bool) (*core.BaseApp, error) {
+	return bootstrapObserved(dir, create, nil)
+}
+
+func bootstrapObserved(dir string, create bool, observer failureowner.Observer) (*core.BaseApp, error) {
+	return bootstrapUsingObserved(create, observer, func() *core.BaseApp { return storageApp(dir, create) })
+}
+
+// The private construction seam leaves Bootstrap and its primary/teardown owner
+// identical for the default app and supported-hook qualification fixtures.
+func bootstrapUsingObserved(create bool, observer failureowner.Observer, factory func() *core.BaseApp) (app *core.BaseApp, result error) {
+	fallback := failuretype.StorageOpenUnknown
+	if create {
+		fallback = failuretype.InitializationUnknown
+	}
+	accepted := false
+	defer func() {
+		if recover() != nil {
+			result = lifecycleFailure(&Diagnostic{}, fallback)
+		}
+		if !accepted {
+			if result != nil {
+				result = lifecycleFailure(result, fallback)
+				failureowner.Observe(observer, FailureKind(result, fallback))
+			}
+			if app != nil {
+				if err := clearStorage(app.ClearBootstrap, observer); err != nil && result == nil {
+					result = err
+				}
+			}
+			app = nil
+		}
+	}()
+	app = factory()
+	if err := app.Bootstrap(); err != nil {
+		return app, err
+	}
+	accepted = true
+	return app, nil
+}
+
+func storageApp(dir string, create bool) *core.BaseApp {
 	app := core.NewBaseApp(core.BaseAppConfig{
 		DataDir: dir, QueryTimeout: WorkBudget, IsDev: false,
 		DBConnect:        func(path string) (*dbx.DB, error) { return connect(path, create) },
@@ -137,11 +255,7 @@ func bootstrap(dir string, create bool) (*core.BaseApp, error) {
 			return err
 		}, Priority: 0,
 	})
-	if err := app.Bootstrap(); err != nil {
-		app.ClearBootstrap()
-		return nil, diagnostic(CodeStartup)
-	}
-	return app, nil
+	return app
 }
 
 const schemaV1 = `
@@ -306,6 +420,23 @@ func validateDDL(query func(string, dbx.Params) *dbx.Query) error {
 }
 
 func preflightLayout(ctx context.Context, dir string) error {
+	return preflightObserved(ctx, dir, nil)
+}
+
+func preflightObserved(ctx context.Context, dir string, observer failureowner.Observer) (result error) {
+	owned := false
+	defer func() {
+		if recover() != nil {
+			result = lifecycleFailure(&Diagnostic{}, failuretype.StorageValidationUnknown)
+			owned = false
+		}
+		if result != nil && !owned {
+			d := CanonicalFailure(result, failuretype.StorageValidationUnknown)
+			d.Outcome = "unavailable"
+			result = d
+			failureowner.Observe(observer, d.Kind())
+		}
+	}()
 	work, cancel := context.WithTimeout(ctx, WorkBudget)
 	defer cancel()
 	uri := (&url.URL{Scheme: "file", Path: filepath.Join(dir, "data.db")}).String()
@@ -315,7 +446,11 @@ func preflightLayout(ctx context.Context, dir string) error {
 		d.Outcome = "unavailable"
 		return d
 	}
-	defer db.Close()
+	defer func() {
+		if err := clearStorage(db.Close, observer); err != nil && result == nil {
+			result, owned = err, true
+		}
+	}()
 	return validateDDL(func(statement string, params dbx.Params) *dbx.Query {
 		return db.NewQuery(statement).Bind(params).WithContext(work)
 	})
@@ -413,6 +548,14 @@ func (s *Service) validate(ctx context.Context) error {
 // Close waits for the actual in-flight transaction to finish, including commit.
 // It never abandons work or releases gate ownership on a timer.
 func (s *Service) Close() error {
+	return s.CloseObserved(nil)
+}
+
+func (s *Service) CloseObserved(observer failureowner.Observer) error {
+	return clearStorage(s.close, observer)
+}
+
+func (s *Service) close() error {
 	s.ready.Store(false)
 	s.gate <- struct{}{}
 	defer func() { <-s.gate }()
@@ -423,7 +566,7 @@ func (s *Service) Close() error {
 	if err := s.app.OnTerminate().Trigger(event, func(e *core.TerminateEvent) error {
 		return e.App.ClearBootstrap()
 	}); err != nil {
-		return diagnostic(CodeClose)
+		return err // clearStorage owns typed causes and separate close failures
 	}
 	return nil
 }

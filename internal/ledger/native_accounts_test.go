@@ -15,6 +15,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
+	"possums-intake/internal/failuretype"
 )
 
 func nativeCreate(t *testing.T, s *Service, account, amount string) string {
@@ -202,7 +203,10 @@ func TestNativeWriterCancellationRollbackEncodingAndCommitEvidence(t *testing.T)
 		return err
 	})
 	raw, err = s.NativeAccountCreate(background, NativeAccountCreate{"encode-fail", "10", true})
-	codeIs(t, err, CodeInput)
+	codeIs(t, err, CodeStorage)
+	if Failure(err).Kind() != failuretype.ResponseEncodingUnknown || Failure(err).Outcome != "no_effect" {
+		t.Fatal("actual native encoding failure lost classification or observed rollback")
+	}
 	if raw != nil {
 		t.Fatal("encoding failure returned native receipt")
 	}

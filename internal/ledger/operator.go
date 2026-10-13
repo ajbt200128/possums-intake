@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"unicode/utf8"
 
+	"possums-intake/internal/failureowner"
 	"possums-intake/internal/failuretype"
 
 	"github.com/pocketbase/ozzo-validation/v4/is"
@@ -34,10 +35,15 @@ func (c OperatorCredentials) Validate() error {
 
 // InitOperator preserves Init's empty-directory refusal and transaction path.
 func InitOperator(ctx context.Context, dir string, credentials OperatorCredentials) error {
+	return InitOperatorObserved(ctx, dir, credentials, nil)
+}
+
+func InitOperatorObserved(ctx context.Context, dir string, credentials OperatorCredentials, observer failureowner.Observer) error {
 	if err := credentials.Validate(); err != nil {
+		failureowner.Observe(observer, FailureKind(err, failuretype.InitializationUnknown))
 		return err
 	}
-	return initialize(ctx, dir, &credentials)
+	return initialize(ctx, dir, &credentials, observer)
 }
 
 func initializeOperator(tx *transaction, credentials OperatorCredentials) error {
@@ -65,6 +71,19 @@ func initializeOperator(tx *transaction, credentials OperatorCredentials) error 
 // It makes no writes, repairs or credential changes. Call before serving, and
 // drain HTTP before Close. Accounting must continue through Service, not app.
 func (s *Service) OperatorApp() (core.App, error) {
+	return s.OperatorAppObserved(nil)
+}
+
+func (s *Service) OperatorAppObserved(observer failureowner.Observer) (app core.App, result error) {
+	defer func() {
+		if recover() != nil {
+			app = nil
+			result = lifecycleFailure(&Diagnostic{}, failuretype.NativeReadUnknown)
+		}
+		if result != nil {
+			failureowner.Observe(observer, FailureKind(result, failuretype.NativeReadUnknown))
+		}
+	}()
 	if !s.Ready() {
 		return nil, diagnostic(CodeClosed)
 	}
