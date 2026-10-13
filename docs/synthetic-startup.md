@@ -26,4 +26,20 @@ Run from the repository with the pinned environment:
 
 `devenv shell -- go vet ./cmd/intake`
 
-Source/image integration, public config publication, the paid 2 CPU / 8192 MB no-volume synthetic instance and platform acceptance remain parent-owned. This packet neither performs nor establishes those operations, storage-key/durability qualification or real-data readiness.
+## Generated-image packaging baseline
+
+The parent qualified the new disposable fixture against committed source **`d804e53`**, before the separate native/lifecycle failure-owner changes. This is a **local Linux/arm64 packaging baseline**, not the final integrated deployment image or independent native Linux A/B release reproduction.
+
+The actual generated image passed native login/create/PATCH, held-balance refusal, key/token separation, blocked logs/settings, all frozen asset response hashes, empty auxiliary logs/auth origins and attached stdout/stderr, and fresh accounting state after restarting the same container. A request to `127.0.0.2` inside the network-none namespace distinguished the wildcard listener from an exact `127.0.0.1` bind; this does not qualify a public shim or verified remote transport. The fixture used a read-only root, nonroot image user, dropped capabilities, no-new-privileges, no core dumps, log driver none, bounded 128-MiB `/tmp` tmpfs, no volume and telemetry off. Credentials were child-environment values, not command arguments. Owned containers and temporary source copies were confirmed removed; public Nix/Docker artifacts may remain.
+
+- Frozen allowlisted source identity: `7966bc31a8e97c36fd7b10a145279d514c86ab275c09ae06726f346443fd0afd`.
+- Archive: `/nix/store/hqry07nx83yrlx1rhshpb13i03pcxjg4-possums-intake-local.tar.gz`; SHA256 `ea0e33ff349e87465d39a921e7416fe75aa014e4674c486b491406edebdff525`.
+- Image config: `sha256:c117d14bbbb72c7af6c1cb921c622e6e6ff2001ac920ff4975e7c48f4e1223c5`.
+- Verified local Docker identity: `sha256:562229f7d5873b882d26facf196d795113c7c4fffc46cc67671bc73c27f60637`.
+- Exec-only probe: `/nix/store/4j407pjih85b2ca2pz2113d725vqvswr-intake-image-smoke-probe-0.1.0-local/bin/nix`; not shipped.
+
+All **78** offline packaging/workflow tests and pinned probe compilation/vet passed. Independent review confirmed bounded teardown, refusal of unconfirmed cleanup and preservation of earlier failures. These checks do not replace actual image execution; the packaging baseline above records that separate execution.
+
+The manual `qualify-synthetic-image.yml` workflow now prepares read-only exact-current-main admission, separate fresh native Linux A/B builds, actual A-image ordinary/disposable fixtures and manifest comparison. It publishes no image or release and creates no instance. It has not yet supplied release qualification evidence. Final integrated source must be requalified after the background changes are accepted; the baseline archive above must not be deployed as that final image.
+
+Public config publication, the paid 2 CPU / 8192 MB no-volume synthetic instance and platform acceptance remain pending. No storage-key/durability qualification or real-data readiness follows from this packaging pass.
