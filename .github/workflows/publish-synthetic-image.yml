@@ -1,0 +1,117 @@
+# FIRST new private package only. No automatic trigger, release or deployment.
+# Owner must freshly read authenticated full owner/read:packages inventory after
+# final source/CI/A+B acceptance, then confirm this SHA and keep namespace quiet.
+# Confirmation is trusted control-plane approval, NOT CI-proven absence or atomic
+# name creation. A visible existing package always refuses. Unknown copy: no rerun.
+name: Publish first private disposable intake image
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Explicitly authorize one first-package copy (never an update/retry)
+        type: boolean
+        default: false
+        required: true
+      qualification_run:
+        description: Successful exact-current-main qualification run (positive decimal)
+        type: string
+        required: true
+      qualification_attempt:
+        description: Exact successful current qualification attempt (positive decimal)
+        type: string
+        required: true
+      namespace_unused_confirmed:
+        description: Owner freshly confirmed unused package via full authenticated inventory; all other writers stopped
+        type: boolean
+        default: false
+        required: true
+      namespace_confirmation_source:
+        description: Exact 40-character source SHA covered by that fresh owner confirmation
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: intake-synthetic-first-publication
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source: ${{ steps.admit.outputs.source }}
+      qualification_run: ${{ steps.admit.outputs.qualification_run }}
+      a: ${{ steps.admit.outputs.a }}
+      b: ${{ steps.admit.outputs.b }}
+      archive: ${{ steps.admit.outputs.archive }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: admit
+        name: Admit owner approval and authenticated exact-source evidence
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 scripts/synthetic-publication.py admit
+  publish:
+    needs: validate
+    if: ${{ inputs.publish == true && inputs.namespace_unused_confirmed == true && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'ajbt200128' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ needs.validate.outputs.source }}
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3
+        with:
+          diagnostic-endpoint: ""
+      - name: Download bound A identities and actual runtime qualification
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ needs.validate.outputs.qualification_run }}
+          artifact-ids: ${{ needs.validate.outputs.a }}
+          path: accepted/a
+          merge-multiple: true
+      - name: Download bound B identities
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ needs.validate.outputs.qualification_run }}
+          artifact-ids: ${{ needs.validate.outputs.b }}
+          path: accepted/b
+          merge-multiple: true
+      - name: Download bound actual A archive (never rebuild)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ needs.validate.outputs.qualification_run }}
+          artifact-ids: ${{ needs.validate.outputs.archive }}
+          path: accepted/archive
+          merge-multiple: true
+      - name: Recheck and perform one digest-preserving first copy, then observe private link and digest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACCEPTED_A_ARTIFACT_ID: ${{ needs.validate.outputs.a }}
+          ACCEPTED_B_ARTIFACT_ID: ${{ needs.validate.outputs.b }}
+          ACCEPTED_ARCHIVE_ARTIFACT_ID: ${{ needs.validate.outputs.archive }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: nix shell --inputs-from . --option builders "" nixpkgs#skopeo --command python3 scripts/synthetic-publication.py publish
+      - name: Retain closed public identities in private source repository only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: intake-synthetic-published-${{ github.sha }}
+          path: published-receipt.json
+          if-no-files-found: error
+          retention-days: 1
