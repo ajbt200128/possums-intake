@@ -3,16 +3,19 @@ package ledger
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"possums-intake/internal/failuretype"
 )
 
 // FailureReport is transient numeric evidence for one run invocation. The outer
-// owner must discard it after Take and must not recount the returned diagnostic.
+// owner must discard it after consumption; TakeWithPrimary distinguishes a
+// reported run primary from a separate decision returned after a successful run.
 // It contains no causes, identifiers, timestamps or exporter callbacks.
 // Do not copy a report, reuse its context for another run, or consume it early.
 // Validation before run is outside this seam and remains the outer owner's job.
 type FailureReport struct {
+	used      atomic.Bool
 	mu        sync.Mutex
 	batch     transactionFailures
 	published bool
@@ -28,25 +31,38 @@ func WithFailureReport(ctx context.Context) (context.Context, *FailureReport) {
 	return context.WithValue(ctx, failureReportKey{}, report), report
 }
 
+// WasUsed distinguishes pre-run validation from an unavailable run report.
+// This data-only flag is set before writer admission, independently of the
+// publication mutex. It does not establish completion or valid evidence.
+func (r *FailureReport) WasUsed() bool { return r != nil && r.used.Load() }
+
 // Take consumes the fixed report once. false means unavailable, never healthy
 // zeros: invalid/overflowed evidence, premature consumption, or reuse. Only the
 // first count entries of the array are populated. An invalid report yields no
 // partial observations.
 func (r *FailureReport) Take() ([3]failuretype.Type, int, bool) {
+	kinds, count, valid, _ := r.TakeWithPrimary()
+	return kinds, count, valid
+}
+
+// TakeWithPrimary consumes the same one-shot report as Take. The third result
+// establishes validity; the fourth says the returned run error is represented
+// in the batch. A successful run can report only distinct completion faults.
+func (r *FailureReport) TakeWithPrimary() ([3]failuretype.Type, int, bool, bool) {
 	if r == nil {
-		return [3]failuretype.Type{}, 0, false
+		return [3]failuretype.Type{}, 0, false, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.consumed || !r.published || r.batch.invalid {
 		r.consumed = true
 		r.batch = transactionFailures{invalid: true}
-		return [3]failuretype.Type{}, 0, false
+		return [3]failuretype.Type{}, 0, false, false
 	}
 	r.consumed = true
 	batch := r.batch
 	r.batch = transactionFailures{}
-	return batch.kinds, batch.count, true
+	return batch.kinds, batch.count, true, batch.primary
 }
 
 func (r *FailureReport) publish(batch transactionFailures) {
@@ -81,6 +97,7 @@ type transactionFailures struct {
 	kinds   [3]failuretype.Type
 	count   int
 	invalid bool
+	primary bool
 }
 
 func (b *transactionFailures) add(kind failuretype.Type) {

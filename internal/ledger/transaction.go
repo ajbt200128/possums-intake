@@ -56,9 +56,15 @@ func (tx *transaction) exec(sql string, params dbx.Params) error {
 func (s *Service) run(ctx context.Context, fn func(*transaction) error, withClock bool) (result error) {
 	var failures transactionFailures
 	report := reportFromContext(ctx)
+	if report != nil {
+		report.used.Store(true)
+	}
 	// Registered first: panic classification, work cancellation and gate release
 	// all finish before numeric evidence is made available to the outer owner.
-	defer func() { report.publish(failures) }()
+	defer func() {
+		failures.primary = result != nil // after completion/recovery, never inferred from count
+		report.publish(failures)
+	}()
 	fail := func(code Code, kind failuretype.Type) *Diagnostic {
 		d := diagnostic(code)
 		d.kind = kind
