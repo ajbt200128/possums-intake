@@ -3,9 +3,9 @@
 package operator
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -16,7 +16,8 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/router"
+	"possums-intake/internal/failureowner"
+	"possums-intake/internal/failuretype"
 	"possums-intake/internal/ledger"
 )
 
@@ -49,6 +50,21 @@ func readFields(value string) bool {
 // NewHandler builds a restricted router around the existing bootstrapped app.
 // It invokes neither OnServe nor apis.Serve (installer/cron/second listener).
 func NewHandler(accounting http.Handler, app core.App, service *ledger.Service) (http.Handler, error) {
+	return NewHandlerObserved(accounting, app, service, nil)
+}
+
+func NewHandlerObserved(accounting http.Handler, app core.App, service *ledger.Service, observer failureowner.Observer) (handler http.Handler, result error) {
+	fallback := failuretype.RuntimeSetupUnknown
+	defer func() {
+		if recover() != nil {
+			handler = nil
+			result = ledger.CanonicalFailure(&ledger.Diagnostic{}, fallback)
+		}
+		if result != nil {
+			result = ledger.CanonicalFailure(result, fallback)
+			failureowner.Observe(observer, ledger.FailureKind(result, fallback))
+		}
+	}()
 	bindAccountRequests(app, service)
 	r, err := apis.NewRouter(app)
 	if err != nil {
@@ -64,15 +80,18 @@ func NewHandler(accounting http.Handler, app core.App, service *ledger.Service) 
 	r.Bind(&hook.Handler[*core.RequestEvent]{Id: "intakeNativeReadAuthority", Priority: apis.DefaultLoadAuthTokenMiddlewarePriority + 1, Func: func(e *core.RequestEvent) error {
 		if strings.HasPrefix(e.Request.URL.Path, "/api/") && e.Request.URL.Path != authPrefix+"auth-methods" && e.Request.URL.Path != authPrefix+"auth-with-password" {
 			if e.Auth == nil || !e.Auth.IsSuperuser() {
-				return router.NewUnauthorizedError("", nil)
+				own(e.Request, failuretype.AuthenticationRefused)
+				return authorityRefusal{}
 			}
 		}
 		return e.Next()
 	}})
+	fallback = failuretype.NativeAssetUnknown
 	assets, err := fs.Sub(nativeAssets, "ui/dist")
 	if err != nil {
 		return nil, err
 	}
+	fallback = failuretype.RuntimeSetupUnknown
 	// Upstream's extension route is installed only by OnServe. Supply an empty
 	// module to satisfy its UI startup without enabling the extension framework.
 	r.GET("/_/extensions.js", func(e *core.RequestEvent) error {
@@ -91,18 +110,49 @@ func NewHandler(accounting http.Handler, app core.App, service *ledger.Service) 
 			accounting.ServeHTTP(w, req)
 			return
 		}
+		o := &nativeOwner{observer: observer, inputKind: failuretype.RequestInvalid, stage: nativeKind(path)}
+		req = req.WithContext(context.WithValue(req.Context(), nativeOwnerKey{}, o))
+		tracked := &nativeWriter{ResponseWriter: w, owner: o}
+		w = tracked
+		defer func() {
+			// Diagnostic delivery may itself panic during recovery. Publish the
+			// primary and that independent delivery fault even on this exit.
+			defer o.publish()
+			abort := false
+			if value := recover(); value != nil {
+				err, _ := value.(error)
+				abort = expected(err) || tracked.written
+				if !expected(err) {
+					o.ObserveFailure(o.stage)
+					if !tracked.written {
+						failure(w, 500, nativeStage(path), "completed_native_handler_cause_unknown")
+					}
+				}
+			}
+			if !abort {
+				tracked.finish()
+			}
+			if abort {
+				panic(http.ErrAbortHandler)
+			}
+		}()
 		headers(w, path)
 		if req.URL.EscapedPath() != path || req.URL.ForceQuery || len(req.Header.Values("Authorization")) > 1 {
+			o.ObserveFailure(failuretype.RequestInvalid)
 			failure(w, 400, "native_gate", "canonical_path_and_single_authorization")
 			return
 		}
 		if !allowed(req, assets) {
+			o.ObserveFailure(failuretype.PolicyRefused)
 			failure(w, 403, "native_gate", "explicit_method_path_and_query_allowlist")
 			return
 		}
 		if _, account := accountRoute(path); account && (req.Method == http.MethodPost || req.Method == http.MethodPatch) {
+			o.stage = failuretype.RequestReadUnknown
 			input, ok := strictAccountBody(req)
+			o.stage = failuretype.NativeReadUnknown
 			if !ok {
+				o.ObserveFailure(o.inputKind)
 				failure(w, 400, "native_account_input", "strict_bounded_typed_account_json")
 				return
 			}
@@ -280,8 +330,17 @@ func nativeStage(path string) string {
 // serialization failure. A written/partial response cannot be replaced with a
 // fabricated failure or success; abort delivery without dumping panic payloads.
 func closedNativeErrors(e *core.RequestEvent) (result error) {
+	fallback := nativeKind(e.Request.URL.Path)
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			err, _ := recovered.(error)
+			if expected(err) {
+				panic(http.ErrAbortHandler)
+			}
+			if o := requestOwner(e.Request); o != nil {
+				fallback = o.stage
+			}
+			own(e.Request, fallback)
 			if e.Written() {
 				panic(http.ErrAbortHandler)
 			}
@@ -293,13 +352,20 @@ func closedNativeErrors(e *core.RequestEvent) (result error) {
 	if err == nil {
 		return nil
 	}
-	if e.Written() {
+	if expected(err) {
 		panic(http.ErrAbortHandler)
 	}
-	status := 500
-	var apiErr *router.ApiError
-	if errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status <= 599 {
-		status = apiErr.Status
+	if o := requestOwner(e.Request); o != nil {
+		fallback = o.stage
+	}
+	status, kind := nativeError(err, fallback)
+	o := requestOwner(e.Request)
+	// Our explicit authority refusal was already classified at its source.
+	if _, alreadyOwned := err.(authorityRefusal); !alreadyOwned && (o == nil || !o.deliveryObserved) {
+		own(e.Request, kind)
+	}
+	if e.Written() {
+		panic(http.ErrAbortHandler)
 	}
 	failure(e.Response, status, nativeStage(e.Request.URL.Path), "native_operation_cause_unknown")
 	return nil

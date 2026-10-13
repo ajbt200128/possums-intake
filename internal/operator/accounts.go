@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pocketbase/pocketbase/core"
+	"possums-intake/internal/failuretype"
 	"possums-intake/internal/ledger"
 )
 
@@ -46,7 +47,14 @@ func strictAccountBody(req *http.Request) (nativeInput, bool) {
 		return input, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(req.Body, 4097))
-	if err != nil || len(raw) > 4096 || !utf8.Valid(raw) || !json.Valid(raw) || !validUnicodeEscapes(raw) {
+	if err != nil {
+		kind := ledger.FailureKind(err, failuretype.RequestReadUnknown)
+		if o := requestOwner(req); o != nil {
+			o.inputKind = kind
+		}
+		return input, false
+	}
+	if len(raw) > 4096 || !utf8.Valid(raw) || !json.Valid(raw) || !validUnicodeEscapes(raw) {
 		return input, false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -161,17 +169,27 @@ func bindAccountRequests(app core.App, service *ledger.Service) {
 	submit := func(e *core.RecordRequestEvent) error {
 		input, ok := e.Request.Context().Value(nativeInputKey{}).(nativeInput)
 		if !ok || e.Auth == nil || !e.Auth.IsSuperuser() {
-			return e.ForbiddenError("", nil)
+			own(e.Request, failuretype.PolicyRefused)
+			return e.JSON(403, map[string]string{"code": "OPERATOR_NATIVE_INPUT_REFUSED", "stage": "native_account_write", "constraint": "validated_input_and_native_authority", "outcome": "no_effect", "next_step": "Use the restricted native editor with an authenticated operator session."})
+		}
+		if o := requestOwner(e.Request); o != nil {
+			o.stage = failuretype.NativeWriteUnknown
 		}
 		var raw []byte
 		var err error
+		ctx, report := ledger.WithFailureReport(e.Request.Context())
 		if e.Request.Method == http.MethodPost {
-			raw, err = service.NativeAccountCreate(e.Request.Context(), input.Create)
+			raw, err = service.NativeAccountCreate(ctx, input.Create)
 		} else {
-			raw, err = service.NativeAccountUpdate(e.Request.Context(), e.Request.PathValue("id"), input.Patch)
+			raw, err = service.NativeAccountUpdate(ctx, e.Request.PathValue("id"), input.Patch)
+		}
+		if o := requestOwner(e.Request); o != nil {
+			o.runReturned(e.Request, report, err)
+		} else {
+			ledger.ObserveRunFailures(nil, report, err, failuretype.NativeWriteUnknown)
 		}
 		if err != nil {
-			d := ledger.Failure(err)
+			d := ledger.CanonicalFailure(err, failuretype.NativeWriteUnknown)
 			status := 503
 			switch d.Code {
 			case ledger.CodeInput:
