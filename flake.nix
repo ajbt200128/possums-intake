@@ -22,7 +22,7 @@
           doCheck = true;
           checkPhase = ''
             runHook preCheck
-            go test -mod=vendor ./cmd/... ./internal/...
+            go test -p 1 -mod=vendor ./cmd/... ./internal/...
             runHook postCheck
           '';
         });
@@ -31,7 +31,9 @@
         } ''
           cp -R ${./scripts} scripts
           chmod -R u+w scripts
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_delivery.py
+          mkdir -p .github/workflows
+          cp ${./.github/workflows/qualify-synthetic-image.yml} .github/workflows/qualify-synthetic-image.yml
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
           touch $out
         '';
       });

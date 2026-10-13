@@ -19,7 +19,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
         with:
           diagnostic-endpoint: ""
-      - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_delivery.py
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: nix flake check
       - name: Build actual image and separate exec-only probe
         run: nix build .#ledger-image .#image-smoke-probe --out-link result-image

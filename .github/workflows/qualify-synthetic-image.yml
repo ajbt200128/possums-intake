@@ -1,0 +1,129 @@
+# Explicit disposable qualification only. No registry/release/instance mutation.
+name: Qualify disposable intake image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: intake-synthetic-image-qualification
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source: ${{ steps.admit.outputs.source }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: admit
+        name: Admit successful exact-current-main checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE: ${{ github.sha }}
+          SELECTED_REF: ${{ github.ref }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          def read(endpoint):
+              result = subprocess.run(['gh', 'api', endpoint], capture_output=True, text=True)
+              if result.returncode:
+                  raise ValueError()
+              return json.loads(result.stdout)
+          try:
+              source = os.environ['SOURCE']
+              repo = os.environ['GH_REPO']
+              if os.environ['SELECTED_REF'] != 'refs/heads/main' or not re.fullmatch(r'[0-9a-f]{40}', source):
+                  raise ValueError()
+              if read(f'repos/{repo}/git/ref/heads/main')['object']['sha'] != source:
+                  raise ValueError()
+              runs = read(f'repos/{repo}/actions/workflows/check.yml/runs?branch=main&head_sha={source}&status=completed&per_page=100')['workflow_runs']
+              if not any(run['head_sha'] == source and run['head_branch'] == 'main' and run['event'] in ('push', 'workflow_dispatch') and run['conclusion'] == 'success' and run['repository']['full_name'] == repo for run in runs):
+                  raise ValueError()
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                  output.write(f'source={source}\n')
+          except Exception:
+              raise SystemExit('SYNTHETIC_SOURCE_ADMISSION_UNAVAILABLE: exact-current-main successful checks were not established; no publication or deployment was attempted.')
+          PY
+  build:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [a, b]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ needs.source.outputs.source }}
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3
+        with:
+          diagnostic-endpoint: ""
+      - name: Check offline packaging fixtures
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Prewarm only external pinned dependencies
+        run: nix build .#release-build-deps --option builders "" --no-link
+      - name: Refuse valid application and image-stage outputs
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/image-smoke-build.py
+      - name: Independently build native Linux image
+        run: nix build .#ledger-image --option substitute false --option builders "" --out-link result-image
+      - name: Record immutable archive and manifest identities
+        run: |
+          cp -L result-image image.tar.gz
+          nix shell --inputs-from . --option builders "" nixpkgs#skopeo --command skopeo inspect --raw docker-archive:image.tar.gz > image-manifest.json
+          python3 - <<'PY'
+          import hashlib, pathlib
+          path = pathlib.Path
+          path('digest').write_text('sha256:' + hashlib.sha256(path('image-manifest.json').read_bytes()).hexdigest() + '\n')
+          path('archive-sha256').write_text(hashlib.sha256(path('image.tar.gz').read_bytes()).hexdigest() + '\n')
+          PY
+      - name: Qualify this exact A image, including disposable startup
+        if: matrix.builder == 'a'
+        run: |
+          probe=$(nix build .#image-smoke-probe --option builders "" --no-link --print-out-paths)
+          nix shell --inputs-from . --option builders "" nixpkgs#skopeo --command python3 scripts/image-smoke.py image.tar.gz "$probe/bin/nix" > qualification.json
+          nix shell --inputs-from . --option builders "" nixpkgs#skopeo --command python3 scripts/synthetic-image-smoke.py image.tar.gz "$probe/bin/nix" > synthetic-qualification.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: intake-synthetic-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.source.outputs.source }}-${{ matrix.builder }}
+          path: |
+            digest
+            archive-sha256
+            qualification.json
+            synthetic-qualification.json
+          retention-days: 1
+      - if: matrix.builder == 'a'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: intake-synthetic-archive-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.source.outputs.source }}
+          path: image.tar.gz
+          compression-level: 0
+          retention-days: 1
+  compare:
+    needs: [source, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: intake-synthetic-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.source.outputs.source }}-a
+          path: a
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: intake-synthetic-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.source.outputs.source }}-b
+          path: b
+      - name: Require independent matching manifests
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+          a = pathlib.Path('a/digest').read_text().strip()
+          b = pathlib.Path('b/digest').read_text().strip()
+          if not re.fullmatch(r'sha256:[0-9a-f]{64}', a) or a != b:
+              raise SystemExit('SYNTHETIC_REPRODUCTION_UNAVAILABLE: independent manifest agreement was not established; no publication or deployment was attempted.')
+          print('Independent native Linux manifest agreement established; publication and deployment remain separate gates.')
+          PY
