@@ -1,0 +1,126 @@
+# EXISTING fixed PUBLIC package only; never first/private publication or deployment.
+# Owner keeps ALL other registry writers stopped through copy/postcheck. Fully
+# paginated version reads observe tag absence, not atomic immutable-tag creation.
+# Copy uncertainty is never replayed; package visibility/grants are never changed.
+name: Publish one public disposable diagnostic intake image
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Explicitly authorize one public diagnostic copy (never retry/overwrite)
+        type: boolean
+        default: false
+        required: true
+      qualification_run:
+        description: Successful exact-current-main qualification run (positive decimal)
+        type: string
+        required: true
+      qualification_attempt:
+        description: Exact successful current qualification attempt (positive decimal)
+        type: string
+        required: true
+      expected_source:
+        description: Exact current-main 40-character source SHA authorized for the new tag
+        type: string
+        required: true
+      known_baseline:
+        description: Fixed approved existing public baseline digest (must still exist)
+        type: string
+        default: sha256:e37d729571bd8ab82eb715a0e5ff97ab3e5a0d8c76b98c1baa1dfa27fb2d55ca
+        required: true
+      writers_quiet_confirmed:
+        description: Owner confirmed ALL other registry writers stopped through copy and postcheck
+        type: boolean
+        default: false
+        required: true
+      quiet_confirmation_source:
+        description: Exact source SHA covered by this fresh owner quiet-window confirmation
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: intake-synthetic-first-publication
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    outputs:
+      source: ${{ steps.admit.outputs.source }}
+      qualification_run: ${{ steps.admit.outputs.qualification_run }}
+      a: ${{ steps.admit.outputs.a }}
+      b: ${{ steps.admit.outputs.b }}
+      archive: ${{ steps.admit.outputs.archive }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: admit
+        name: Admit owner quiet approval and authenticated source and public package evidence
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 scripts/synthetic-diagnostic-publication.py admit
+  publish:
+    needs: validate
+    if: ${{ inputs.publish == true && inputs.writers_quiet_confirmed == true && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'ajbt200128' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ needs.validate.outputs.source }}
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3
+        with:
+          diagnostic-endpoint: ""
+      - name: Download bound A identities and actual runtime and startup diagnostic qualification
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ needs.validate.outputs.qualification_run }}
+          artifact-ids: ${{ needs.validate.outputs.a }}
+          path: accepted/a
+          merge-multiple: true
+      - name: Download bound B identities
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ needs.validate.outputs.qualification_run }}
+          artifact-ids: ${{ needs.validate.outputs.b }}
+          path: accepted/b
+          merge-multiple: true
+      - name: Download bound actual A archive (never rebuild)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ needs.validate.outputs.qualification_run }}
+          artifact-ids: ${{ needs.validate.outputs.archive }}
+          path: accepted/archive
+          merge-multiple: true
+      - name: Recheck and perform one preserved-digest public copy then verify public link and raw digest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACCEPTED_A_ARTIFACT_ID: ${{ needs.validate.outputs.a }}
+          ACCEPTED_B_ARTIFACT_ID: ${{ needs.validate.outputs.b }}
+          ACCEPTED_ARCHIVE_ARTIFACT_ID: ${{ needs.validate.outputs.archive }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: nix shell --inputs-from . --option builders "" nixpkgs#skopeo --command python3 scripts/synthetic-diagnostic-publication.py publish
+      - name: Retain only closed public identities in private source repository
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: intake-synthetic-diagnostic-published-${{ github.sha }}
+          path: published-receipt.json
+          if-no-files-found: error
+          retention-days: 1

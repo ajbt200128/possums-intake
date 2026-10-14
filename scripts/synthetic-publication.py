@@ -197,7 +197,7 @@ def step_gate(job, names):
                   and matches[0].get("conclusion") == "success", "build")
 
 
-def admit(api, ctx):
+def admit(api, ctx, workflow=WORKFLOW):
     """Authenticated reads only. Artifact IDs are selected here, never user input."""
     source = ctx["source"]
     repo = api.repo()
@@ -207,7 +207,7 @@ def admit(api, ctx):
     current = api.repo(f"/actions/runs/{ctx['run']}")
     r.require(current.get("id") == ctx["run"] and type(current.get("run_attempt")) is int
               and current["run_attempt"] == 1
-              and current.get("path") == ".github/workflows/" + WORKFLOW
+              and current.get("path") == ".github/workflows/" + workflow
               and current.get("head_sha") == source and current.get("head_branch") == "main"
               and current.get("event") == "workflow_dispatch" and current.get("status") == "in_progress"
               and current.get("repository", {}).get("full_name") == REPO
