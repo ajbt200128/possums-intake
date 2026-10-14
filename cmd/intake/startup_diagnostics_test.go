@@ -254,7 +254,7 @@ func TestRecordedStartupFaultPhasesCleanupAndOwnership(t *testing.T) {
 						var db *sql.DB
 						db, err = sql.Open("sqlite", filepath.Join(scratch, "data.db"))
 						if err == nil {
-							_, err = db.Exec("DELETE FROM _superusers")
+							_, err = db.Exec("DELETE FROM _collections WHERE name='_superusers'")
 							db.Close()
 						}
 					}

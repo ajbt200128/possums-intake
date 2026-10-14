@@ -11,6 +11,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/hook"
 	"possums-intake/internal/failuretype"
 )
 
@@ -38,8 +39,10 @@ func nativeFailure(code Code, constraint string) *Diagnostic {
 	return d
 }
 
+const accountValidationHook = "intakeAccountValidation"
+
 func bindAccountValidation(app core.App) {
-	app.OnRecordValidate(AccountCollectionName).BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordValidate(AccountCollectionName).Bind(&hook.Handler[*core.RecordEvent]{Id: accountValidationHook, Func: func(e *core.RecordEvent) error {
 		r := e.Record
 		if !validAccount(r.GetString("account_id")) || !nativeIDPattern.MatchString(r.Id) {
 			return nativeFailure(CodeInput, "valid_external_and_internal_identity")
@@ -51,7 +54,7 @@ func bindAccountValidation(app core.App) {
 			return nativeFailure(CodeInput, "immutable_account_identity")
 		}
 		return e.Next()
-	})
+	}})
 }
 
 func (tx *transaction) createAccount(in NativeAccountCreate) (*core.Record, error) {

@@ -52,7 +52,8 @@ class Fake:
         self.data: dict[str, Any] = {'source': self.source, 'build_run': "10", 'build_attempt': "1",
                          'builds': {"a": dict(build, runner="a"), "b": dict(build, runner="b")},
                          'qualification': {'image': c["image"], 'archive_sha256': "4" * 64,
-                                            'cases': dict.fromkeys(r.QUALIFICATIONS, True), 'previous_release_compatibility': "unknown"},
+                                            'cases': dict.fromkeys(r.QUALIFICATIONS, True), 'previous_release_compatibility': "unknown",
+                                            'native_operator': {**dict.fromkeys(r.NATIVE_CASES, True), 'browser_inside_image': "not_run"}},
                          'git': {'tag_commit': c["release"], 'parent': c["source"],
                                   'source_tree_without_config': ["100644 same-file"], 'release_tree_without_config': ["100644 same-file"],
                                   'config_modes': ["100644", "100644"], 'source_config': base64.b64encode(config).decode(),
@@ -227,6 +228,33 @@ class DeliveryTests(unittest.TestCase):
             self.stop("qualification", lambda data=data: r.build_gate(data, "1" * 40, self.f.candidate["image"]))
         self.f.data["qualification"]["archive_sha256"] = "9" * 64
         self.stop("qualification", lambda: r.candidate_gate(self.f, self.f.candidate))
+
+    def test_native_schema_exact_set_and_typed_proofs_at_build_gate(self):
+        expected = {"actual_entrypoint", "native_login_create_patch", "shared_key_separation",
+                    "held_balance_stock_edit", "sdk_logging_forced_off", "empty_logs_auth_origins_stdio",
+                    "frozen_asset_http_hashes"}
+        self.assertEqual(r.NATIVE_CASES, expected)
+        native = {**dict.fromkeys(expected, True), "browser_inside_image": "not_run"}
+        r.build_gate(self.f.data, self.f.candidate["source"], self.f.candidate["image"])
+        invalid = [None, [], {}, {**native, "unknown": True}, {**native, "browser_inside_image": True}]
+        for key in expected:
+            invalid.append({name: value for name, value in native.items() if name != key})
+            for value in (False, 1, "true", None):
+                invalid.append({**native, key: value})
+        old = native.copy()
+        old["held_balance_refused"] = old.pop("held_balance_stock_edit")
+        old["logs_settings_blocked"] = old.pop("sdk_logging_forced_off")
+        invalid += [old, {**native, "held_balance_refused": True},
+                    {**native, "logs_settings_blocked": False}]
+        for value in invalid:
+            with self.subTest(native=value):
+                data = copy.deepcopy(self.f.data)
+                data["qualification"]["native_operator"] = value
+                self.stop("qualification", lambda data=data: r.build_gate(data, self.f.candidate["source"], self.f.candidate["image"]))
+        data = copy.deepcopy(self.f.data)
+        del data["qualification"]["native_operator"]
+        self.stop("qualification", lambda: r.build_gate(data, self.f.candidate["source"], self.f.candidate["image"]))
+        self.assertEqual(self.f.publications + self.f.updates, 0)
 
     def test_previous_release_unknown_not_fake_success(self):
         self.f.data["qualification"]["previous_release_compatibility"] = "passed"
@@ -645,6 +673,26 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(args[args.index("--network") + 1], "none")
         self.assertEqual(args[args.index("--log-driver") + 1], "none")
         self.assertNotIn("0.0.0.0", " ".join(args))  # noqa: S104 - this assertion forbids wildcard binding.
+
+    def test_image_evidence_emits_only_current_native_schema_after_probe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive, probe = Path(directory) / "archive", Path(directory) / "probe"
+            archive.write_bytes(b"synthetic archive fixture")
+            probe.write_bytes(b"synthetic exec-only probe")
+            with patch.object(smoke.shutil, "which", return_value="synthetic-tool"), \
+                    patch.object(smoke, "archive_identity", return_value=("sha256:" + "1" * 64, "arm64")), \
+                    patch.object(smoke, "loaded_image_identity", return_value="sha256:" + "2" * 64), \
+                    patch.object(smoke, "success", side_effect=[b"linux/arm64", b"synthetic manifest", b""]), \
+                    patch.object(smoke, "Fixture") as factory:
+                evidence = smoke.qualify(str(archive), str(probe))
+                factory.return_value.native_operator.assert_called_once_with()
+                factory.return_value.cleanup.assert_called_once_with()
+        native = evidence["native_operator"]
+        self.assertEqual(set(native), r.NATIVE_CASES | {"browser_inside_image"})
+        self.assertEqual(native["browser_inside_image"], "not_run")
+        self.assertTrue(all(r.boolean(native[key], True) for key in r.NATIVE_CASES))
+        self.assertEqual(set(evidence["cases"]), r.QUALIFICATIONS)
+        self.assertEqual(evidence["previous_release_compatibility"], "unknown")
 
     def test_native_operator_requires_frozen_manifest(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")

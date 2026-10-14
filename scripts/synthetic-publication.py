@@ -42,8 +42,7 @@ WORKFLOW = "publish-synthetic-image.yml"
 MAX_READ = 8 << 20
 SYNTHETIC_CASES = {"wildcard_listener_reachable", "native_operator", "empty_auth_origins_and_logs",
                    "fresh_state_after_restart", "attached_stdio_empty", "telemetry_disabled"}
-NATIVE_CASES = {"actual_entrypoint", "native_login_create_patch", "shared_key_separation", "held_balance_refused",
-                "logs_settings_blocked", "empty_logs_auth_origins_stdio", "frozen_asset_http_hashes"}
+NATIVE_CASES = r.NATIVE_CASES
 r.CODES.update({
     "synthetic_approval": ("owner_approval", "private_owner_main_first_attempt_source_bound_confirmation", "Owner must freshly confirm unused namespace from authenticated full inventory for this exact source and keep all other writers stopped; no CI absence proof is claimed."),
     "synthetic_evidence": ("github_evidence", "bounded_authenticated_exact_run_attempt_artifacts", "Required authenticated evidence is unavailable; underlying cause unknown. Check the selected run/attempt privately; do not replay publication."),
@@ -323,10 +322,6 @@ def archive_gate(root, admitted, tool=command):
                   and evidence.get("previous_release_compatibility") == "unknown", "synthetic_archive")
     r.require(set(synthetic.get("synthetic", {})) == SYNTHETIC_CASES
               and all(r.boolean(value, True) for value in synthetic["synthetic"].values()), "synthetic_archive")
-    native = q.get("native_operator", {})
-    r.require(set(native) == NATIVE_CASES | {"browser_inside_image"}
-              and all(r.boolean(native[key], True) for key in NATIVE_CASES)
-              and native["browser_inside_image"] == "not_run", "synthetic_archive")
     return {"publicSourceSHA": admitted["source"], "imageDigest": digests[0], "archiveSHA": archive_sha}
 
 

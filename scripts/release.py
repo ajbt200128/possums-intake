@@ -121,6 +121,10 @@ QUALIFICATIONS = {"missing_state_refused", "explicit_empty_init", "read_only_non
                   "migration_failure_refused", "schema_drift_refused", "telemetry_disabled", "no_raw_logs"}
 
 
+NATIVE_CASES = {"actual_entrypoint", "native_login_create_patch", "shared_key_separation", "held_balance_stock_edit",
+                "sdk_logging_forced_off", "empty_logs_auth_origins_stdio", "frozen_asset_http_hashes"}
+
+
 def build_gate(evidence, source, image):
     builds = evidence["builds"]
     require(set(builds) == {"a", "b"}, "build")
@@ -135,6 +139,10 @@ def build_gate(evidence, source, image):
             and pin(q["archive_sha256"], r"[0-9a-f]{64}")
             and set(q["cases"]) == QUALIFICATIONS
             and all(boolean(value, True) for value in q["cases"].values()), "qualification")
+    native = q.get("native_operator")
+    require(type(native) is dict and set(native) == NATIVE_CASES | {"browser_inside_image"}
+            and all(boolean(native[key], True) for key in NATIVE_CASES)
+            and native["browser_inside_image"] == "not_run", "qualification")
     # No prior released ledger exists. This must remain unknown, not a false pass.
     require(q.get("previous_release_compatibility") == "unknown", "qualification")
 

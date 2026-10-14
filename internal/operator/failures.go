@@ -1,10 +1,10 @@
 package operator
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/pocketbase/pocketbase/tools/router"
@@ -15,22 +15,14 @@ import (
 
 type nativeOwnerKey struct{}
 
-// This local control-flow marker identifies the already-owned gate refusal,
-// not every unrelated error with the same numeric category.
-type authorityRefusal struct{}
-
-func (authorityRefusal) Error() string { return "OPERATOR_AUTHORITY_REFUSED" }
-
-// One restricted native request; numeric evidence only, discarded on return.
+// One native request; numeric evidence only, discarded on return.
 // No generic CRUD/activity or financial-success hooks are installed.
 type nativeOwner struct {
 	observer         failureowner.Observer
 	kinds            [8]failuretype.Type
 	count            int
 	invalid          bool
-	inputKind        failuretype.Type
 	stage            failuretype.Type
-	interruption     failuretype.Type
 	deliveryObserved bool
 }
 
@@ -61,12 +53,20 @@ func own(r *http.Request, kind failuretype.Type) {
 		o.ObserveFailure(kind)
 	}
 }
-func nativeKind(path string) failuretype.Type {
-	if path == authPrefix+"auth-with-password" || path == authPrefix+"auth-refresh" || path == authPrefix+"auth-methods" {
-		return failuretype.NativeAuthUnknown
-	}
-	if len(path) >= 3 && path[:3] == "/_/" {
+func nativeRequestKind(r *http.Request) failuretype.Type {
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/_/") {
 		return failuretype.NativeAssetUnknown
+	}
+	if strings.HasPrefix(path, "/api/collections/") {
+		part := path[strings.LastIndex(path, "/")+1:]
+		if strings.HasPrefix(part, "auth-") || strings.HasPrefix(part, "request-") || strings.HasPrefix(part, "confirm-") {
+			return failuretype.NativeAuthUnknown
+		}
+	}
+	switch r.Method {
+	case http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete:
+		return failuretype.NativeWriteUnknown
 	}
 	return failuretype.NativeReadUnknown
 }
@@ -78,12 +78,9 @@ func expected(err error) bool {
 	return safeIs(err, http.ErrAbortHandler) || safeIs(err, http.ErrServerClosed)
 }
 
-// ApiError.RawData is the pinned SDK's supported cause surface. Status is only
-// presentation evidence, never proof of credentials, missing data or storage.
+// ApiError.RawData is the pinned SDK's supported cause surface. Cause-free
+// 401/403 report only the SDK authority refusal, not its root cause or effects.
 func nativeError(err error, fallback failuretype.Type) (status int, kind failuretype.Type) {
-	if _, owned := err.(authorityRefusal); owned {
-		return 401, failuretype.AuthenticationRefused
-	}
 	status, kind = 500, ledger.FailureKind(err, fallback)
 	defer func() {
 		if recover() != nil {
@@ -94,6 +91,16 @@ func nativeError(err error, fallback failuretype.Type) (status int, kind failure
 	if errors.As(err, &api) && api != nil {
 		if api.Status >= 400 && api.Status <= 599 {
 			status = api.Status
+		}
+		if api.RawData() == nil {
+			switch status {
+			case http.StatusUnauthorized:
+				kind = failuretype.AuthenticationRefused
+			case http.StatusForbidden:
+				kind = failuretype.PolicyRefused
+			case http.StatusRequestEntityTooLarge:
+				kind = failuretype.RequestInvalid
+			}
 		}
 		if cause, ok := api.RawData().(error); ok {
 			kind = ledger.FailureKind(cause, fallback)
@@ -109,16 +116,6 @@ func nativeError(err error, fallback failuretype.Type) (status int, kind failure
 	return
 }
 
-func (o *nativeOwner) runReturned(r *http.Request, report *ledger.FailureReport, err error) {
-	// Capture request-domain evidence at the primary source, before dropping
-	// the cause. Equal categories from unrelated hook/I/O faults are not identity.
-	kind := ledger.FailureKind(err, failuretype.NativeWriteUnknown)
-	matching := kind == failuretype.Cancelled && r.Context().Err() == context.Canceled || kind == failuretype.DeadlineExceeded && r.Context().Err() == context.DeadlineExceeded
-	primary := ledger.ObserveRunFailures(o, report, err, failuretype.NativeWriteUnknown)
-	if primary && matching {
-		o.interruption = kind
-	}
-}
 func (o *nativeOwner) delivery(err error) {
 	if expected(err) {
 		return
@@ -127,7 +124,7 @@ func (o *nativeOwner) delivery(err error) {
 	if kind != failuretype.Cancelled && kind != failuretype.DeadlineExceeded {
 		kind = failuretype.ResponseDeliveryUnknown
 	}
-	if !o.deliveryObserved && (kind != o.interruption || !o.interruption.Valid()) {
+	if !o.deliveryObserved {
 		o.ObserveFailure(kind)
 	}
 	o.deliveryObserved = true
@@ -149,14 +146,18 @@ func (w *nativeWriter) Header() http.Header {
 }
 func (w *nativeWriter) WriteHeader(status int) {
 	defer w.recoverDelivery()
-	// ServeContent may emit an asset error status/body and return nil through
-	// PocketBase. Own only that observed failure; status proves no root cause.
-	if status >= 400 && w.owner.stage == failuretype.NativeAssetUnknown && w.owner.count == 0 {
-		w.owner.ObserveFailure(failuretype.NativeAssetUnknown)
+	// ServeContent and mux fallbacks may write an error and return nil.
+	// Preserve stock MFA challenge data; all other unowned error bodies close.
+	if status >= 400 && w.owner.count == 0 && !(status == 401 && w.owner.stage == failuretype.NativeAuthUnknown) {
+		w.owner.ObserveFailure(w.owner.stage)
 		w.Header().Del("Content-Length")
 		w.Header().Del("Content-Encoding")
 		w.Header().Del("Content-Range")
-		failure(w, status, "native_asset", "native_asset_protocol_cause_unknown")
+		stage := "native_request"
+		if w.owner.stage == failuretype.NativeAssetUnknown {
+			stage = "native_asset"
+		}
+		failure(w, status, stage, "native_protocol_cause_unknown")
 		w.discardAssetError = true
 		return
 	}

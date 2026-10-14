@@ -83,7 +83,7 @@ try {
     const context = await browser.newContext();
     const page = await context.newPage();
     diagnosticPage = page;
-    let external = false, leaked = false, pageErrors = 0;
+    let external = false, leaked = false, pageErrors = 0, fontLoaded = false, fontFailed = false;
     await context.route("**/*", route => {
         if (new URL(route.request().url()).origin !== origin) { external = true; return route.abort(); }
         return route.continue();
@@ -91,6 +91,10 @@ try {
     page.on("pageerror", () => { pageErrors++; });
     page.on("response", response => {
         const url = new URL(response.url());
+        if (/\.(?:woff2?|ttf)$/.test(url.pathname)) {
+            fontLoaded ||= response.status() === 200;
+            fontFailed ||= response.status() >= 400;
+        }
         if (url.pathname.startsWith("/api/") && response.status() >= 400 && nativeReadFailures.length < 12) {
             const component = url.pathname === "/api/collections" ? "collection_list" : url.pathname.endsWith("/records") ? "record_list" : url.pathname === "/api/settings" ? "settings" : "other_native";
             nativeReadFailures.push({ component, status: response.status(), query_keys: [...url.searchParams.keys()].filter(key => ["page", "perPage", "skipTotal", "filter", "sort", "fields", "expand"].includes(key)), pagination: ["page", "perPage", "skipTotal"].map(key => { const v = url.searchParams.get(key); return /^(?:[0-9]{1,4}|true|false)$/.test(v || "") ? v : "unavailable"; }) });
@@ -116,8 +120,9 @@ try {
     stage = "native_ui_authenticated_initial_reads";
     await page.waitForFunction(() => window.app?.pb?.authStore?.isValid && window.app?.store?.settings?.meta && window.app?.store?.collections?.length > 0 && !window.app.store.isLoadingCollections);
     await page.waitForLoadState("networkidle");
-    stage = "native_ui_restriction_notice";
-    ensure(await page.evaluate(() => document.body.textContent.includes("Stored balance is NOT available balance")));
+    stage = "native_ui_trusted_admin_notice_and_fonts";
+    ensure(await page.evaluate(() => document.body.textContent.includes("Stock writes bypass ledger safeguards")));
+    ensure(fontLoaded && !fontFailed);
     stage = "native_ui_account_editor_create";
     const accounting = async (path, body, extra = {}) => {
         const response = await fetch(origin + path, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + key, ...extra }, body: JSON.stringify(body) });
@@ -158,34 +163,34 @@ try {
     ensure((await saveEditor()).status() === 200);
     await page.locator('textarea[name="balance"]').waitFor({ state: "detached" });
     ensure((await accounting("/balance", { account_id: fakeAccount })).body.available === "90");
-    stage = "native_ui_active_hold_balance_refusal";
+    stage = "native_ui_trusted_active_hold_balance_edit";
     const reservation = await accounting("/reservations", { account_id: fakeAccount, maximum: "20", timeout_seconds: 600 }, { "Idempotency-Key": "v1." + Date.now() + "." + "1".repeat(32) });
     ensure(reservation.status === 200);
     await openEditor();
     await page.locator('textarea[name="balance"]').fill("80");
-    const refused = await saveEditor();
-    ensure(refused.status() === 409 && (await refused.json()).code === "LEDGER_NATIVE_BALANCE_HELD");
-    ensure((await accounting("/balance", { account_id: fakeAccount })).body.available === "70");
-    stage = "native_ui_enabled_edit_and_stale_balance";
-    await page.locator('textarea[name="balance"]').fill("90");
+    ensure((await saveEditor()).status() === 200);
+    await page.locator('textarea[name="balance"]').waitFor({ state: "detached" });
+    ensure((await accounting("/balance", { account_id: fakeAccount })).body.available === "60");
+    stage = "native_ui_stock_enabled_edit_and_stale_balance";
+    await openEditor();
     await page.locator('input[name="enabled"]').uncheck();
     ensure((await saveEditor()).status() === 200);
     await page.locator('textarea[name="balance"]').waitFor({ state: "detached" });
-    await openEditor(); // loaded total 90; subsequent financial writes must win
+    await openEditor(); // stock absolute editor intentionally permits stale overwrite
     ensure((await accounting("/credits", { account_id: fakeAccount, amount: "5" }, { "Idempotency-Key": "v1." + Date.now() + "." + "2".repeat(32) })).status === 200);
     ensure((await accounting("/reservations/settle", { reservation_id: reservation.body.reservation.reservation_id, charged_amount: "10" })).status === 200);
     await page.locator('input[name="enabled"]').check();
     const enabledResponse = await saveEditor();
     ensure(enabledResponse.status() === 200);
     const enabledRequest = enabledResponse.request().postDataJSON();
-    ensure(!Object.hasOwn(enabledRequest, "balance") && !Object.hasOwn(enabledRequest, "account_id"));
+    ensure(Object.hasOwn(enabledRequest, "balance") && Object.hasOwn(enabledRequest, "account_id"));
     const snapshot = await accounting("/balance", { account_id: fakeAccount });
-    ensure(snapshot.body.account_balance[0].balance === "85" && snapshot.body.available === "85" && snapshot.body.pending_reservations.length === 0);
+    ensure(snapshot.body.account_balance[0].balance === "80" && snapshot.body.available === "80" && snapshot.body.pending_reservations.length === 0);
     stage = "native_ui_token_key_separation";
     const token = await page.evaluate(() => app.pb.authStore.token);
     ensure((await fetch(origin + "/balance", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token }, body: JSON.stringify({ account_id: fakeAccount }) })).status === 401);
     const byID = await page.evaluate(async id => app.pb.collection("ledgeraccounts1").getOne(id), nativeRecord.id);
-    ensure(byID.balance === "85");
+    ensure(byID.balance === "80");
     stage = "native_ui_refresh_storage_csp";
     const native = await page.evaluate(async () => {
         const headers = { Authorization: app.pb.authStore.token };
@@ -195,7 +200,7 @@ try {
     });
     ensure(native.refreshed && native.statuses.every(status => status === 200) && native.storage.every(n => n === 0) && native.csp === 0);
     stage = "native_ui_logs_disabled";
-    ensure(await page.evaluate(() => !document.querySelector('a[href="#/logs"]') && app.store.settings.logs?.maxDays === 0));
+    ensure(await page.evaluate(() => !!document.querySelector('a[href="#/logs"]') && app.store.settings.logs?.maxDays === 0));
     const loggingStatuses = await page.evaluate(async () => {
         const headers = { Authorization: app.pb.authStore.token, "Content-Type": "application/json" };
         return Promise.all([
@@ -204,12 +209,18 @@ try {
             fetch("/api/settings", { method: "PATCH", headers, body: JSON.stringify({ logs: { maxDays: 5 } }) }).then(r => r.status),
         ]);
     });
-    ensure(loggingStatuses.every(status => status === 403));
-    stage = "native_ui_denied_paths";
-    for (const hash of ["#/logs?superuserRequests=0", "#/pbinstall/fixture", "#/request-password-reset", "#/auth/confirm-password-reset/fixture"]) {
-        await page.goto(origin + "/_/" + hash, { waitUntil: "networkidle" });
-        ensure(await page.evaluate(() => !document.querySelector('.page-logs, .logs-include-superuser-requests, a[href="#/logs"], .installer-form, .request-password-reset-form, .confirm-password-reset-form')));
-    }
+    ensure(loggingStatuses.every(status => status === 200));
+    stage = "native_ui_users_and_schema_controls";
+    await page.goto(origin + "/_/#/collections?collection=users", { waitUntil: "networkidle" });
+    await page.waitForFunction(() => app.store.activeCollection?.name === "users");
+    ensure(await page.locator(".new-record-btn").isVisible());
+    ensure(await page.locator(".btn-collection-settings").isVisible());
+    stage = "native_ui_backup_controls";
+    await page.goto(origin + "/_/#/settings/backups", { waitUntil: "networkidle" });
+    await page.locator(".page-backups-settings").waitFor();
+    stage = "native_ui_logs_page";
+    await page.goto(origin + "/_/#/logs?superuserRequests=0", { waitUntil: "networkidle" });
+    await page.locator(".page-logs").waitFor();
     await page.reload({ waitUntil: "networkidle" });
     await page.locator("#login_identity").waitFor();
     ensure(await page.evaluate(() => !app.pb.authStore.token && localStorage.length === 0 && sessionStorage.length === 0));

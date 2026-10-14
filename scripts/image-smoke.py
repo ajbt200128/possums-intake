@@ -294,8 +294,8 @@ def qualify(archive, probe):
     return {"image": digest, "config_identity": config_identity, "docker_runtime_identity": image,
             "archive_sha256": archive_hash, "platform": "linux/" + architecture,
             "cases": cases, "native_operator": {"actual_entrypoint": True, "native_login_create_patch": True,
-                "shared_key_separation": True, "held_balance_refused": True,
-                "logs_settings_blocked": True, "empty_logs_auth_origins_stdio": True,
+                "shared_key_separation": True, "held_balance_stock_edit": True,
+                "sdk_logging_forced_off": True, "empty_logs_auth_origins_stdio": True,
                 "frozen_asset_http_hashes": True, "browser_inside_image": "not_run"},
             "previous_release_compatibility": "unknown"}
 

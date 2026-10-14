@@ -3,6 +3,7 @@
 Run from the checkout with the pinned Node/npm and Go available. No Git/network
 source checkout, global install, runtime keys, telemetry or image build.
 """
+import base64
 import hashlib
 import json
 import os
@@ -38,7 +39,10 @@ def license_inventory(work, pin):
     out = work / "dist/licenses"
     out.mkdir()
     inventory = []
-    sources = json.loads((HERE / "licenses/sources.json").read_text())
+    try:
+        sources = json.loads((HERE / "licenses/sources.json").read_text())
+    except (OSError, ValueError):
+        raise BuildFailure("OPERATOR_UI_LICENSE_INPUT_UNAVAILABLE; restore reviewed license metadata") from None
     for name, item in sorted(sources.items()):
         raw = (HERE / "licenses" / name).read_bytes()
         if hashlib.sha256(raw).hexdigest() != item["sha256"]:
@@ -51,13 +55,19 @@ def license_inventory(work, pin):
     inventory.append({"component": "PocketBase UI and upstream graphical assets", "version": pin["version"],
                       "origin": pin["module"], "license_file": "licenses/pocketbase.txt",
                       "sha256": hashlib.sha256(raw).hexdigest(), "scope": "upstream_source_and_assets"})
-    bundled = json.loads((work / ".bundled-packages.json").read_text())
+    try:
+        bundled = json.loads((work / ".bundled-packages.json").read_text())
+    except (OSError, ValueError):
+        raise BuildFailure("OPERATOR_UI_BUNDLED_INVENTORY_UNAVAILABLE; inspect pinned build inputs privately") from None
     # Vite's generated modulepreload helper is emitted, not a chunk module path.
     if bundled != ["leaflet", "pocketbase"]:
         raise BuildFailure("OPERATOR_UI_BUNDLED_DEPENDENCY_CHANGED; review full bundled license closure")
     for package in [*bundled, "vite"]:
         folder = work / "node_modules" / package
-        metadata = json.loads((folder / "package.json").read_text())
+        try:
+            metadata = json.loads((folder / "package.json").read_text())
+        except (OSError, ValueError):
+            raise BuildFailure("OPERATOR_UI_PACKAGE_METADATA_UNAVAILABLE; restore pinned cached dependencies") from None
         files = [p for p in folder.iterdir() if p.is_file() and p.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE"))]
         if not files:
             raise BuildFailure("OPERATOR_UI_REQUIRED_LICENSE_MISSING; inspect pinned package privately")
@@ -74,7 +84,34 @@ def license_inventory(work, pin):
     return inventory
 
 
-def build():
+def cache_dependencies(work, env, cached):
+    # Copy only checksum-qualified lockfile archives, never unrelated cache
+    # metadata or private packages. Stop before npm if a required input is absent.
+    try:
+        target = json.loads(command(["node", "-p", 'JSON.stringify({os:process.platform,cpu:process.arch})'], ROOT, env))
+        lock = json.loads((work / "package-lock.json").read_text())
+    except (OSError, ValueError):
+        raise BuildFailure("OPERATOR_UI_CACHE_INPUT_UNAVAILABLE; inspect pinned lock and local toolchain privately") from None
+    for package in lock["packages"].values():
+        if "integrity" not in package:
+            continue
+        if any(package.get(key) and target[key] not in package[key] for key in ("os", "cpu")):
+            continue
+        algorithm, encoded = package["integrity"].split("-", 1)
+        digest = base64.b64decode(encoded, validate=True).hex()
+        relative = Path("content-v2") / algorithm / digest[:2] / digest[2:4] / digest[4:]
+        source = cached / relative
+        if not source.is_file():
+            raise BuildFailure("OPERATOR_UI_CACHE_UNAVAILABLE; stage=dependency_cache; pinned archive absent; provide reviewed cached inputs; no npm install or fetch attempted")
+        raw = source.read_bytes()
+        if hashlib.new(algorithm, raw).hexdigest() != digest:
+            raise BuildFailure("OPERATOR_UI_CACHE_MISMATCH; restore checksum-qualified cached inputs; no install or fetch attempted")
+        destination = work / ".npm-cache/_cacache" / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(raw)
+
+
+def build(dependency_cache=None):
     try:
         pin = json.loads((HERE / "source.json").read_text())
     except (OSError, ValueError):
@@ -113,8 +150,11 @@ def build():
             if "src" in path.relative_to(work).parts:
                 text = text.replace("window?.localStorage?", "app.operatorStorage").replace("window.localStorage", "app.operatorStorage").replace("localStorage.", "app.operatorStorage.")
             path.write_text(text)
-        # npm's cache and dependencies never leave the project-local temp tree.
-        command(["npm", "ci", "--cache", str(work / ".npm-cache"), "--no-audit", "--no-fund"], work, env)
+        # Read an existing cache only; missing archives are a blocker, never a
+        # network fetch or a global cache update. Dependency writes stay local.
+        cached = Path(dependency_cache) if dependency_cache is not None else Path.home() / ".npm/_cacache"
+        cache_dependencies(work, env, cached)
+        command(["npm", "ci", "--offline", "--ignore-scripts", "--cache", str(work / ".npm-cache"), "--no-audit", "--no-fund"], work, env)
         # Pinned SDK distribution is a Vite source input; it contains raw
         # console.warn fallbacks too. Patch before bundling, never afterward.
         for package in ("pocketbase", "leaflet"):

@@ -27,11 +27,11 @@ func (o *nativeObserver) InvalidateFailures()                  { o.invalid++ }
 func (o *nativeObserver) want(t *testing.T, want ...failuretype.Type) {
 	t.Helper()
 	if o.invalid != 0 || len(o.kinds) != len(want) {
-		t.Fatal("native failure population differs")
+		t.Fatalf("native failure population differs: invalid=%d observed=%d expected=%d", o.invalid, len(o.kinds), len(want))
 	}
 	for i, kind := range want {
 		if o.kinds[i] != kind {
-			t.Fatal("native category differs")
+			t.Fatalf("native category differs: observed=%d expected=%d", o.kinds[i], kind)
 		}
 	}
 	o.kinds = nil
@@ -56,9 +56,9 @@ func TestNativeActualErrorOnlyOwnerGateAuthAndTypedSDKCauses(t *testing.T) {
 	request(t, h, "GET", "/api/settings", "", "")
 	o.want(t, failuretype.AuthenticationRefused)
 	request(t, h, "GET", "/api/backups", "", "")
-	o.want(t, failuretype.PolicyRefused)
+	o.want(t, failuretype.AuthenticationRefused)
 	request(t, h, "POST", accountRecords, `{"balance":1}`, "")
-	o.want(t, failuretype.RequestInvalid)
+	o.want(t, failuretype.PolicyRefused)
 	request(t, h, "POST", authPrefix+"auth-with-password", `{"identity":"`+testEmail+`","password":"`+hostile+`"}`, "")
 	// The SDK returns an untyped credential exception: HTTP 400 is not proof
 	// of its cause. Preserve the auth-stage fallback, not guessed expiry/data.
@@ -119,9 +119,9 @@ func TestNativeActualSDKPreliminaryPATCHLookupOwnsNoRowsAndFaultSeparately(t *te
 		err  error
 		kind failuretype.Type
 	}{
-		{sql.ErrNoRows, failuretype.NativeReadUnknown},
+		{sql.ErrNoRows, failuretype.NativeWriteUnknown},
 		{context.Canceled, failuretype.Cancelled},
-		{errors.New(hostile), failuretype.NativeReadUnknown},
+		{errors.New(hostile), failuretype.NativeWriteUnknown},
 	} {
 		o := &nativeObserver{}
 		h := observedNative(t, s, nativeReadFault{app, fault.err}, o)
@@ -160,21 +160,24 @@ func TestNativeActualCompletionHookAndIndependentDeliveryCancellationCountTwice(
 	h := observedNative(t, s, app, o)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	hook := app.OnRecordCreate(ledger.AccountCollectionName).BindFunc(func(e *core.RecordEvent) error {
-		e.App.TxInfo().OnComplete(func(error) error { cancel(); return context.Canceled })
-		return e.Next()
+	hook := app.OnRecordAfterCreateSuccess(ledger.AccountCollectionName).BindFunc(func(e *core.RecordEvent) error {
+		if err := e.Next(); err != nil {
+			return err
+		}
+		cancel()
+		return context.DeadlineExceeded
 	})
-	defer app.OnRecordCreate(ledger.AccountCollectionName).Unbind(hook)
+	defer app.OnRecordAfterCreateSuccess(ledger.AccountCollectionName).Unbind(hook)
 	req := httptest.NewRequest("POST", accountRecords, strings.NewReader(`{"account_id":"native-owner-commit","balance":"10","enabled":true}`)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", token)
 	abortNative(t, h, &nativeIOFault{http.Header{}, context.Canceled}, req)
-	o.want(t, failuretype.Cancelled, failuretype.Cancelled)
+	o.want(t, failuretype.DeadlineExceeded, failuretype.Cancelled)
 	if snapshot, err := s.Balance(context.Background(), "native-owner-commit"); err != nil || snapshot.Available != "10" {
 		t.Fatal("hook/delivery fault erased known commit")
 	}
 }
-func TestNativeActualPrimaryRequestCancellationPropagationIsCountedOnce(t *testing.T) {
+func TestNativeActualStockRequestCancellationDoesNotProveRollback(t *testing.T) {
 	s, app, base := fixture(t)
 	token := login(t, base)
 	o := &nativeObserver{}
@@ -186,8 +189,10 @@ func TestNativeActualPrimaryRequestCancellationPropagationIsCountedOnce(t *testi
 	req.Header.Set("Authorization", token)
 	abortNative(t, h, &nativeIOFault{http.Header{}, context.Canceled}, req)
 	o.want(t, failuretype.Cancelled)
-	if _, err := s.Balance(context.Background(), "native-owner-no-effect"); ledger.Failure(err).Code != ledger.CodeAccount {
-		t.Fatal("cancelled admission created state")
+	// Stock controllers do not use Service's cancellation admission gate. The
+	// observed interrupted delivery cannot be reported as a financial rollback.
+	if snapshot, err := s.Balance(context.Background(), "native-owner-no-effect"); err != nil || snapshot.Available != "10" {
+		t.Fatal("stock commit evidence changed")
 	}
 }
 
@@ -195,17 +200,19 @@ type bodyFault struct{}
 
 func (bodyFault) Read([]byte) (int, error) { return 0, context.DeadlineExceeded }
 func (bodyFault) Close() error             { return nil }
-func TestNativeActualStrictReadBoundaryKeepsTypedFailure(t *testing.T) {
+func TestNativeActualSDKReadBoundaryKeepsTypedFailure(t *testing.T) {
 	s, app, _ := fixture(t)
 	o := &nativeObserver{}
 	h := observedNative(t, s, app, o)
 	req := httptest.NewRequest("POST", accountRecords, nil)
 	req.Header.Set("Content-Type", "application/json")
 	req.Body = bodyFault{}
+	req.ContentLength = -1
+	req.Header.Set("Authorization", login(t, h))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 400 {
-		t.Fatal("strict read boundary drifted")
+		t.Fatal("SDK read boundary drifted")
 	}
 	o.want(t, failuretype.DeadlineExceeded)
 }
@@ -232,9 +239,9 @@ func TestNativeActualSDKSwallowedTokenFailureRemainsExternalLimit(t *testing.T) 
 	token := login(t, base)
 	o := &nativeObserver{}
 	h := observedNative(t, s, swallowedTokenApp{app}, o)
-	expectClosed(t, request(t, h, "GET", "/api/settings", "", token), 401, "native_read")
+	expectClosed(t, request(t, h, "GET", "/api/settings", "", token), 401, "native_request")
 	// Supported method injection, actual stock token loader: it swallows the
-	// cause. Only the project authority refusal is observable, not deadline.
+	// cause. Only the stock SDK authority refusal is observable, not deadline.
 	o.want(t, failuretype.AuthenticationRefused)
 }
 
@@ -266,4 +273,46 @@ func TestNativeActualSDKSwallowedDummyQueryFailureRemainsExternalLimit(t *testin
 		t.Fatal("actual dummy-query boundary was not exercised")
 	}
 	o.want(t, failuretype.NativeAuthUnknown) // not a count of the swallowed query
+}
+
+func TestNativeStockCommittedWriteErrorStaysUnknownAndOwnedOnce(t *testing.T) {
+	s, app, base := fixture(t)
+	token := login(t, base)
+	o := &nativeObserver{}
+	h := observedNative(t, s, app, o)
+	id := app.OnRecordAfterCreateSuccess(ledger.AccountCollectionName).BindFunc(func(e *core.RecordEvent) error {
+		if err := e.Next(); err != nil {
+			return err
+		}
+		return errors.New(hostile)
+	})
+	defer app.OnRecordAfterCreateSuccess(ledger.AccountCollectionName).Unbind(id)
+	expectClosed(t, request(t, h, "POST", accountRecords, `{"account_id":"stock-committed-error","balance":"10","enabled":true}`, token), 400, "native_account_request")
+	o.want(t, failuretype.NativeWriteUnknown)
+	if snapshot, err := s.Balance(context.Background(), "stock-committed-error"); err != nil || snapshot.Available != "10" {
+		t.Fatal("stock error erased observed commit")
+	}
+}
+
+func TestNativeBackgroundRestoreHookClassifiesWithoutLoggingOrSuccessCounts(t *testing.T) {
+	s, app, _ := fixture(t)
+	o := &nativeObserver{}
+	observedNative(t, s, app, o)
+	for _, panicFault := range []bool{false, true} {
+		err := app.OnBackupRestore().Trigger(&core.BackupEvent{App: app, Context: context.Background()}, func(*core.BackupEvent) error {
+			if panicFault {
+				panic(hostile)
+			}
+			return errors.New(hostile)
+		})
+		d := ledger.Failure(err)
+		if err == nil || d.Outcome != "unknown" || d.Kind() != failuretype.NativeWriteUnknown || strings.Contains(d.Error(), hostile) {
+			t.Fatal("background restore classification unavailable")
+		}
+		o.want(t, failuretype.NativeWriteUnknown)
+	}
+	if app.OnBackupRestore().Trigger(&core.BackupEvent{App: app, Context: context.Background()}, func(*core.BackupEvent) error { return nil }) != nil {
+		t.Fatal("restore hook changed success")
+	}
+	o.want(t)
 }

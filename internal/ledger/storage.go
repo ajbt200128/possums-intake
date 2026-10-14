@@ -246,6 +246,37 @@ func storageApp(dir string, create bool) *core.BaseApp {
 	})
 	app.Settings().Logs.MaxDays = 0
 	bindAccountValidation(app)
+	// Use supported SDK hooks to keep both saved settings and runtime logger
+	// retention off, including native attempts to turn recording back on.
+	app.OnModelValidate("_params").BindFunc(func(e *core.ModelEvent) error {
+		if settings, ok := e.Model.(*core.Settings); ok {
+			settings.Logs.MaxDays = 0
+		}
+		return e.Next()
+	})
+	app.OnSettingsUpdateRequest().BindFunc(func(e *core.SettingsUpdateRequestEvent) error {
+		e.NewSettings.Logs.MaxDays = 0
+		return e.Next()
+	})
+	// AuthAlert is login activity recording: the stock auth controller persists
+	// IP/UA-derived origins before sending mail. Disable only that feature, not
+	// MFA, OTP, OAuth or native admin management.
+	app.OnCollectionValidate().Bind(&hook.Handler[*core.CollectionEvent]{
+		Id: "intakeAuthActivityOff", Priority: -1000,
+		Func: func(e *core.CollectionEvent) error {
+			if e.Collection.IsAuth() {
+				e.Collection.AuthAlert.Enabled = false
+			}
+			return e.Next()
+		},
+	})
+	// Native SQL/restore may bypass collection validation. Suppress the SDK's
+	// activity-origin writes and alert mail at their supported hooks too; this
+	// neither rejects authentication nor emits login/activity counters.
+	discardOriginWrite := func(*core.ModelEvent) error { return nil }
+	app.OnModelCreate("_authOrigins").BindFunc(discardOriginWrite)
+	app.OnModelUpdate("_authOrigins").BindFunc(discardOriginWrite)
+	app.OnMailerRecordAuthAlertSend().BindFunc(func(*core.MailerRecordEvent) error { return nil })
 	// This runs after loading settings but before the outer stock logger hook
 	// processes them. No OnServe event/stock router/installer/cron is started.
 	app.OnSettingsReload().Bind(&hook.Handler[*core.SettingsReloadEvent]{

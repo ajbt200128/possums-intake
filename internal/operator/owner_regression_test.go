@@ -8,35 +8,38 @@ import (
 	"possums-intake/internal/failuretype"
 )
 
-type panicBody struct{}
+type panicBody struct{ read *bool }
 
-func (panicBody) Read([]byte) (int, error) { panic("SYNTHETIC_PRIVATE_SENTINEL") }
-func (panicBody) Close() error             { return nil }
+func (b panicBody) Read([]byte) (int, error) { *b.read = true; panic("SYNTHETIC_PRIVATE_SENTINEL") }
+func (panicBody) Close() error               { return nil }
 
-type secondHeaderPanic struct {
+type diagnosticHeaderPanic struct {
 	header http.Header
-	calls  int
+	read   *bool
 }
 
-func (w *secondHeaderPanic) Header() http.Header {
-	w.calls++
-	if w.calls > 1 {
+func (w *diagnosticHeaderPanic) Header() http.Header {
+	if *w.read {
 		panic("SYNTHETIC_PRIVATE_SENTINEL independent presentation fault")
 	}
 	return w.header
 }
-func (*secondHeaderPanic) WriteHeader(int)               {}
-func (*secondHeaderPanic) Write(raw []byte) (int, error) { return len(raw), nil }
+func (*diagnosticHeaderPanic) WriteHeader(int)               {}
+func (*diagnosticHeaderPanic) Write(raw []byte) (int, error) { return len(raw), nil }
 
-func TestNativeReadPanicAndDiagnosticDeliveryPanicBothObserved(t *testing.T) {
-	s, app, _ := fixture(t)
+func TestNativeSDKBodyPanicAndDiagnosticDeliveryPanicBothObserved(t *testing.T) {
+	s, app, base := fixture(t)
+	token := login(t, base)
 	o := &nativeObserver{}
 	h := observedNative(t, s, app, o)
 	req := httptest.NewRequest("POST", accountRecords, nil)
 	req.Header.Set("Content-Type", "application/json")
-	req.Body = panicBody{}
-	abortNative(t, h, &secondHeaderPanic{header: http.Header{}}, req)
-	o.want(t, failuretype.RequestReadUnknown, failuretype.ResponseDeliveryUnknown)
+	req.Header.Set("Authorization", token)
+	read := false
+	req.Body = panicBody{&read}
+	req.ContentLength = -1
+	abortNative(t, h, &diagnosticHeaderPanic{http.Header{}, &read}, req)
+	o.want(t, failuretype.NativeWriteUnknown, failuretype.ResponseDeliveryUnknown)
 	if !s.Ready() {
 		t.Fatal("presentation faults changed readiness")
 	}

@@ -295,7 +295,7 @@ func TestSelectedActualOwnersSupportedTLSWireAndOutageNoReplay(t *testing.T) {
 					t.Error("failed process source suppressed valid owners or native success added instruments")
 					return
 				}
-				want := map[string]int64{failuretype.RequestInvalid.Label(): 2, failuretype.AuthenticationRefused.Label(): 2, failuretype.PolicyRefused.Label(): 1, failuretype.InitializationUnknown.Label(): 1, failuretype.StorageCloseUnknown.Label(): 1, failuretype.NativeAuthUnknown.Label(): 1, failuretype.NotReady.Label(): 1}
+				want := map[string]int64{failuretype.RequestInvalid.Label(): 1, failuretype.AuthenticationRefused.Label(): 3, failuretype.PolicyRefused.Label(): 1, failuretype.InitializationUnknown.Label(): 1, failuretype.StorageCloseUnknown.Label(): 1, failuretype.NativeAuthUnknown.Label(): 1, failuretype.NotReady.Label(): 1}
 				for _, m := range metrics {
 					if m.GetGauge() == nil {
 						t.Error("nongauge owner export")

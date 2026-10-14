@@ -75,6 +75,15 @@ func database(mode string) error {
 		if err := db.QueryRow("SELECT COUNT(*) FROM _logs").Scan(&count); err != nil || count != 0 {
 			return fmt.Errorf("synthetic activity log must be empty")
 		}
+		settingsDB, err := sql.Open("sqlite", "file:/state/data.db?mode=ro")
+		if err != nil {
+			return fmt.Errorf("persisted logging settings unavailable")
+		}
+		defer settingsDB.Close()
+		var maxDays int
+		if err := settingsDB.QueryRow("SELECT json_extract(value, '$.logs.maxDays') FROM _params WHERE id='settings'").Scan(&maxDays); err != nil || maxDays != 0 {
+			return fmt.Errorf("persisted SDK logging must be disabled")
+		}
 	case "unsupported-schema":
 		// Structurally valid future metadata, disposable state, server stopped.
 		// This is fixture construction, never a production recovery operation.
@@ -118,7 +127,7 @@ func operator() error {
 		}
 	}
 	path := "/api/collections/ledger_accounts/records"
-	if _, err := request(path, "", 401, key); err != nil {
+	if _, err := request(path, "", 403, key); err != nil {
 		return err
 	}
 	raw, err = request(path, `{"id":"","collectionId":"ledgeraccounts1","collectionName":"ledger_accounts","account_id":"native-image-fixture","balance":"100","enabled":true}`, 200, token)
@@ -143,12 +152,11 @@ func operator() error {
 	if _, err := request("/reservations", `{"account_id":"native-image-fixture","maximum":"20","timeout_seconds":600}`, 200, key); err != nil {
 		return err
 	}
-	raw, err = exchange(http.MethodPatch, path, `{"balance":"89"}`, 409, token, 8192)
-	var diagnostic struct {
-		Code string `json:"code"`
-	}
-	if err != nil || json.Unmarshal(raw, &diagnostic) != nil || diagnostic.Code != "LEDGER_NATIVE_BALANCE_HELD" || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
-		return fmt.Errorf("held balance refusal unconfirmed")
+	// Trusted stock writes bypass the former held-balance guard. This fake
+	// absolute edit is not a funding receipt or a safe concurrent accounting edit.
+	raw, err = exchange(http.MethodPatch, path, `{"balance":"89"}`, 200, token, 8192)
+	if err != nil || json.Unmarshal(raw, &account) != nil || account.Balance != "89" || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
+		return fmt.Errorf("stock held balance edit unconfirmed")
 	}
 	if _, err := exchange(http.MethodPatch, path, `{"enabled":false}`, 200, token, 8192); err != nil {
 		return err
@@ -162,16 +170,37 @@ func operator() error {
 		} `json:"account_balance"`
 		Pending []json.RawMessage `json:"pending_reservations"`
 	}
-	if err != nil || json.Unmarshal(raw, &balance) != nil || balance.Available != "70" || len(balance.Accounts) != 1 || balance.Accounts[0].Balance != "90" || balance.Accounts[0].Enabled || len(balance.Pending) != 1 || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
+	if err != nil || json.Unmarshal(raw, &balance) != nil || balance.Available != "69" || len(balance.Accounts) != 1 || balance.Accounts[0].Balance != "89" || balance.Accounts[0].Enabled || len(balance.Pending) != 1 || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
 		return fmt.Errorf("custom balance evidence mismatch")
 	}
-	for _, denied := range []string{"/api/logs?superuserRequests=0", "/api/logs/stats"} {
-		if _, err := request(denied, "", 403, token); err != nil {
-			return err
-		}
+	raw, err = request("/api/logs?superuserRequests=0", "", 200, token)
+	var logs struct {
+		TotalItems *int              `json:"totalItems"`
+		Items      []json.RawMessage `json:"items"`
 	}
-	if _, err := exchange(http.MethodPatch, "/api/settings", `{"logs":{"maxDays":5}}`, 403, token, 8192); err != nil {
-		return err
+	if err != nil || json.Unmarshal(raw, &logs) != nil || logs.TotalItems == nil || *logs.TotalItems != 0 || logs.Items == nil || len(logs.Items) != 0 {
+		return fmt.Errorf("empty native logs unconfirmed")
+	}
+	raw, err = request("/api/logs/stats", "", 200, token)
+	var stats []json.RawMessage
+	if err != nil || json.Unmarshal(raw, &stats) != nil || stats == nil || len(stats) != 0 {
+		return fmt.Errorf("empty native log stats unconfirmed")
+	}
+	var settings struct {
+		Logs struct {
+			MaxDays *int `json:"maxDays"`
+		} `json:"logs"`
+	}
+	for _, method := range []string{http.MethodPatch, http.MethodGet} {
+		body := ""
+		if method == http.MethodPatch {
+			body = `{"logs":{"maxDays":5}}`
+		}
+		raw, err = exchange(method, "/api/settings", body, 200, token, 65536)
+		settings.Logs.MaxDays = nil
+		if err != nil || json.Unmarshal(raw, &settings) != nil || settings.Logs.MaxDays == nil || *settings.Logs.MaxDays != 0 {
+			return fmt.Errorf("runtime SDK logging disabled evidence mismatch")
+		}
 	}
 	// Every frozen generated asset, including license texts, must be identical
 	// through the Linux operator HTTP surface. This is not browser execution.
@@ -180,14 +209,25 @@ func operator() error {
 	if err != nil || json.Unmarshal(manifest, &assets) != nil || len(assets) == 0 {
 		return fmt.Errorf("frozen asset manifest unavailable")
 	}
+	const iconFont = "fonts/remixicon/remixicon.woff2"
+	if _, ok := assets[iconFont]; !ok {
+		return fmt.Errorf("frozen icon font unavailable")
+	}
 	for name, digest := range assets {
 		assetPath := "/_/" + name
 		if name == "index.html" {
 			assetPath = "/_/"
 		}
-		raw, err := exchange(http.MethodGet, assetPath, "", 200, "", 4<<20)
-		if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != digest || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
-			return fmt.Errorf("native asset binding mismatch")
+		paths := []string{assetPath}
+		if name == iconFont {
+			// A locally authored static query must not change SDK asset routing.
+			paths = append(paths, assetPath+"?source=image-fixture")
+		}
+		for _, path := range paths {
+			raw, err := exchange(http.MethodGet, path, "", 200, "", 4<<20)
+			if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != digest || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte(token)) {
+				return fmt.Errorf("native asset binding mismatch")
+			}
 		}
 	}
 	return nil

@@ -343,6 +343,19 @@ class PublicationTests(unittest.TestCase):
                 evidence[field] = original
         self.f.save()
 
+    def test_current_native_schema_rejects_historical_and_mixed_claims_before_copy(self):
+        native = self.f.q["native_operator"].copy()
+        old = native.copy()
+        old["held_balance_refused"] = old.pop("held_balance_stock_edit")
+        old["logs_settings_blocked"] = old.pop("sdk_logging_forced_off")
+        for value in (old, {**native, "held_balance_refused": True},
+                      {**native, "logs_settings_blocked": False}):
+            self.f.q["native_operator"] = value
+            self.f.save()
+            self.refused(self.f.publication().execute, "qualification")
+        self.assertFalse(any(args[1] == "copy" for args in self.f.calls))
+        self.assertIsNone(self.f.authpath)
+
     def test_manifest_format_config_platform_and_version(self):
         admitted = p.admit(self.f.api, self.f.api.ctx)
         for config in ({"os": "darwin", "architecture": "amd64"}, {"os": "linux", "architecture": "arm64"}):

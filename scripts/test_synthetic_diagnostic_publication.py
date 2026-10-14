@@ -258,6 +258,19 @@ class DiagnosticTests(unittest.TestCase):
         self.refused(self.f.publication().execute, "synthetic_archive")
         self.assert_no_copy()
 
+    def test_public_publisher_rejects_old_or_mixed_native_claims_before_copy(self):
+        native = self.f.q["native_operator"].copy()
+        old = native.copy()
+        old["held_balance_refused"] = old.pop("held_balance_stock_edit")
+        old["logs_settings_blocked"] = old.pop("sdk_logging_forced_off")
+        for value in (old, {**native, "held_balance_refused": True},
+                      {**native, "logs_settings_blocked": False}):
+            self.f.q["native_operator"] = value
+            self.f.save()
+            self.refused(self.f.publication().execute, "qualification")
+        self.assert_no_copy()
+        self.assertIsNone(self.f.authpath)
+
     def test_source_ci_artifact_mismatch_and_unknown_source_error(self):
         api = self.f.api
         vectors = [(api.repo_data, "private", False), (api.repo_data, "owner", {"login": "other"}),

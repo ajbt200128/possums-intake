@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net"
 	"net/http/httptest"
 	"os"
@@ -120,10 +119,21 @@ func TestOperatorDefaultExclusionExplicitInitAndNoServeReset(t *testing.T) {
 		t.Fatal("existing native identity reset")
 	}
 	empty := initProcessState(t)
-	out, stderr, success = runOperatorCLI(t, "synthetic@example.invalid", "some-password", "serve", "--operator", "--state", empty, "--listen", syntheticAddress(t))
-	checkFailure(t, out, stderr, success, "LEDGER_OPERATOR_SETUP_INVALID")
-	var d ledger.Diagnostic
-	if json.Unmarshal([]byte(stderr), &d) != nil || d.Stage != "operator_setup" {
-		t.Fatal("missing operator setup not classified")
+	// No obsolete one-superuser startup gate: the held port bounds this serve
+	// attempt without waiting on a listener that is now correctly allowed.
+	out, stderr, success = runOperatorCLI(t, "synthetic@example.invalid", "some-password", "serve", "--operator", "--state", empty, "--listen", listener.Addr().String())
+	checkFailure(t, out, stderr, success, codeBind)
+	emptyService, err := ledger.Open(context.Background(), empty)
+	if err != nil {
+		t.Fatal("empty synthetic state reopen unavailable")
+	}
+	defer emptyService.Close()
+	emptyApp, err := emptyService.OperatorApp()
+	if err != nil {
+		t.Fatal("zero-admin stock app access refused")
+	}
+	count, err := emptyApp.CountRecords("_superusers")
+	if err != nil || count != 0 {
+		t.Fatal("serve created native credentials")
 	}
 }

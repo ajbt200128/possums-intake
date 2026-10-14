@@ -67,9 +67,9 @@ func initializeOperator(tx *transaction, credentials OperatorCredentials) error 
 	return app.SaveWithContext(tx.ctx, record)
 }
 
-// OperatorApp exposes the SAME bootstrapped app to the restricted native router.
-// It makes no writes, repairs or credential changes. Call before serving, and
-// drain HTTP before Close. Accounting must continue through Service, not app.
+// OperatorApp exposes the SAME bootstrapped app to the trusted SDK router.
+// It makes no storage writes, repairs or credential changes. Call before serving
+// and drain HTTP before Close. Custom accounting continues through Service.
 func (s *Service) OperatorApp() (core.App, error) {
 	return s.OperatorAppObserved(nil)
 }
@@ -92,22 +92,15 @@ func (s *Service) OperatorAppObserved(observer failureowner.Observer) (app core.
 		d.Outcome = "unavailable"
 		return d
 	}
-	c, err := s.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	_, err := s.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
 	if err == sql.ErrNoRows {
-		return nil, operatorFailure("explicit_password_only_initialization_required")
+		return nil, operatorFailure("native_superuser_collection_required")
 	}
 	if err != nil {
 		return nil, readFailure(err)
 	}
-	if c.AuthAlert.Enabled || c.OTP.Enabled || c.MFA.Enabled || c.OAuth2.Enabled || !c.PasswordAuth.Enabled || len(c.PasswordAuth.IdentityFields) != 1 || c.PasswordAuth.IdentityFields[0] != "email" {
-		return nil, operatorFailure("explicit_password_only_initialization_required")
-	}
-	count, err := s.app.CountRecords(c)
-	if err != nil {
-		return nil, readFailure(err)
-	}
-	if count != 1 {
-		return nil, operatorFailure("one_explicitly_initialized_native_superuser")
-	}
+	// Stock admin writes intentionally bypass the project Record guard. Service
+	// methods still validate input/state and retain their SQL/transaction rules.
+	s.app.OnRecordValidate(AccountCollectionName).Unbind(accountValidationHook)
 	return s.app, nil
 }
