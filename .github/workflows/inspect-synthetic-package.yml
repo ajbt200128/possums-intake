@@ -1,0 +1,34 @@
+# Explicit manual fixed-package read-only inspection, never publication authority.
+# Closed boolean stdout/diagnostics remain in native Actions logs and its retention;
+# this is NOT whole-process transience. No diagnostic artifacts/uploads or telemetry.
+name: Inspect fixed synthetic package evidence (read only)
+on:
+  workflow_dispatch:
+    inputs:
+      inspect:
+        description: Explicitly authorize fixed read-only evidence inspection only
+        type: boolean
+        default: false
+        required: true
+      expected_source:
+        description: Exact current-main 40-character SHA manually bound by the owner
+        type: string
+        required: true
+permissions:
+  contents: read
+  packages: read
+jobs:
+  inspect:
+    if: ${{ inputs.inspect == true && inputs.expected_source == github.sha && github.repository == 'ajbt200128/possums-intake' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'ajbt200128' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Inspect required fixed fields without publication or grant changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 scripts/inspect-synthetic-package.py inspect

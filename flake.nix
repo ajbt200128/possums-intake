@@ -29,12 +29,14 @@
         delivery = pkgs.runCommand "intake-offline-delivery-tests" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
+          cp ${./flake.nix} flake.nix
           cp -R ${./scripts} scripts
           chmod -R u+w scripts
           mkdir -p .github/workflows
           cp ${./.github/workflows/qualify-synthetic-image.yml} .github/workflows/qualify-synthetic-image.yml
           cp ${./.github/workflows/publish-synthetic-image.yml} .github/workflows/publish-synthetic-image.yml
           cp ${./.github/workflows/publish-synthetic-diagnostic-image.yml} .github/workflows/publish-synthetic-diagnostic-image.yml
+          cp ${./.github/workflows/inspect-synthetic-package.yml} .github/workflows/inspect-synthetic-package.yml
           cp ${./.github/workflows/publish-image.yml} .github/workflows/publish-image.yml
           cp ${./.github/workflows/tinfoil-release-publish.yml} .github/workflows/tinfoil-release-publish.yml
           cp ${./.github/workflows/deploy-production.yml} .github/workflows/deploy-production.yml
