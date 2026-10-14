@@ -29,7 +29,30 @@ func executeContext(ctx context.Context, args []string) error {
 	return executeObserved(ctx, args, nil)
 }
 
-func executeObserved(ctx context.Context, args []string, observer failureowner.Observer) (result error) {
+func executeObserved(ctx context.Context, args []string, observer failureowner.Observer) error {
+	if len(args) > 0 && args[0] == "synthetic-healthcheck" {
+		return syntheticHealthcheck(ctx, args[1:])
+	}
+	var startup *startupRecorder
+	if len(args) > 0 && args[0] == "synthetic-serve" && os.Getenv("LEDGER_SYNTHETIC_STARTUP_DIAGNOSTICS") == "true" {
+		startup = newStartupRecorder()
+	}
+	return executeRecorded(ctx, args, observer, startup)
+}
+
+func executeRecorded(ctx context.Context, args []string, observer failureowner.Observer, startup *startupRecorder) error {
+	if startup != nil {
+		startup.observer = observer
+	}
+	startup.checkpoint(phaseValidation)
+	result := executeStartupObserved(ctx, args, observer, startup)
+	// All existing storage/worker/scratch defers complete before the optional
+	// diagnostic hold. It owns no listener, worker, retry or accounting work.
+	startup.finish(ctx, result)
+	return result
+}
+
+func executeStartupObserved(ctx context.Context, args []string, observer failureowner.Observer, startup *startupRecorder) (result error) {
 	owned := false
 	metricsObserver := independentMetricsObserver(observer)
 	synthetic := len(args) > 0 && args[0] == "synthetic-serve"
@@ -113,6 +136,7 @@ func executeObserved(ctx context.Context, args []string, observer failureowner.O
 		if err := credentials.Validate(); err != nil {
 			return runtimeFailure("LEDGER_OPERATOR_SETUP_INVALID", "operator_setup", "valid_runtime_operator_credentials", "no_effect", "Supply valid LEDGER_OPERATOR_EMAIL and LEDGER_OPERATOR_PASSWORD through runtime environment for synthetic-serve. No scratch state was created.")
 		}
+		startup.checkpoint(phaseScratch)
 		scratch, err := os.MkdirTemp("", "possums-intake-synthetic-")
 		if err != nil {
 			return runtimeFailure(codeScratch, "scratch_create", "new_temporary_directory", "no_effect", "Temporary state could not be created; cause unknown. Check runtime temporary storage privately.")
@@ -128,11 +152,13 @@ func executeObserved(ctx context.Context, args []string, observer failureowner.O
 		}()
 		// Init/Open failures may hide unconfirmed framework storage teardown.
 		// Preserve that scratch state rather than unlinking possibly open files.
+		startup.checkpoint(phaseInit)
 		if err := ledger.InitOperatorObserved(ctx, scratch, credentials, observer); err != nil {
 			owned = true
 			return err
 		}
 	}
+	startup.checkpoint(phaseOpen)
 	service, err := ledger.OpenObserved(ctx, *dir, observer)
 	if err != nil {
 		owned = true
@@ -168,6 +194,7 @@ func executeObserved(ctx context.Context, args []string, observer failureowner.O
 			observeMetricsShutdown(runtime, metricsObserver)
 		}()
 	}
+	startup.checkpoint(phaseHandler)
 	handler, err := httpapi.NewHandler(service, func() bool { return ctx.Err() == nil && service.Ready() }, key, metrics)
 	if err != nil {
 		return runtimeFailure(codeHandler, "startup", "custom_accounting_handler", "no_effect", "Handler construction failed; cause unknown. Check runtime key and the qualified custom route build privately.")
@@ -185,7 +212,8 @@ func executeObserved(ctx context.Context, args []string, observer failureowner.O
 		}
 	}
 	owned = true // serve/maintenance own primary and distinct joined failures
-	return serveObserved(ctx, service, handler, *listen, observer)
+	startup.checkpoint(phaseBind)
+	return serveStartupObserved(ctx, service, handler, *listen, observer, startup)
 }
 
 func main() {

@@ -129,13 +129,18 @@ func serve(ctx context.Context, service maintenanceLedger, handler http.Handler,
 	return serveObserved(ctx, service, handler, address, nil)
 }
 
-func serveObserved(ctx context.Context, service maintenanceLedger, handler http.Handler, address string, observer failureowner.Observer) (result error) {
+func serveObserved(ctx context.Context, service maintenanceLedger, handler http.Handler, address string, observer failureowner.Observer) error {
+	return serveStartupObserved(ctx, service, handler, address, observer, nil)
+}
+
+func serveStartupObserved(ctx context.Context, service maintenanceLedger, handler http.Handler, address string, observer failureowner.Observer, startup *startupRecorder) (result error) {
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		fault := runtimeFailure(codeBind, "listener_start", "available_numeric_listener", "no_effect", "Listener could not open; underlying cause unknown. Check local port availability and permissions privately. No accounting HTTP operation ran; money and reservation rows are preserved.")
 		failureowner.Observe(observer, fault.Kind())
 		return fault
 	}
+	startup.listenerBound()
 	work, cancel := context.WithCancel(ctx)
 	defer cancel()
 	server := localServer(work, handler)
