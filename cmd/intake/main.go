@@ -86,6 +86,8 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 	}
 	listen := flags.String("listen", defaultListen, "Numeric listener")
 	operatorMode := flags.Bool("operator", false, "Opt-in restricted synthetic native dashboard (init/serve only)")
+	volumeName := flags.String("tinfoil-volume", "", "Opt-in managed-secret volume mount name (init/serve only)")
+	initializeVolume := flags.Bool("initialize-volume", false, "Explicitly initialize a blank Tinfoil disk (init only)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || (!synthetic && !filepath.IsAbs(*dir)) {
 		if synthetic {
 			return runtimeFailure(codeSyntheticOptions, "startup", "synthetic_listen_only", "no_effect", "Use synthetic-serve with optional --listen only. State is always newly temporary and native operator mode is mandatory.")
@@ -94,17 +96,36 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 	}
 	if synthetic {
 		invalidOption := false
-		flags.Visit(func(f *flag.Flag) { invalidOption = invalidOption || f.Name == "state" || f.Name == "operator" })
+		flags.Visit(func(f *flag.Flag) {
+			invalidOption = invalidOption || f.Name == "state" || f.Name == "operator" || f.Name == "tinfoil-volume" || f.Name == "initialize-volume"
+		})
 		if invalidOption {
 			return runtimeFailure(codeSyntheticOptions, "startup", "synthetic_listen_only", "no_effect", "Use synthetic-serve with optional --listen only. State is always newly temporary and native operator mode is mandatory.")
 		}
 		*operatorMode = true
+	}
+	if _, supplied := os.LookupEnv("LEDGER_VOLUME_KEY_B64"); supplied && *volumeName == "" {
+		return runtimeFailure(codeVolumeOptions, "volume_options", "volume_key_requires_named_volume", "no_effect", "Select --tinfoil-volume when supplying a volume key. Disposable synthetic serving cannot use persistent volume secrets.")
+	}
+	if *initializeVolume && (mode != "init" || *volumeName == "") {
+		return runtimeFailure(codeVolumeOptions, "volume_options", "explicit_init_and_named_volume", "no_effect", "Use --initialize-volume only with init and --tinfoil-volume for a deliberately new blank disk. Never use it to recover existing state.")
 	}
 	if mode == "init" {
 		listenSet := false
 		flags.Visit(func(f *flag.Flag) { listenSet = listenSet || f.Name == "listen" })
 		if listenSet {
 			return runtimeFailure(codeListen, "startup", "serve_only_listener", "no_effect", "Use --listen only with serve; init creates empty state and starts no listener.")
+		}
+		if *volumeName != "" {
+			if *operatorMode {
+				credentials := ledger.OperatorCredentials{Email: os.Getenv("LEDGER_OPERATOR_EMAIL"), Password: os.Getenv("LEDGER_OPERATOR_PASSWORD")}
+				if err := credentials.Validate(); err != nil {
+					return runtimeFailure("LEDGER_OPERATOR_SETUP_INVALID", "operator_setup", "valid_runtime_operator_credentials", "no_effect", "Supply valid native operator credentials before explicitly initializing the volume. No volume operation was started.")
+				}
+			}
+			if err := prepareManagedVolume(ctx, *volumeName, *dir, *initializeVolume); err != nil {
+				return err
+			}
 		}
 		var err error
 		if *operatorMode {
@@ -123,12 +144,17 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 		}
 		return nil
 	}
-	if err := validateModeListen(*listen, synthetic); err != nil {
+	if err := validateModeListen(*listen, synthetic || *volumeName != ""); err != nil {
 		return err
 	}
 	key := os.Getenv("LEDGER_ADMIN_KEY") // Raw bytes; never normalize or print it.
 	if len(key) < 32 {
 		return runtimeFailure(codeAdminKey, "startup", "runtime_admin_key_at_least_32_bytes", "no_effect", "Inject a high-entropy admin key of at least 32 bytes through LEDGER_ADMIN_KEY. Never put it in command arguments or logs.")
+	}
+	if *volumeName != "" {
+		if err := prepareManagedVolume(ctx, *volumeName, *dir, false); err != nil {
+			return err
+		}
 	}
 	removeScratch := false
 	if synthetic {
