@@ -68,7 +68,10 @@ class PipeCapture:
         except Exception:
             self.failed = True
         finally:
-            self.pipe.close()
+            try:
+                self.pipe.close()
+            except Exception:
+                self.failed = True
 
     def finish(self, stage: str) -> bytes:
         self.thread.join(timeout=2)
