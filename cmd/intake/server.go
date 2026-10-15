@@ -21,6 +21,7 @@ const (
 	codeScratch          ledger.Code = "LEDGER_SYNTHETIC_TEMP_UNAVAILABLE"
 	codeScratchCleanup   ledger.Code = "LEDGER_SYNTHETIC_CLEANUP_UNAVAILABLE"
 	codeAdminKey         ledger.Code = "LEDGER_RUNTIME_KEY_INVALID"
+	codeVolumeOptions    ledger.Code = "LEDGER_VOLUME_OPTIONS_INVALID"
 	codeListen           ledger.Code = "LEDGER_LISTEN_INVALID"
 	codeBind             ledger.Code = "LEDGER_LISTENER_START_UNAVAILABLE"
 	codeServe            ledger.Code = "LEDGER_HTTP_SERVE_UNAVAILABLE"
@@ -34,8 +35,16 @@ const (
 func runtimeFailure(code ledger.Code, stage, constraint, outcome, next string) *ledger.Diagnostic {
 	kind := failuretype.RuntimeSetupUnknown
 	switch code {
-	case codeSyntheticOptions, codeAdminKey, codeListen, "LEDGER_OPERATOR_SETUP_INVALID":
+	case codeSyntheticOptions, codeAdminKey, codeVolumeOptions, codeVolumeInput, codeVolumeKey, codeListen, "LEDGER_OPERATOR_SETUP_INVALID":
 		kind = failuretype.RequestInvalid
+	case codeVolumeRejected:
+		kind = failuretype.AuthenticationRefused
+	case codeVolumePlatform:
+		kind = failuretype.PolicyRefused
+	case codeVolumeCancelled:
+		kind = failuretype.Cancelled
+	case codeVolumeDeadline:
+		kind = failuretype.DeadlineExceeded
 	case codeBind, codeServe:
 		kind = failuretype.RuntimeServeUnknown
 	case codeShutdown, codeScratchCleanup:
@@ -54,13 +63,13 @@ func validateListen(address string) error {
 	return validateModeListen(address, false)
 }
 
-func validateModeListen(address string, synthetic bool) error {
+func validateModeListen(address string, allowWildcard bool) error {
 	host, port, err := net.SplitHostPort(address)
 	ip, ipErr := netip.ParseAddr(host)
 	n, portErr := strconv.ParseUint(port, 10, 16)
-	if err != nil || ipErr != nil || !(ip.IsLoopback() || (synthetic && ip.IsUnspecified())) || ip.Zone() != "" || portErr != nil || strconv.FormatUint(n, 10) != port {
-		if synthetic {
-			return runtimeFailure(codeListen, "startup", "numeric_loopback_or_wildcard_and_port", "no_effect", "Select a numeric loopback or wildcard address and numeric port for synthetic-serve. Hostnames, zones and other interfaces are not permitted.")
+	if err != nil || ipErr != nil || !(ip.IsLoopback() || (allowWildcard && ip.IsUnspecified())) || ip.Zone() != "" || portErr != nil || strconv.FormatUint(n, 10) != port {
+		if allowWildcard {
+			return runtimeFailure(codeListen, "startup", "numeric_loopback_or_wildcard_and_port", "no_effect", "Select a numeric loopback or wildcard address and numeric port for the explicitly selected network mode. Hostnames, zones and other interfaces are not permitted.")
 		}
 		return runtimeFailure(codeListen, "startup", "numeric_loopback_and_port", "no_effect", "Select a numeric loopback address and port for local acceptance. Wildcard, remote and hostname listeners are not authorized.")
 	}

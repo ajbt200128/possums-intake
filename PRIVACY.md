@@ -18,6 +18,14 @@ These restrictions apply to real data in every environment. A Honeycomb destinat
 - Tinfoil controls infrastructure/networking and can observe metadata and disk access patterns. Customer-key-encrypted volumes are beta and do not detect rollback of old valid state. Attestation exposure does not establish verification, freshness, storage unlock, absence of retention or immunity to legal process.
 - Future Stripe processing introduces provider/payment metadata outside the enclave. Monero introduces wallet/key, confirmation and chain-observation boundaries. Define and approve those retention/replay requirements separately; do not collect payment history now in anticipation.
 
+## Selected persistent-volume key custody
+
+For the standalone synthetic permanent-storage packet, the operator explicitly chose **Tinfoil-managed secret delivery** after disclosure that the platform holds the original disk key and can decrypt the disk. This supersedes the earlier customer-only-key/attended-unlock choice for this packet. Automatic startup unlock is intended; keep an independent copy of the original key in the operator's password manager. No customer-controlled confidentiality from Tinfoil is claimed.
+
+The application may consume the base64 volume-key environment variable solely to send the supported runtime unlock request to the local volume control socket. Keys remain forbidden in source, command arguments, chat, diagnostics, telemetry and ledger records. Removing an environment variable prevents later child inheritance; it does not prove process-memory erasure, platform-secret deletion or whole-host transience. Platform control-plane secret retention/access is a separate accepted custody boundary, not verified by local tests. Do not add a keyserver, SSH server or network key-upload receiver for this selected input path.
+
+Blank-disk initialization remains explicit and separate from ordinary unlock. No initialization on key loss, copied spendable replicas, scheduled backups or financial rollback recovery is authorized. No real-data use, gateway privacy change or telemetry export follows. Implementation and remaining activation gates are recorded in [permanent storage](docs/permanent-storage.md).
+
 ## Trusted intake manual-admin exception
 
 The operator selected unrestricted **stock PocketBase native administration**, accepting financial/schema/identity edits, deletion, backups/restore and stock file-token downloads. This intake-only standing policy supersedes older restricted-native UI/input/route requirements and the blanket stock backup-token URL ban; it does not change gateway privacy, custom shared-key accounting, telemetry allowlists or default no scheduled/external backups. Native authentication and collection rules remain SDK-owned. Initial ledger nil rules still require a superuser; admins have authority to change rules and schema.
