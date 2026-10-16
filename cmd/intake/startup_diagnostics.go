@@ -17,8 +17,8 @@ import (
 	"possums-intake/internal/ledger"
 )
 
-// This is disposable synthetic-container evidence, not a ledger, log or
-// readiness authority. Neither TMPDIR nor command options select its location.
+// This is opt-in synthetic-container evidence, not real-data authorization,
+// a ledger, log or readiness authority. Neither TMPDIR nor options select its location.
 const (
 	startupDirectory = "possums-intake-startup"
 	startupFilename  = "record.json"
@@ -29,12 +29,13 @@ const (
 type startupPhase string
 
 const (
-	phaseValidation startupPhase = "validation"
-	phaseScratch    startupPhase = "scratch_create"
-	phaseInit       startupPhase = "initialize"
-	phaseOpen       startupPhase = "open"
-	phaseHandler    startupPhase = "operator_handler"
-	phaseBind       startupPhase = "listener_bind"
+	phaseValidation    startupPhase = "validation"
+	phaseVolumePrepare startupPhase = "volume_prepare"
+	phaseScratch       startupPhase = "scratch_create"
+	phaseInit          startupPhase = "initialize"
+	phaseOpen          startupPhase = "open"
+	phaseHandler       startupPhase = "operator_handler"
+	phaseBind          startupPhase = "listener_bind"
 )
 
 type startupRecord struct {
@@ -45,13 +46,31 @@ type startupRecord struct {
 }
 
 type startupRecorder struct {
-	phase    startupPhase
-	bound    bool
-	failed   bool
-	write    func(startupRecord) *ledger.Diagnostic
-	stderr   io.Writer
-	observer failureowner.Observer
-	timer    func(time.Duration) *time.Timer
+	pendingManaged bool // No recording or hold until actual parsed scope is confirmed.
+	phase          startupPhase
+	bound          bool
+	failed         bool
+	write          func(startupRecord) *ledger.Diagnostic
+	stderr         io.Writer
+	observer       failureowner.Observer
+	timer          func(time.Duration) *time.Timer
+}
+
+// Only the explicit mode and exact opt-in select a recorder here. Managed
+// scope is confirmed later by the actual flag parser, never by rescanning argv.
+func startupRecorderForArgs(args []string) *startupRecorder {
+	if len(args) == 0 {
+		return nil
+	}
+	if args[0] == "synthetic-serve" && os.Getenv("LEDGER_SYNTHETIC_STARTUP_DIAGNOSTICS") == "true" {
+		return newStartupRecorder()
+	}
+	if args[0] == "serve" && os.Getenv("LEDGER_MANAGED_STARTUP_DIAGNOSTICS") == "true" {
+		r := newStartupRecorder()
+		r.pendingManaged = true
+		return r
+	}
+	return nil
 }
 
 func newStartupRecorder() *startupRecorder {
@@ -81,7 +100,7 @@ func (s *startupRecorder) listenerBound() {
 }
 
 func (s *startupRecorder) finish(ctx context.Context, err error) {
-	if s == nil || s.bound || err == nil {
+	if s == nil || s.pendingManaged || s.bound || err == nil {
 		return
 	}
 	s.record(startupRecord{1, "failed", s.phase, startupFailureCode(s.phase, err)})
@@ -96,7 +115,7 @@ func (s *startupRecorder) finish(ctx context.Context, err error) {
 // The recorder alone owns the helper's failure. Disable further attempts before
 // reporting; diagnostic availability never controls startup or hold decisions.
 func (s *startupRecorder) record(r startupRecord) {
-	if s.failed {
+	if s.pendingManaged || s.failed {
 		return
 	}
 	if fault := s.write(r); fault != nil {
@@ -148,6 +167,8 @@ func startupUnknown(phase startupPhase) ledger.Code {
 	switch phase {
 	case phaseValidation:
 		return "SYNTHETIC_VALIDATION_CAUSE_UNKNOWN"
+	case phaseVolumePrepare:
+		return codeVolumeUnknown
 	case phaseScratch:
 		return "SYNTHETIC_SCRATCH_CAUSE_UNKNOWN"
 	case phaseInit:
@@ -180,6 +201,13 @@ func startupCodeAllowed(phase startupPhase, code ledger.Code) bool {
 	case phaseValidation:
 		switch code {
 		case codeSyntheticOptions, codeAdminKey, codeListen, "LEDGER_OPERATOR_SETUP_INVALID":
+			return true
+		}
+	case phaseVolumePrepare:
+		switch code {
+		case codeVolumeInput, codeVolumeKey, codeVolumeRejected, codeVolumeCancelled,
+			codeVolumeDeadline, codeVolumeSocket, codeVolumeExchange, codeVolumeMount,
+			codeVolumeCleanup, codeVolumeUnknown, codeVolumePlatform:
 			return true
 		}
 	case phaseScratch:
@@ -444,6 +472,32 @@ func startupHealthDiagnostic(r startupRecord) *ledger.Diagnostic {
 		constraint, next = "numeric_synthetic_listener", "Select a numeric loopback or wildcard listener and canonical numeric port."
 	case "LEDGER_OPERATOR_SETUP_INVALID":
 		constraint, next = "valid_runtime_operator_setup", "Supply valid throwaway runtime operator credentials and the qualified operator setup; inspect privately, never print credentials."
+	case codeVolumeInput:
+		constraint, next = "canonical_name_and_absolute_ledger_child", "Volume input does not meet the local name/state-path constraint. Inspect the volume declaration and state path privately."
+	case codeVolumeKey:
+		constraint, next = "canonical_standard_base64_32_bytes", "The managed key input must be present, canonical standard base64 encoding exactly 32 bytes. Check encoding and size privately; this does not establish that the disk key is wrong."
+	case codeVolumeRejected:
+		constraint, next = "accepted_volume_control_response", "The control endpoint rejected the operation; the rejection reason is unknown. Inspect platform state privately."
+	case codeVolumeCancelled:
+		constraint, next = "operation_cancelled", "Volume preparation observed cancellation before readiness. Inspect the primary diagnostic and platform state privately."
+	case codeVolumeDeadline:
+		constraint, next = "operation_deadline_exceeded", "Volume preparation exceeded its deadline before readiness. Inspect the primary diagnostic and platform state privately."
+	case codeVolumeSocket:
+		constraint, next = "available_safe_control_socket", "The local control socket could not be qualified or accessed; cause unknown. Inspect runtime socket ownership and permissions privately."
+	case codeVolumeExchange:
+		constraint, next = "completed_volume_control_exchange", "The bounded control exchange did not complete as required; cause unknown. Inspect the primary diagnostic and platform state privately."
+	case codeVolumeMount:
+		constraint, next = "verified_dedicated_writable_mount", "The dedicated writable volume mount was not verified; cause unknown. Inspect the original mount and state path privately."
+	case codeVolumeCleanup:
+		constraint, next = "confirmed_volume_resource_closure", "Local volume resource closure is unconfirmed; cause unknown. Inspect the primary diagnostic and runtime privately."
+	case codeVolumePlatform:
+		constraint, next = "supported_linux_runtime", "Managed volume preparation requires the supported Linux runtime. Inspect the selected runtime privately."
+	case codeVolumeUnknown:
+		constraint, next = "completed_volume_preparation", "Underlying volume preparation cause unknown. Inspect the primary diagnostic and platform state privately."
+	}
+	if r.Phase == phaseVolumePrepare {
+		// The record retains only the code, not packet progress or cleanup evidence.
+		next += " Readiness is unconfirmed; volume operation and cleanup outcomes may be unknown. Preserve the original disk/key and primary diagnostic; do not retry initialization, reset or restore state."
 	}
 	return healthDiagnostic(r.Code, string(r.Phase), constraint, next)
 }

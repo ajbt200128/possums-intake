@@ -33,11 +33,7 @@ func executeObserved(ctx context.Context, args []string, observer failureowner.O
 	if len(args) > 0 && args[0] == "synthetic-healthcheck" {
 		return syntheticHealthcheck(ctx, args[1:])
 	}
-	var startup *startupRecorder
-	if len(args) > 0 && args[0] == "synthetic-serve" && os.Getenv("LEDGER_SYNTHETIC_STARTUP_DIAGNOSTICS") == "true" {
-		startup = newStartupRecorder()
-	}
-	return executeRecorded(ctx, args, observer, startup)
+	return executeRecorded(ctx, args, observer, startupRecorderForArgs(args))
 }
 
 func executeRecorded(ctx context.Context, args []string, observer failureowner.Observer, startup *startupRecorder) error {
@@ -110,6 +106,12 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 	if *initializeVolume && (mode != "init" || *volumeName == "") {
 		return runtimeFailure(codeVolumeOptions, "volume_options", "explicit_init_and_named_volume", "no_effect", "Use --initialize-volume only with init and --tinfoil-volume for a deliberately new blank disk. Never use it to recover existing state.")
 	}
+	// The managed exception is inert until the real parser and volume-option
+	// boundary confirm explicit existing-only serving. It grants no init authority.
+	if startup != nil && startup.pendingManaged && mode == "serve" && *volumeName != "" && !*initializeVolume {
+		startup.pendingManaged = false
+		startup.checkpoint(phaseValidation)
+	}
 	if mode == "init" {
 		listenSet := false
 		flags.Visit(func(f *flag.Flag) { listenSet = listenSet || f.Name == "listen" })
@@ -152,6 +154,7 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 		return runtimeFailure(codeAdminKey, "startup", "runtime_admin_key_at_least_32_bytes", "no_effect", "Inject a high-entropy admin key of at least 32 bytes through LEDGER_ADMIN_KEY. Never put it in command arguments or logs.")
 	}
 	if *volumeName != "" {
+		startup.checkpoint(phaseVolumePrepare)
 		if err := prepareManagedVolume(ctx, *volumeName, *dir, false); err != nil {
 			return err
 		}
