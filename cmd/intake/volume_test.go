@@ -183,11 +183,28 @@ func TestVolumeKnownFailureKinds(t *testing.T) {
 
 func TestVolumeMountEvidence(t *testing.T) {
 	valid := "31 25 253:7 / /state rw,nosuid shared:1 - ext4 /dev/mapper/disk rw,errors=remount-ro\n"
+	placeholder := "45 25 0:42 / /state ro shared:1 - tmpfs none rw\n"
+	otherID := strings.Replace(valid, "31 ", "32 ", 1)
 	for _, test := range []struct {
 		name, data string
 		valid      bool
 	}{
 		{"exact", valid, true},
+		{"covered_placeholder_first_opened_id_not_greatest", placeholder + valid, true},
+		{"covered_placeholder_last_opened_id_not_greatest", valid + placeholder, true},
+		{"opened_id_greatest", strings.Replace(placeholder, "45 ", "30 ", 1) + valid, true},
+		{"missing_selected_id", placeholder + otherID, false},
+		{"zero_record_id", strings.Replace(valid, "31 ", "0 ", 1), false},
+		{"malformed_record_id", strings.Replace(valid, "31 ", "HOSTILE ", 1), false},
+		{"overflow_record_id", strings.Replace(valid, "31 ", "18446744073709551616 ", 1), false},
+		{"malformed_other_id", valid + strings.Replace(placeholder, "45 ", "HOSTILE ", 1), false},
+		{"duplicate_selected_elsewhere", valid + strings.Replace(valid, "/state", "/other", 1), false},
+		{"duplicate_selected_elsewhere_first", strings.Replace(valid, "/state", "/other", 1) + valid, false},
+		{"duplicate_selected_numeric_id", valid + strings.Replace(valid, "31 ", "031 ", 1), false},
+		{"selected_wrong_target_with_valid_other_id", strings.Replace(valid, "/state", "/other", 1) + otherID, false},
+		{"selected_ro_with_writable_other_id", strings.Replace(valid, "rw,nosuid", "ro,nosuid", 1) + otherID, false},
+		{"selected_wrong_device_with_valid_other_id", strings.Replace(valid, "253:7", "253:8", 1) + otherID, false},
+		{"selected_nonblock_with_valid_other_id", strings.Replace(valid, "/dev/mapper/disk", "none", 1) + otherID, false},
 		{"parent", strings.Replace(valid, "/state", "/", 1), false},
 		{"child", strings.Replace(valid, "/state", "/state/child", 1), false},
 		{"wrong_device", strings.Replace(valid, "253:7", "253:8", 1), false},
@@ -198,11 +215,13 @@ func TestVolumeMountEvidence(t *testing.T) {
 		{"contradictory", strings.Replace(valid, "rw,nosuid", "rw,ro,nosuid", 1), false},
 		{"ephemeral", strings.Replace(valid, "ext4", "tmpfs", 1), false},
 		{"nonblock", strings.Replace(valid, "/dev/mapper/disk", "none", 1), false},
+		{"fuse", strings.Replace(valid, "ext4", "fuseblk", 1), false},
 		{"duplicate", valid + valid, false},
-		{"child_bind_same_device", valid + strings.Replace(valid, "/state", "/state/ledger", 1), false},
-		{"child_bind_other_device", valid + strings.Replace(strings.Replace(valid, "/state", "/state/ledger", 1), "253:7", "253:8", 1), false},
-		{"nested_child_mount", valid + strings.Replace(valid, "/state", "/state/ledger/data.db", 1), false},
-		{"unrelated_lost_found_mount", valid + strings.Replace(valid, "/state", "/state/lost+found", 1), true},
+		{"child_bind_same_device", valid + strings.Replace(otherID, "/state", "/state/ledger", 1), false},
+		{"child_bind_other_device", valid + strings.Replace(strings.Replace(otherID, "/state", "/state/ledger", 1), "253:7", "253:8", 1), false},
+		{"nested_child_mount", valid + strings.Replace(otherID, "/state", "/state/ledger/data.db", 1), false},
+		{"covered_layout_child_bind", placeholder + valid + strings.Replace(otherID, "/state", "/state/ledger", 1), false},
+		{"unrelated_lost_found_mount", valid + strings.Replace(otherID, "/state", "/state/lost+found", 1), true},
 		{"truncated", "31 25 253:7 / /state rw - ext4\n", false},
 		{"unterminated", strings.TrimSuffix(valid, "\n"), false},
 		{"bad_escape", strings.Replace(valid, "/state", `/st\999ate`, 1), false},
@@ -210,7 +229,7 @@ func TestVolumeMountEvidence(t *testing.T) {
 		{"total_bound", valid + strings.Repeat("1 2 0:1 / /other rw - tmpfs none rw\n", 40000), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := hasVolumeMount(context.Background(), strings.NewReader(test.data), "/state", 253, 7); got != test.valid {
+			if got := hasVolumeMount(context.Background(), strings.NewReader(test.data), "/state", 31, 253, 7); got != test.valid {
 				t.Fatal("mount evidence verdict mismatch")
 			}
 		})
@@ -218,8 +237,16 @@ func TestVolumeMountEvidence(t *testing.T) {
 	if got, ok := decodeMountField(`/state\040space\134name`); !ok || got != "/state space\\name" {
 		t.Fatal("kernel mount escape decoding")
 	}
-	if hasVolumeMount(context.Background(), failingVolumeReader{}, "/state", 253, 7) {
+	if hasVolumeMount(context.Background(), failingVolumeReader{}, "/state", 31, 253, 7) {
 		t.Fatal("read failure accepted")
+	}
+	if hasVolumeMount(context.Background(), strings.NewReader(valid), "/state", 0, 253, 7) {
+		t.Fatal("zero opened mount identity accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if hasVolumeMount(ctx, strings.NewReader(valid), "/state", 31, 253, 7) {
+		t.Fatal("cancelled mount evidence accepted")
 	}
 }
 

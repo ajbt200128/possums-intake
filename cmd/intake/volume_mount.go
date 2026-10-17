@@ -14,7 +14,10 @@ const volumeMountInfoLimit = 1024 * 1024
 
 // This checks kernel mount evidence, not physical durability, disk identity or
 // Tinfoil's actual filesystem type. Those still require platform qualification.
-func hasVolumeMount(ctx context.Context, input io.Reader, state string, major, minor uint32) bool {
+func hasVolumeMount(ctx context.Context, input io.Reader, state string, expectedID uint64, major, minor uint32) bool {
+	if expectedID == 0 {
+		return false
+	}
 	child := filepath.Join(state, "ledger")
 	limited := &io.LimitedReader{R: input, N: volumeMountInfoLimit + 1}
 	scanner := bufio.NewScanner(limited)
@@ -35,6 +38,10 @@ func hasVolumeMount(ctx context.Context, input io.Reader, state string, major, m
 		if len(fields) < 10 {
 			return false
 		}
+		mountID, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil || mountID == 0 {
+			return false
+		}
 		separator := 6
 		for separator < len(fields) && fields[separator] != "-" {
 			separator++
@@ -49,10 +56,15 @@ func hasVolumeMount(ctx context.Context, input io.Reader, state string, major, m
 		if mount == child || strings.HasPrefix(mount, child+"/") {
 			return false // Even a same-device bind can redirect accounting paths.
 		}
-		if mount != state {
+		// Covered mounts may share the target. Only the opened descriptor's
+		// kernel identity selects the mount; record ordering carries no authority.
+		if mountID != expectedID {
 			continue
 		}
 		matches++
+		if mount != state || matches != 1 {
+			return false
+		}
 		device := strings.Split(fields[2], ":")
 		if len(device) != 2 {
 			return false
