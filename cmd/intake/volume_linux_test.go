@@ -334,6 +334,27 @@ func TestVolumeLedgerChildPreservesFilesystemEntries(t *testing.T) {
 	}
 }
 
+func TestVolumeMountIDOpenedFD(t *testing.T) {
+	fd, err := unix.Open(t.TempDir(), unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal("mount identity fixture unavailable")
+	}
+	defer func() {
+		if unix.Close(fd) != nil {
+			t.Error("mount identity fixture closure unconfirmed")
+		}
+	}()
+	if id, ok := volumeMountID(fd); !ok || id == 0 {
+		t.Fatal("opened directory mount identity unavailable")
+	}
+}
+
+func TestVolumeMountIDInvalidFD(t *testing.T) {
+	if id, ok := volumeMountID(-1); ok || id != 0 {
+		t.Fatal("invalid descriptor mount identity accepted")
+	}
+}
+
 func TestVolumeMountRejectsDirectorySymlinkAndMissing(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "link")

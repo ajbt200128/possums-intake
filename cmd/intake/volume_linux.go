@@ -123,15 +123,28 @@ func verifyVolumeMount(ctx context.Context, state string, progress *volumeProgre
 	if err != nil || actual != mount {
 		return volumeOperationFailure(ctx, err, codeVolumeMount, "volume_mount", "unchanged_exact_mount_path", progress)
 	}
+	mountID, ok := volumeMountID(fd)
+	if !ok {
+		return volumeOperationFailure(ctx, nil, codeVolumeMount, "volume_mount", "opened_mount_identity_unavailable_cause_unknown", progress)
+	}
 	mounts, err := os.Open("/proc/self/mountinfo")
 	if err != nil {
 		return volumeOperationFailure(ctx, err, codeVolumeMount, "volume_mount", "mount_evidence_open_cause_unknown", progress)
 	}
 	defer closeVolumeResource(mounts.Close, &result, progress)
-	if !hasVolumeMount(ctx, mounts, mount, unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev))) {
+	if !hasVolumeMount(ctx, mounts, mount, mountID, unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev))) {
 		return volumeOperationFailure(ctx, nil, codeVolumeMount, "volume_mount", "exact_dedicated_block_mount_rw_without_child_mount_required", progress)
 	}
 	return verifyVolumeChild(ctx, fd, uint64(stat.Dev), progress)
+}
+
+func volumeMountID(fd int) (uint64, bool) {
+	var stat unix.Statx_t
+	if unix.Statx(fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &stat) != nil ||
+		stat.Mask&unix.STATX_MNT_ID == 0 || stat.Mnt_id == 0 {
+		return 0, false
+	}
+	return stat.Mnt_id, true
 }
 
 // Missing ledger is permitted only after the caller verifies its exact parent
