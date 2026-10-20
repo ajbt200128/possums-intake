@@ -20,6 +20,27 @@ Implementation orchestration mixes Possums DeepSeek v4.1 Flash for bounded routi
 
 `PLAN.md` pins the local execution contract (PocketBase v0.40.5, exact money/API schema, immutable timeouts, writer/RPC budgets, replay-safe bounded keys, storage and startup policy). `PRIVACY.md` governs accounting/telemetry boundaries. The operator has separately authorized commits/pushes to `ajbt200128/possums-intake` and preparation of a new **disposable synthetic-only Tinfoil test enclave**, including native operator dashboard login and direct native fake-account creation/editing. Local account-storage/accounting/browser/image qualification passed. An explicit disposable synthetic-serve startup/listener now exists and passed local compiled-CLI/source checks, but no image, release or deployed qualification covers it; see [disposable synthetic startup](docs/synthetic-startup.md) and [synthetic preparation](docs/synthetic-tinfoil.md). The operator authorized one CPU-only 2 CPU / 8192 MB no-volume disposable test instance at actual cost without another price-confirmation gate; no exact rate or spending ceiling is claimed and additional instances remain unauthorized. Do not activate production release/deployment templates by inference. No gateway cutover, real funds, real telemetry export or payments are authorized. Real-data/operator trust and access decisions remain separate gates.
 
+## Local customer website
+
+The three-page ELPS website is now wired into ordinary `serve` and disposable
+`synthetic-serve` by default in local source. Explicit `init` adds the initial
+website/auth schema; `website-init --state ...` adds compatible website setup to
+an existing stopped synthetic ledger without resetting balances, credentials or
+valid published code. Serve/login never initialize or seed state. Stock native
+key provisioning, scoped account snapshots and live publication passed the
+[combined browser qualification](docs/customer-site-browser.md).
+
+The ordinary runtime assumes Tinfoil's HTTPS ingress and uses stock memory-only,
+process-lifetime session cleanup; secure cookies and HTTPS same-origin CSRF remain.
+See [runtime behavior and limits](docs/website-runtime.md). Combined local
+[image/vendor/runtime qualification](docs/website-image.md) passed; exact-main
+native release and deployment gates remain separate from real-data acceptance.
+
+The separate `website-local` loopback HTTPS demo remains disposable, uses a public
+fake key and never opens existing state. Its [walkthrough](docs/lisp-website-local.md)
+and [evidence](docs/lisp-website-evidence.md) remain separate from ordinary customer
+provisioning. Complete accessibility/Tor checks remain open.
+
 ## Existing decisions
 
 Read the sibling gateway's `../possums/AGENTS.md`, `../possums/SPEC.md`, `../possums/OVERALL_PLAN.md` and `../possums/PRIVACY.md`. The original store design is preserved in gateway Git history at `7ee4604:OVERALL_PLAN.md`; historical browser, buffering, weak account-number, post-completion debit and privacy-guarantee assumptions are superseded by current policy.
