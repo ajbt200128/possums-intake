@@ -1,0 +1,5 @@
+(site:get 'public-home "/" 'public 'public-home)
+(site:get 'login "/login" 'public 'login-page)
+(site:get 'signed-home "/home" 'session 'signed-home)
+(site:post 'sign-in "/login" 'public 'auth/login 'signed-home 'login)
+(site:post 'sign-out "/logout" 'session 'auth/logout 'public-home 'signed-home)

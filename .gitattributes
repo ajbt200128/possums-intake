@@ -1,0 +1,2 @@
+# Preserve the checksum-pinned upstream license bytes, including its whitespace.
+internal/website/assets/OFL.txt -whitespace

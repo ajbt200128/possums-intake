@@ -16,6 +16,7 @@ import (
 	"possums-intake/internal/failureowner"
 	"possums-intake/internal/failuretype"
 	"possums-intake/internal/ledger"
+	"possums-intake/internal/siteauth"
 )
 
 //go:embed ui/dist
@@ -45,6 +46,7 @@ func NewHandlerObserved(accounting http.Handler, app core.App, service *ledger.S
 		return nil, err
 	}
 	r.Unbind(apis.DefaultActivityLoggerMiddlewareId, apis.DefaultPanicRecoverMiddlewareId)
+	r.Bind(siteauth.CustomerKeyMiddleware())
 	// The stock restore controller returns before its background operation.
 	// Own errors at the supported restore hook, not as HTTP success/activity.
 	app.OnBackupRestore().Bind(&hook.Handler[*core.BackupEvent]{
@@ -184,6 +186,9 @@ func closedNativeErrors(e *core.RequestEvent) (result error) {
 	}
 	if e.Written() {
 		panic(http.ErrAbortHandler)
+	}
+	if customerKeyFailure(e.Response, status, err) || websitePublicationFailure(e.Response, status, err) {
+		return nil
 	}
 	failure(e.Response, status, nativeStage(e.Request.URL.Path), "native_operation_cause_unknown")
 	return nil

@@ -1,0 +1,35 @@
+{
+  "manifest_version": 1,
+  "notes": "Pinned static font assets for the local three-page site. SHA-256 values were recomputed from the on-disk files after extraction. Family/style/weight values are taken from the release's own IosevkaTerm.css, which maps these exact filenames; the internal name/OS2 tables were not independently parsed (no fontTools available locally), so this is corroborating release metadata, not a parsed-font claim.",
+  "assets": [
+    {
+      "path": "iosevka-term-regular.woff2",
+      "family": "Iosevka Term Web",
+      "style": "normal",
+      "weight": 400,
+      "weight_name": "Regular",
+      "format": "woff2",
+      "flavor": "truetype",
+      "bytes": 1703712,
+      "sha256": "2921da08b32396422927bb76e3618938e13ede0b3dfb1785d5ca9d88df863752"
+    },
+    {
+      "path": "iosevka-term-bold.woff2",
+      "family": "Iosevka Term Web",
+      "style": "normal",
+      "weight": 700,
+      "weight_name": "Bold",
+      "format": "woff2",
+      "flavor": "truetype",
+      "bytes": 1724824,
+      "sha256": "3f9db216e17c47e03fd0c392b17e3a2f7cbd568c1bc4a8dfb165a106df273753"
+    }
+  ],
+  "license": {
+    "path": "OFL.txt",
+    "spdx": "OFL-1.1",
+    "copyright": "Copyright (c) 2015-2026, Renzhi Li (aka. Belleve Invis, belleve@typeof.net)",
+    "bytes": 4493,
+    "sha256": "4ba53c7c1cb39279aae5f8d7d22054c485c71169920e5a36ed098b115e2e3c5d"
+  }
+}
