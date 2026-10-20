@@ -57,6 +57,10 @@ func TestTooltipAndInteractiveHighlightStyles(t *testing.T) {
 	css := r.CSS()
 	for _, want := range []string{
 		".face-tooltip{font-style:italic;font-synthesis:style}",
+		"input{color:inherit;background:color-mix(in srgb,currentColor 10%,transparent);border-color:transparent}",
+		"input:focus{border-color:" + r.Style.Border + ";outline:none}",
+		"input{color:FieldText;background:Field;border-color:transparent}",
+		"input:focus{border-color:Highlight;outline:2px solid Highlight;outline-offset:1px}",
 		"a:hover,button:hover,a:focus-visible,button:focus-visible{color:" + r.Style.Paper + ";background:" + r.Style.Link + "}",
 		"button:hover,button:focus-visible{border-color:transparent}",
 		"a:hover,button:hover,a:focus-visible,button:focus-visible{color:HighlightText;background:Highlight}",

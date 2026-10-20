@@ -109,7 +109,23 @@ try {
     await provision('C'.repeat(64), 'synthetic-site-b');
     const login = async (page, key) => {
         await page.goto(origin+'/login', {waitUntil:'networkidle'});
-        await page.locator('#key').fill(key);
+        const field = page.locator('#key');
+        const face = () => field.evaluate(element => {
+            const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+            return {background:style.backgroundColor, border:style.borderTopColor, outline:style.outlineStyle, width:rect.width, height:rect.height};
+        });
+        await field.evaluate(element => element.blur());
+        const resting = await face();
+        ensure(resting.border === 'rgba(0, 0, 0, 0)' && resting.background !== 'rgba(0, 0, 0, 0)');
+        await field.click();
+        const focused = await face();
+        ensure(focused.border !== resting.border && focused.outline === 'none');
+        ensure(focused.width === resting.width && focused.height === resting.height);
+        await field.press('Tab');
+        await page.keyboard.press('Shift+Tab');
+        ensure(await field.evaluate(element => element === document.activeElement));
+        ensure((await face()).border === focused.border);
+        await field.fill(key);
         await page.getByRole('button', {name:'Sign in',exact:true}).click();
         await page.waitForURL(origin+'/home');
         await page.waitForLoadState('networkidle');
