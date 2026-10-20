@@ -22,7 +22,7 @@
           doCheck = true;
           checkPhase = ''
             runHook preCheck
-            go test -p 1 -mod=vendor ./cmd/... ./internal/...
+            go test -p 1 -mod=vendor ./cmd/... ./internal/... ./pkg/...
             runHook postCheck
           '';
         });

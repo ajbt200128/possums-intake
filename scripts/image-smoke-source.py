@@ -15,11 +15,57 @@ r.CODES.update({
     "source_snapshot": ("local_source", "stable_declared_public_inputs", "Select a new empty snapshot outside the checkout and wait for source edits to finish. No Git files were staged or committed."),
 })
 
+# Public website inputs are inventoried by exact name: embedded bundle/assets
+# fixtures only, never a folder glob or unrelated files in those directories.
+WEBSITE_DOCUMENTS = {"bundle": ("init.el", "options.el", "pages.el", "routes.el", "shared.el", "style.el"),
+                     "assets": ("iosevka-term-regular.woff2", "iosevka-term-bold.woff2", "OFL.txt")}
+# Provenance kept in the snapshot (not compiled): the manifest the font/license
+# bytes are verified against, and the human-readable license notice.
+WEBSITE_PROVENANCE = ("manifest.json", "NOTICE.md")
+
+
+def regular(root, path):
+    """Reject symlinks in the file and every ancestor below the checkout root."""
+    for parent in reversed(path.relative_to(root).parents):
+        if parent.parts:
+            r.require(not (root / parent).is_symlink(), "source_snapshot")
+    r.require(path.is_file() and not path.is_symlink(), "source_snapshot")
+
+
+def manifest_fonts(path):
+    """Read the declared font/license identity: exact paths, sizes and digests."""
+    try:
+        declared = json.loads(path.read_text())
+        entries = list(declared["assets"]) + [declared["license"]]
+        verified = {entry["path"]: (entry["sha256"], entry["bytes"]) for entry in entries}
+    except (OSError, ValueError, KeyError, TypeError):
+        raise r.Stop("source_snapshot") from None
+    r.require(set(verified) == set(WEBSITE_DOCUMENTS["assets"]), "source_snapshot")
+    r.require(all(type(digest) is str and type(size) is int and size > 0
+                  for digest, size in verified.values()), "source_snapshot")
+    return verified
+
+
+def website(website_root):
+    assets, bundle = website_root / "assets", website_root / "bundle"
+    for base in (website_root, assets, bundle):
+        r.require(base.is_dir() and not base.is_symlink(), "source_snapshot")
+    files = [website_root / folder / name
+             for folder, names in WEBSITE_DOCUMENTS.items() for name in names]
+    files.extend(assets / name for name in WEBSITE_PROVENANCE)
+    for path in files:
+        regular(website_root, path)
+    fonts = manifest_fonts(assets / "manifest.json")
+    for name, (digest, size) in fonts.items():
+        raw = (assets / name).read_bytes()
+        r.require(len(raw) == size and hashlib.sha256(raw).hexdigest() == digest, "source_snapshot")
+    return files
+
 
 def inputs(root):
     files = [root / name for name in ("flake.nix", "flake.lock", "go.mod", "go.sum")]
     for folder, extensions in (("cmd", {".go"}), ("internal", {".go"}), ("nix", {".nix", ".go"}),
-                               ("scripts", {".py"}), (".github/workflows", {".yml"})):
+                               ("pkg", {".go"}), ("scripts", {".py"}), (".github/workflows", {".yml"})):
         base = root / folder
         r.require(not base.is_symlink(), "source_snapshot")
         for path in base.rglob("*"):
@@ -28,6 +74,16 @@ def inputs(root):
             r.require(not path.is_symlink(), "source_snapshot")
             if path.is_file() and path.suffix in extensions:
                 files.append(path)
+    lispsite = root / "pkg/lispsite"
+    if lispsite.exists():
+        for name in WEBSITE_DOCUMENTS["bundle"]:
+            fixture = lispsite / "testdata" / name
+            regular(root, fixture)
+            files.append(fixture)
+    website_root = root / "internal/website"
+    # Older checkouts without the website still snapshot their declared inputs.
+    if website_root.exists():
+        files.extend(website(website_root))
     operator = root / "internal/operator"
     if operator.exists():
         manifest_path = operator / "ui/assets.json"

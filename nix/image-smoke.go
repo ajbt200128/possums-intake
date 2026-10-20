@@ -4,19 +4,27 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"possums-intake/internal/website"
 )
 
 func request(path, body string, status int, key string) ([]byte, error) {
@@ -395,6 +403,10 @@ func run(mode string) error {
 		}
 	case "operator":
 		return operator()
+	case "website":
+		return websiteSmoke(false)
+	case "website-restart":
+		return websiteSmoke(true)
 	case "synthetic-wildcard":
 		return syntheticWildcard()
 	case "synthetic-fresh":
@@ -414,9 +426,351 @@ func run(mode string) error {
 	return nil
 }
 
+// siteClient deliberately transports HTTPS-origin synthetic requests over the
+// private HTTP backend. Secure cookies are handled explicitly, never downgraded
+// by a cookie jar or by changing application/forwarded-header policy.
+type siteClient struct {
+	cookies map[string]*http.Cookie
+}
+
+func (c *siteClient) do(method, path string, form url.Values, status int, location string) ([]byte, error) {
+	req, err := http.NewRequest(method, "http://127.0.0.1:8090"+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("website request unavailable")
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", "https://"+req.URL.Host)
+	}
+	for _, cookie := range c.cookies {
+		req.AddCookie(cookie)
+	}
+	client := http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("website transport unconfirmed")
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
+	if err != nil || len(raw) > 4<<20 || resp.StatusCode != status || resp.Header.Get("Location") != location {
+		return nil, fmt.Errorf("website response unconfirmed")
+	}
+	if !strings.HasPrefix(path, "/_site/") && resp.Header.Get("Cache-Control") != "no-store" {
+		return nil, fmt.Errorf("website cache policy unconfirmed")
+	}
+	for _, cookie := range resp.Cookies() {
+		if (cookie.Name != "__Host-possums" && cookie.Name != "__Host-possums-csrf") || !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Domain != "" || cookie.Path != "/" || cookie.MaxAge > 0 || (!cookie.Expires.IsZero() && cookie.MaxAge >= 0) {
+			return nil, fmt.Errorf("website cookie policy unconfirmed")
+		}
+		if c.cookies == nil {
+			c.cookies = make(map[string]*http.Cookie)
+		}
+		if cookie.MaxAge < 0 {
+			delete(c.cookies, cookie.Name)
+		} else {
+			c.cookies[cookie.Name] = cookie
+		}
+	}
+	return raw, nil
+}
+
+func siteForm(raw []byte) (url.Values, error) {
+	form := url.Values{}
+	for _, name := range []string{"csrf_token", "revision"} {
+		pattern := regexp.MustCompile(`name="` + name + `" value="([^"]+)"`)
+		matches := pattern.FindAllSubmatch(raw, -1)
+		if len(matches) != 1 {
+			return nil, fmt.Errorf("website form evidence unconfirmed")
+		}
+		form.Set(name, html.UnescapeString(string(matches[0][1])))
+	}
+	return form, nil
+}
+
+func websiteKey(index int) string {
+	// Valid 96-character fake keys exercise the native pre-form adapter beyond
+	// the SDK's raw 71-character password bound. Never print these values.
+	return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(81 + index)}, 72))
+}
+
+func siteLogin(c *siteClient, key string) error {
+	raw, err := c.do("GET", "/login", nil, 200, "")
+	if err != nil {
+		return err
+	}
+	form, err := siteForm(raw)
+	if err != nil {
+		return err
+	}
+	form.Set("key", key)
+	_, err = c.do("POST", "/login", form, 303, "/home")
+	if err != nil || c.cookies["__Host-possums"] == nil {
+		return fmt.Errorf("website login unconfirmed")
+	}
+	return nil
+}
+
+func siteSnapshot(c *siteClient, account, other string) error {
+	body, _ := json.Marshal(map[string]string{"account_id": account})
+	raw, err := request("/balance", string(body), 200, os.Getenv("LEDGER_ADMIN_KEY"))
+	var snapshot struct {
+		Available string `json:"available"`
+		Accounts  []struct {
+			Account string `json:"account_id"`
+			Balance string `json:"balance"`
+			Enabled bool   `json:"enabled"`
+		} `json:"account_balance"`
+		Pending []struct {
+			ID       string  `json:"reservation_id"`
+			Key      string  `json:"idempotency_key"`
+			Account  string  `json:"account_id"`
+			Maximum  string  `json:"maximum"`
+			Timeout  int64   `json:"timeout_seconds"`
+			Expires  string  `json:"expires_at"`
+			State    string  `json:"state"`
+			Charged  *string `json:"charged_amount"`
+			Terminal *string `json:"terminal_at"`
+			Retain   *string `json:"retain_until"`
+		} `json:"pending_reservations"`
+	}
+	if err != nil || json.Unmarshal(raw, &snapshot) != nil || len(snapshot.Accounts) != 1 || snapshot.Accounts[0].Account != account || len(snapshot.Pending) != 1 {
+		return &siteProbeFailure{"IMAGE_WEBSITE_BALANCE_API_UNCONFIRMED"}
+	}
+	a := snapshot.Accounts[0]
+	p := snapshot.Pending[0]
+	expiry, parseErr := time.Parse("2006-01-02T15:04:05.000Z", p.Expires)
+	expires := expiry.UnixMilli()
+	if parseErr != nil || p.Account != account || p.State != "active" || p.Charged != nil || p.Terminal != nil || p.Retain != nil || p.Timeout != 600 || expires <= time.Now().UnixMilli() || p.ID == "" || p.Key == "" {
+		return &siteProbeFailure{"IMAGE_WEBSITE_PENDING_UNCONFIRMED"}
+	}
+	want := fmt.Sprintf("Account: %s\nBalance (microunits): %s\nAvailable (microunits): %s\nEnabled: %t\nPending holds (amounts in microunits; timestamps in Unix milliseconds):\n- reservation_id=%s idempotency_key=%s account_id=%s maximum=%s timeout_seconds=%d expires_at=%d state=%s charged_amount=null terminal_at=null retain_until=null\n", strconv.QuoteToASCII(account), a.Balance, snapshot.Available, a.Enabled, strconv.QuoteToASCII(p.ID), strconv.QuoteToASCII(p.Key), strconv.QuoteToASCII(p.Account), p.Maximum, p.Timeout, expires, strconv.QuoteToASCII(p.State))
+	// Account-selector query strings are refused, never used as authority.
+	if _, err := c.do("GET", "/home?account_id="+url.QueryEscape(other), nil, 400, ""); err != nil {
+		return &siteProbeFailure{"IMAGE_WEBSITE_ISOLATION_UNCONFIRMED"}
+	}
+	page, err := c.do("GET", "/home", nil, 200, "")
+	// Strip only host markup, then unescape: this also verifies the complete
+	// contiguous text representation rather than merely matching field names.
+	text := html.UnescapeString(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(string(page), ""))
+	if err != nil {
+		return &siteProbeFailure{"IMAGE_WEBSITE_ACCOUNT_PAGE_UNCONFIRMED"}
+	}
+	if !strings.Contains(text, want) {
+		return &siteProbeFailure{"IMAGE_WEBSITE_COMPLETE_TEXT_UNCONFIRMED"}
+	}
+	if strings.Count(text, "reservation_id=") != 1 || strings.Contains(text, other) || bytes.Contains(page, []byte(os.Getenv("LEDGER_ADMIN_KEY"))) {
+		return &siteProbeFailure{"IMAGE_WEBSITE_ISOLATION_UNCONFIRMED"}
+	}
+	return nil
+}
+
+const sitePublishedLabel = "Synthetic image publication selected"
+
+func siteAssets(c *siteClient, revision *website.Revision) error {
+	assets := map[string]string{
+		"/_site/fonts/iosevka-term-regular.woff2": "2921da08b32396422927bb76e3618938e13ede0b3dfb1785d5ca9d88df863752",
+		"/_site/fonts/iosevka-term-bold.woff2":    "3f9db216e17c47e03fd0c392b17e3a2f7cbd568c1bc4a8dfb165a106df273753",
+		"/_site/fonts/OFL.txt":                    "4ba53c7c1cb39279aae5f8d7d22054c485c71169920e5a36ed098b115e2e3c5d",
+	}
+	// Compile expected CSS from the probe's frozen public source, never from a
+	// digest claimed by the running service or mutable publication record.
+	assets[revision.CSSPath()] = fmt.Sprintf("%x", sha256.Sum256([]byte(revision.CSS())))
+	for path, digest := range assets {
+		raw, err := c.do("GET", path, nil, 200, "")
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != digest {
+			return fmt.Errorf("website frozen asset binding mismatch")
+		}
+	}
+	return nil
+}
+
+type siteProbeFailure struct{ code string }
+
+func (e *siteProbeFailure) Error() string { return "website qualification unconfirmed" }
+
+func websiteSmoke(restarted bool) (result error) {
+	stage := "IMAGE_WEBSITE_NATIVE_AUTH_UNCONFIRMED"
+	defer func() {
+		if _, classified := result.(*siteProbeFailure); result != nil && !classified {
+			result = &siteProbeFailure{stage}
+		}
+	}()
+	key := os.Getenv("LEDGER_ADMIN_KEY")
+	login, _ := json.Marshal(map[string]string{"identity": os.Getenv("LEDGER_OPERATOR_EMAIL"), "password": os.Getenv("LEDGER_OPERATOR_PASSWORD")})
+	raw, err := request("/api/collections/_superusers/auth-with-password", string(login), 200, "")
+	var auth struct {
+		Token string `json:"token"`
+	}
+	if err != nil || json.Unmarshal(raw, &auth) != nil || auth.Token == "" || auth.Token == key {
+		return fmt.Errorf("website native authentication unconfirmed")
+	}
+	token := auth.Token
+	stage = "IMAGE_WEBSITE_PROVISION_UNCONFIRMED"
+	accounts := []string{"website-image-one", "website-image-two"}
+	if !restarted {
+		for index, account := range accounts {
+			body, _ := json.Marshal(map[string]any{"account_id": account, "balance": strconv.Itoa(101 + index), "enabled": true})
+			if _, err := request("/api/collections/ledger_accounts/records", string(body), 200, token); err != nil {
+				return err
+			}
+			body, _ = json.Marshal(map[string]string{"account_id": account, "password": websiteKey(index), "passwordConfirm": websiteKey(index)})
+			if _, err := request("/api/collections/customer_keys/records", string(body), 200, token); err != nil {
+				return err
+			}
+			body, _ = json.Marshal(map[string]any{"account_id": account, "maximum": strconv.Itoa(11 + index), "timeout_seconds": 600})
+			if _, err := request("/reservations", string(body), 200, key); err != nil {
+				return err
+			}
+		}
+	}
+	stage = "IMAGE_WEBSITE_SOURCE_UNCONFIRMED"
+	files, err := website.Bundled()
+	if err != nil {
+		return fmt.Errorf("website frozen source unavailable")
+	}
+	if restarted {
+		files["pages.el"] = strings.ReplaceAll(files["pages.el"], "Private inference, with clear boundaries.", sitePublishedLabel)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	revision, err := website.Prepare(ctx, files)
+	if err != nil {
+		return fmt.Errorf("website frozen compilation unconfirmed")
+	}
+	stage = "IMAGE_WEBSITE_PUBLIC_UNCONFIRMED"
+	guest := &siteClient{}
+	page, err := guest.do("GET", "/", nil, 200, "")
+	label := "Private inference, with clear boundaries."
+	if restarted {
+		label = sitePublishedLabel
+	}
+	if err != nil || !bytes.Contains(page, []byte(label)) || !bytes.Contains(page, []byte(revision.CSSPath())) {
+		return fmt.Errorf("website homepage unconfirmed")
+	}
+	stage = "IMAGE_WEBSITE_ASSETS_UNCONFIRMED"
+	if err := siteAssets(guest, revision); err != nil {
+		return err
+	}
+	if _, err := guest.do("GET", "/home", nil, 303, "/login"); err != nil {
+		return err
+	}
+	stage = "IMAGE_WEBSITE_CUSTOMER_UNCONFIRMED"
+	// A well-formed but unprovisioned key must not grant a session. Native and
+	// accounting bearer authority must not act as website session authority.
+	page, err = guest.do("GET", "/login", nil, 200, "")
+	if err != nil {
+		return err
+	}
+	refusedForm, err := siteForm(page)
+	if err != nil {
+		return err
+	}
+	refusedForm.Set("key", websiteKey(2))
+	if _, err := guest.do("POST", "/login", refusedForm, 401, ""); err != nil {
+		return err
+	}
+	if guest.cookies["__Host-possums"] != nil {
+		return fmt.Errorf("website refused login session mismatch")
+	}
+	for _, credential := range []string{key, token} {
+		if _, err := exchange("GET", "/home", "", 303, credential, 8192); err != nil {
+			return err
+		}
+	}
+	clients := []*siteClient{{}, {}}
+	for index, client := range clients {
+		stage = "IMAGE_WEBSITE_CUSTOMER_UNCONFIRMED"
+		if err := siteLogin(client, websiteKey(index)); err != nil {
+			return err
+		}
+		stage = "IMAGE_WEBSITE_SNAPSHOT_UNCONFIRMED"
+		if err := siteSnapshot(client, accounts[index], accounts[1-index]); err != nil {
+			return err
+		}
+		for _, credential := range []string{"", client.cookies["__Host-possums"].Value} {
+			if _, err := request("/balance", `{"account_id":"website-image-one"}`, 401, credential); err != nil {
+				return err
+			}
+		}
+	}
+	if clients[0].cookies["__Host-possums"].Value == clients[1].cookies["__Host-possums"].Value {
+		return fmt.Errorf("website session isolation unconfirmed")
+	}
+	if !restarted {
+		stage = "IMAGE_WEBSITE_PUBLICATION_UNCONFIRMED"
+		const path = "/api/collections/website_bundles/records/websitebundle01"
+		raw, err = request(path, "", 200, token)
+		var record struct {
+			Draft struct {
+				Host  int               `json:"host"`
+				Files map[string]string `json:"files"`
+			} `json:"draft"`
+		}
+		if err != nil || json.Unmarshal(raw, &record) != nil || record.Draft.Host != 1 || !reflect.DeepEqual(record.Draft.Files, map[string]string(files)) {
+			return fmt.Errorf("website native draft source unconfirmed")
+		}
+		record.Draft.Files["pages.el"] = strings.ReplaceAll(record.Draft.Files["pages.el"], label, sitePublishedLabel)
+		body, _ := json.Marshal(map[string]any{"draft": record.Draft})
+		if _, err := exchange("PATCH", path, string(body), 200, token, 65536); err != nil {
+			return err
+		}
+		page, err = guest.do("GET", "/", nil, 200, "")
+		if err != nil || !bytes.Contains(page, []byte(label)) || bytes.Contains(page, []byte(sitePublishedLabel)) {
+			return fmt.Errorf("website draft isolation unconfirmed")
+		}
+		if _, err := exchange("PATCH", path, `{"publish":true}`, 200, token, 65536); err != nil {
+			return err
+		}
+		page, err = guest.do("GET", "/", nil, 200, "")
+		if err != nil || !bytes.Contains(page, []byte(sitePublishedLabel)) || bytes.Contains(page, []byte(label)) {
+			return fmt.Errorf("website activation unconfirmed")
+		}
+		for index, client := range clients {
+			if err := siteSnapshot(client, accounts[index], accounts[1-index]); err != nil {
+				return err
+			}
+		}
+	}
+	stage = "IMAGE_WEBSITE_LOGOUT_UNCONFIRMED"
+	for _, client := range clients {
+		page, err = client.do("GET", "/home", nil, 200, "")
+		if err != nil {
+			return err
+		}
+		form, err := siteForm(page)
+		if err != nil {
+			return err
+		}
+		stale := &siteClient{cookies: map[string]*http.Cookie{"__Host-possums": client.cookies["__Host-possums"]}}
+		if _, err := client.do("POST", "/logout", form, 303, "/"); err != nil {
+			return err
+		}
+		if client.cookies["__Host-possums"] != nil {
+			return fmt.Errorf("website logout cookie unconfirmed")
+		}
+		if _, err := client.do("GET", "/home", nil, 303, "/login"); err != nil {
+			return err
+		}
+		if _, err := stale.do("GET", "/home", nil, 303, "/login"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func main() {
-	if len(os.Args) != 2 || run(os.Args[1]) != nil {
-		_, _ = io.WriteString(os.Stderr, "{\"code\":\"IMAGE_PROBE_UNCONFIRMED\",\"stage\":\"synthetic_probe\",\"constraint\":\"expected_local_fixture_evidence\",\"outcome\":\"unknown\",\"next_step\":\"Inspect the isolated image fixture privately; never initialize production state.\"}\n")
+	var err error
+	if len(os.Args) == 2 {
+		err = run(os.Args[1])
+	}
+	if len(os.Args) != 2 || err != nil {
+		code := "IMAGE_PROBE_UNCONFIRMED"
+		if failure, ok := err.(*siteProbeFailure); ok {
+			code = failure.code
+		}
+		diagnostic := map[string]string{"code": code, "stage": "synthetic_probe", "constraint": "expected_local_fixture_evidence", "outcome": "unknown", "next_step": "Cause unknown. Inspect the isolated image fixture privately; never initialize production state."}
+		_ = json.NewEncoder(os.Stderr).Encode(diagnostic)
 		os.Exit(1)
 	}
 	_, _ = io.WriteString(os.Stdout, "{\"passed\":true,\"stage\":\"synthetic_probe\"}\n")

@@ -483,6 +483,125 @@ class DeliveryTests(unittest.TestCase):
             self.assertTrue((a / "source-manifest.json").is_file())
             self.stop("source_snapshot", lambda: source_snapshot.snapshot(root, root / "nested"))
 
+    def website_fixture(self, root):
+        """Synthetic website inventory: fixture bytes and a matching manifest."""
+        assets, bundle = root / "internal/website/assets", root / "internal/website/bundle"
+        assets.mkdir(parents=True)
+        bundle.mkdir(parents=True)
+        fonts = {name: b"synthetic-font-" + name.encode() for name in ("iosevka-term-regular.woff2", "iosevka-term-bold.woff2")}
+        license = b"synthetic-ofl-license-fixture"
+        for name, raw in {**fonts, "OFL.txt": license}.items():
+            (assets / name).write_bytes(raw)
+        declared = {"manifest_version": 1,
+                    "assets": [{"path": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                               for name, raw in fonts.items()],
+                    "license": {"path": "OFL.txt", "bytes": len(license), "sha256": hashlib.sha256(license).hexdigest()}}
+        (assets / "manifest.json").write_text(json.dumps(declared))
+        (assets / "NOTICE.md").write_text("synthetic provenance notice")
+        for name in ("init.el", "options.el", "pages.el", "routes.el", "shared.el", "style.el"):
+            (bundle / name).write_text("; synthetic bundle fixture")
+            fixture = root / "pkg/lispsite/testdata" / name
+            fixture.parent.mkdir(parents=True, exist_ok=True)
+            fixture.write_text("; synthetic library fixture")
+        for source in ("cmd/intake/main.go", "internal/website/render.go", "internal/website/assets.go",
+                       "pkg/lispsite/runtime.go", "pkg/lispsite/runtime_test.go"):
+            path = root / source
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic public source")
+        # Declared-but-unimported and private files that must never be copied.
+        for name in ("pkg/lispsite/README.md", "pkg/lispsite/testdata/private.el",
+                     "internal/website/bundle/private.el", "internal/website/assets/secret.woff2",
+                     "internal/website/assets/manifest.bak.json", "internal/website/private.db",
+                     "internal/website/.env"):
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("private-fixture-sentinel")
+        return {"root": root, "assets": assets, "bundle": bundle, "fonts": fonts, "declared": declared}
+
+    def test_source_snapshot_includes_pkg_go_and_declared_website_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "checkout"
+            root.mkdir()
+            for name in ("flake.nix", "flake.lock", "go.mod", "go.sum"):
+                (root / name).write_text("synthetic public input")
+            self.website_fixture(root)
+            self.f = Fake()
+            a, b = Path(directory) / "a", Path(directory) / "b"
+            result_a = source_snapshot.snapshot(root, a)
+            result_b = source_snapshot.snapshot(root, b)
+            self.assertEqual(result_a["source_identity"], result_b["source_identity"])
+            files = set(json.loads((a / "source-manifest.json").read_text())["files"])
+        self.assertIn("pkg/lispsite/runtime.go", files)
+        self.assertIn("pkg/lispsite/runtime_test.go", files)
+        for name in ("init.el", "options.el", "pages.el", "routes.el", "shared.el", "style.el"):
+            self.assertIn("internal/website/bundle/" + name, files)
+            self.assertIn("pkg/lispsite/testdata/" + name, files)
+        for name in ("iosevka-term-regular.woff2", "iosevka-term-bold.woff2", "OFL.txt"):
+            self.assertIn("internal/website/assets/" + name, files)
+        self.assertIn("internal/website/assets/manifest.json", files)
+        self.assertIn("internal/website/assets/NOTICE.md", files)
+        for name in ("pkg/lispsite/README.md", "pkg/lispsite/testdata/private.el",
+                     "internal/website/bundle/private.el", "internal/website/assets/secret.woff2",
+                     "internal/website/assets/manifest.bak.json", "internal/website/private.db",
+                     "internal/website/.env"):
+            self.assertNotIn(name, files)
+
+    def test_source_snapshot_rejects_altered_missing_or_undeclared_website_inputs(self):
+        cases = {
+            "altered_font": lambda f: (f["assets"] / "iosevka-term-bold.woff2").write_bytes(b"altered"),
+            "resized_font": lambda f: (f["assets"] / "iosevka-term-regular.woff2").write_bytes(
+                f["fonts"]["iosevka-term-regular.woff2"] + b" "),
+            "altered_license": lambda f: (f["assets"] / "OFL.txt").write_bytes(b"altered license"),
+            "missing_bundle": lambda f: (f["bundle"] / "style.el").unlink(),
+            "missing_library_fixture": lambda f: (f["root"] / "pkg/lispsite/testdata/style.el").unlink(),
+            "missing_manifest": lambda f: (f["assets"] / "manifest.json").unlink(),
+            "missing_notice": lambda f: (f["assets"] / "NOTICE.md").unlink(),
+            "missing_bundle_directory": lambda f: __import__("shutil").rmtree(f["bundle"]),
+            "manifest_digest": lambda f: (f["assets"] / "manifest.json").write_text(json.dumps(
+                {**f["declared"], "assets": [dict(f["declared"]["assets"][0], sha256="0" * 64), f["declared"]["assets"][1]]})),
+            "manifest_extra_asset": lambda f: (f["assets"] / "manifest.json").write_text(json.dumps(
+                {**f["declared"], "assets": f["declared"]["assets"] + [{"path": "extra.woff2", "bytes": 1, "sha256": "1" * 64}]})),
+            "manifest_malformed": lambda f: (f["assets"] / "manifest.json").write_text("not json"),
+        }
+        for name, alter in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "checkout"
+                root.mkdir()
+                for entry, value in (("flake.nix", "synthetic public input"), ("flake.lock", "synthetic public input"),
+                                     ("go.mod", "synthetic public input"), ("go.sum", "synthetic public input")):
+                    (root / entry).write_text(value)
+                fixture = self.website_fixture(root)
+                alter(fixture)
+                self.stop("source_snapshot", lambda root=root, directory=directory:
+                          source_snapshot.snapshot(root, Path(directory) / "a"))
+                self.assertFalse((Path(directory) / "a").exists())
+
+    def test_source_snapshot_rejects_symlinked_website_inputs(self):
+        for name, target in (("font", "assets/iosevka-term-regular.woff2"), ("ancestor", "assets"),
+                             ("bundle", "bundle"), ("provenance", "assets/NOTICE.md")):
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "checkout"
+                root.mkdir()
+                for entry in ("flake.nix", "flake.lock", "go.mod", "go.sum"):
+                    (root / entry).write_text("synthetic public input")
+                fixture = self.website_fixture(root)
+                if name == "ancestor":
+                    moved = Path(directory) / "outside-assets"
+                    fixture["assets"].rename(moved)
+                    (root / "internal/website/assets").symlink_to(moved, target_is_directory=True)
+                elif name == "bundle":
+                    moved = Path(directory) / "outside-bundle"
+                    fixture["bundle"].rename(moved)
+                    (root / "internal/website/bundle").symlink_to(moved, target_is_directory=True)
+                else:
+                    path = root / "internal/website" / target
+                    real = path.with_name(path.name + ".real")
+                    path.rename(real)
+                    path.symlink_to(real)
+                self.stop("source_snapshot", lambda root=root, directory=directory:
+                          source_snapshot.snapshot(root, Path(directory) / "a"))
+                self.assertFalse((Path(directory) / "a").exists())
+
     def test_fresh_output_guard_is_passive_and_refuses_cached_output(self):
         drvs = ["/nix/store/fixture-" + str(i) + ".drv" for i in range(7)]
         shown = {"derivations": {drvs[0]: {"outputs": {"out": {"path": "/nix/store/fixture-output"}}}}}
@@ -640,14 +759,17 @@ class DeliveryTests(unittest.TestCase):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe", "/synthetic-assets.json")
         with patch.object(fixture, "volume", return_value="synthetic-new-state"), \
                 patch.object(fixture, "once") as once, \
-                patch.object(fixture, "start", return_value="synthetic-server") as start, \
+                patch.object(fixture, "start", side_effect=["synthetic-server", "synthetic-restarted"]) as start, \
                 patch.object(fixture, "exec") as execute, patch.object(fixture, "stop") as stop:
             fixture.native_operator()
         self.assertEqual(once.call_args_list, [call("synthetic-new-state", "init", operator=True),
+                                              call("synthetic-new-state", "operator-privacy", probe=True),
                                               call("synthetic-new-state", "operator-privacy", probe=True)])
-        start.assert_called_once_with("synthetic-new-state", operator=True)
-        execute.assert_called_once_with("synthetic-server", "operator")
-        stop.assert_called_once_with("synthetic-server")
+        self.assertEqual(start.call_args_list, [call("synthetic-new-state", operator=True)] * 2)
+        self.assertEqual(execute.call_args_list, [call("synthetic-server", "operator"),
+                                                call("synthetic-server", "website"),
+                                                call("synthetic-restarted", "website-restart")])
+        self.assertEqual(stop.call_args_list, [call("synthetic-server"), call("synthetic-restarted")])
 
     def test_native_probe_failure_cannot_qualify_privacy_or_hide_failure(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")

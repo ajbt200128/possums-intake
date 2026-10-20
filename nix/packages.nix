@@ -11,22 +11,34 @@ let
   operatorAssets = builtins.attrNames (builtins.fromJSON (builtins.readFile (root + "/internal/operator/ui/assets.json")));
   operatorInputs = [ "internal/operator/ui/assets.json" ]
     ++ map (name: "internal/operator/ui/dist/" + name) operatorAssets;
+  # Public website fixtures embedded by internal/website, named individually so
+  # unrelated files in those folders (and any future additions) stay out.
+  websiteInputs = map (name: "internal/website/bundle/" + name)
+      [ "init.el" "options.el" "pages.el" "routes.el" "shared.el" "style.el" ]
+    ++ map (name: "internal/website/assets/" + name)
+      [ "iosevka-term-regular.woff2" "iosevka-term-bold.woff2" "OFL.txt" ];
+  lispsiteFixtures = map (name: "pkg/lispsite/testdata/" + name)
+    [ "init.el" "options.el" "pages.el" "routes.el" "shared.el" "style.el" ];
   # Only declared build inputs: never private state, .git, env, or documentation.
   src = pkgs.lib.cleanSourceWith {
     src = root;
     filter = path: type:
       let rel = pkgs.lib.removePrefix (toString root + "/") (toString path);
-      in type == "directory" && (rel == "cmd" || rel == "internal" || rel == "nix"
-        || pkgs.lib.hasPrefix "cmd/" rel || pkgs.lib.hasPrefix "internal/" rel)
+      in type == "directory" && (rel == "cmd" || rel == "internal" || rel == "nix" || rel == "pkg"
+        || pkgs.lib.hasPrefix "cmd/" rel || pkgs.lib.hasPrefix "internal/" rel
+        || pkgs.lib.hasPrefix "pkg/" rel)
         || builtins.elem rel [ "go.mod" "go.sum" "nix/image-smoke.go" ]
         || builtins.elem rel operatorInputs
-        || (pkgs.lib.hasSuffix ".go" rel && (pkgs.lib.hasPrefix "cmd/" rel || pkgs.lib.hasPrefix "internal/" rel));
+        || builtins.elem rel websiteInputs
+        || builtins.elem rel lispsiteFixtures
+        || (pkgs.lib.hasSuffix ".go" rel && (pkgs.lib.hasPrefix "cmd/" rel
+          || pkgs.lib.hasPrefix "internal/" rel || pkgs.lib.hasPrefix "pkg/" rel));
   };
   common = {
     pname = "possums-intake";
     version = "0.1.0-local";
     inherit src;
-    vendorHash = "sha256-7P04sWzaA5Mwd58oYvJfwyNm7ME+nhmJn637wXx5t68=";
+    vendorHash = "sha256-3HwXGLiB+gstzqW8iLoE2VstcHjkl5yfxsoMURd+/UU=";
     env.CGO_ENABLED = "0";
     env.GOTOOLCHAIN = "local";
     # This nixpkgs buildGoModule revision duplicates a top-level GOFLAGS

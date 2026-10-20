@@ -183,6 +183,14 @@ class Fixture:
         self.once(volume, "init", operator=True)
         server = self.start(volume, operator=True)
         self.exec(server, "operator")
+        # Mandatory website HTTP qualification runs against this same actual
+        # image after native fixture work, before any success receipt. This is
+        # HTTP integration, not browser execution inside the image.
+        self.exec(server, "website")
+        self.stop(server)
+        self.once(volume, "operator-privacy", probe=True)
+        server = self.start(volume, operator=True)
+        self.exec(server, "website-restart")
         self.stop(server)
         self.once(volume, "operator-privacy", probe=True)
 
