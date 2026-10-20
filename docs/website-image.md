@@ -34,7 +34,7 @@ Offline `go mod vendor` and an independent actual Nix fixed-output dependency
 build agreed on `sha256-3HwXGLiB+gstzqW8iLoE2VstcHjkl5yfxsoMURd+/UU=`.
 The toolchain remains pinned Go 1.27.2; this is not a dependency-upgrade request.
 
-## Local archive and runtime evidence
+## Historical pre-integration archive and runtime evidence
 
 Frozen declared-source identity:
 `55dca24d8064ef6fa4da79ebf609f131026eec5c90f5ada54f46400c9ad459c0`.
@@ -105,6 +105,37 @@ authorized an additive managed website setup boot followed by existing serving,
 with all other delivery writers paused. No live action occurred during this
 correction; the final managed-website candidate still requires fresh image and
 native release qualification.
+
+## Fresh committed-source local qualification
+
+After the additive managed setup review found no actionable issue, private source
+`b93ac99a970d5a35576ccb216061fe8ffdbd27d9` was exported through Git archive and
+the existing declared-input freezer. This excludes unrelated untracked scripts,
+state, environment files and caches rather than snapshotting the dirty checkout.
+Frozen input identity:
+`b303a7e924a2f662a60516ddce41384bb08511086b9cea071e06faa323bef111`.
+Subsequent documentation-only edits do not change these declared build inputs.
+
+Fresh pinned Nix image/probe, ledger-test and delivery-test derivations passed.
+All **173 committed-source offline Python tests** passed (one optional fixture
+skipped). The earlier 185-test working-tree count also included unrelated
+untracked test files; those are not release inputs or publication evidence.
+
+- Local Linux/arm64 archive SHA256:
+  `5a5e710eb23008671aca18200a61b503794369de91a997ef609f4b970fb82bd4`.
+- Raw manifest: `sha256:f0be40f65e71845d14cdaadd4673a7c9e8ae54723c44a42a4c046b75a7f4d59f`.
+- Archive config: `sha256:cdcf30a089945c7323dd814cf757d80e23b4293eb6b6225250ba94d8541dcb39`.
+- Docker runtime identity: `sha256:f9ac4a3a860da82e6094bdeedc01250db641c4a6c7549cbe352bc76f112a9c46`.
+
+The actual archive passed all ten ordinary accounting/startup cases, native
+operator/privacy/frozen-asset checks and mandatory website HTTP and same-volume
+restart probes. The separate synthetic fixture passed all six synthetic and five
+startup diagnostic checks against the same archive/config/runtime identities.
+Receipt schemas remain unchanged; browser inside the image is still `not_run`.
+These local Docker volumes are disposable fixtures, not the existing Tinfoil disk.
+No control-socket unlock or managed website setup completion is established by
+these tests. Native AMD64 exact-main independent A/B, publication, signed-phase
+verification and actual setup/serving remain separate gates.
 
 ## Release and deployment boundaries
 
