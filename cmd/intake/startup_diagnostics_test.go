@@ -139,7 +139,7 @@ type hostileStartupError struct{}
 func (hostileStartupError) Error() string { panic(startupSentinel) }
 
 func TestStartupProjectionKnownCodesAndPhaseUnknown(t *testing.T) {
-	for _, phase := range []startupPhase{phaseValidation, phaseScratch, phaseInit, phaseOpen, phaseHandler, phaseWebsite, phaseBind} {
+	for _, phase := range []startupPhase{phaseValidation, phaseVolumePrepare, phaseScratch, phaseInit, phaseOpen, phaseHandler, phaseWebsite, phaseBind} {
 		for _, cause := range []error{hostileStartupError{}, &ledger.Diagnostic{Code: ledger.CodeBoundary, Stage: startupSentinel}, (*ledger.Diagnostic)(nil)} {
 			code := startupFailureCode(phase, cause)
 			d := startupHealthDiagnostic(startupRecord{1, "failed", phase, code})
@@ -164,7 +164,7 @@ func TestStartupProjectionKnownCodesAndPhaseUnknown(t *testing.T) {
 }
 
 func TestWebsiteStartupCatalogRejectsCrossComponentCodes(t *testing.T) {
-	for _, phase := range []startupPhase{phaseValidation, phaseScratch, phaseInit, phaseOpen, phaseHandler, phaseBind} {
+	for _, phase := range []startupPhase{phaseValidation, phaseVolumePrepare, phaseScratch, phaseInit, phaseOpen, phaseHandler, phaseBind} {
 		if startupCodeAllowed(phase, "SITE_CUSTOMER_SCHEMA_REFUSED") {
 			t.Fatal("STARTUP_WEBSITE_CODE_ACCEPTED_IN_OTHER_COMPONENT")
 		}

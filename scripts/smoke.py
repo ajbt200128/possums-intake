@@ -7,7 +7,6 @@ See PLAN.md and PRIVACY.md. Raw child output is bounded, transient, never printe
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 import json
 import os
 import re
@@ -19,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime
 
 ACCOUNT = "synthetic-smoke-a"
 OTHER_ACCOUNT = "synthetic-smoke-b"
@@ -68,7 +68,10 @@ class PipeCapture:
         except Exception:
             self.failed = True
         finally:
-            self.pipe.close()
+            try:
+                self.pipe.close()
+            except Exception:
+                self.failed = True
 
     def finish(self, stage: str) -> bytes:
         self.thread.join(timeout=2)

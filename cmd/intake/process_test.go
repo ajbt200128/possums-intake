@@ -27,7 +27,7 @@ const syntheticAdminKey = "SYNTHETIC_ADMIN_KEY_ONLY_32_BYTES_LONG"
 func helperEnv(key string) []string {
 	var env []string
 	for _, value := range os.Environ() {
-		if strings.HasPrefix(value, "LEDGER_ADMIN_KEY=") || strings.HasPrefix(value, "INTAKE_SYNTHETIC_HELPER=") || strings.HasPrefix(value, "OTEL_") || strings.HasPrefix(value, "INTAKE_METRICS_") {
+		if strings.HasPrefix(value, "LEDGER_ADMIN_KEY=") || strings.HasPrefix(value, "LEDGER_VOLUME_KEY_B64=") || strings.HasPrefix(value, "INTAKE_SYNTHETIC_HELPER=") || strings.HasPrefix(value, "OTEL_") || strings.HasPrefix(value, "INTAKE_METRICS_") {
 			continue
 		}
 		env = append(env, value)

@@ -3,10 +3,17 @@
 ## Scope and authority
 
 The operator authorized website image-packaging fixes and qualification, scoped
-application/release commits and pushes, and one update of the existing disposable
+application/release commits and pushes, and one update of the existing
 synthetic Tinfoil instance after the release gates pass. This grants no additional
 instance, volume, secret change, gateway change, real credentials/data, payments,
 telemetry export or production activation. Unrelated checkout work stays out.
+
+**Subsequent integration boundary:** authoritative main contains newer managed
+storage/startup changes. The operator approved source integration and renewed
+qualification, not replacing the current persistent profile with disposable
+`synthetic-serve`. Preserve the existing disk/key and all explicit setup gates.
+The artifact results below describe the pre-integration website source, not the
+merged candidate or acceptance of live initialization/state.
 
 ## Public inputs and dependency closure
 
