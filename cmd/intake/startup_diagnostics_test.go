@@ -281,7 +281,14 @@ func TestRecordedStartupFaultPhasesCleanupAndOwnership(t *testing.T) {
 			wantPhase := map[string]startupPhase{"scratch": phaseScratch, "init": phaseInit, "open": phaseOpen, "handler": phaseHandler, "bind": phaseBind, "panic": phaseInit, "website_panic": phaseWebsite}[fault]
 			wantCode := map[string]ledger.Code{"scratch": codeScratch, "init": ledger.CodeExisting, "open": ledger.CodeMissing, "handler": "LEDGER_OPERATOR_SETUP_INVALID", "bind": codeBind, "panic": startupUnknown(phaseInit), "website_panic": startupUnknown(phaseWebsite)}[fault]
 			if err == nil || last.State != "failed" || last.Phase != wantPhase || last.Code != wantCode {
-				t.Fatal("STARTUP_PHASE_PRIMARY_FAILURE_CONTRACT")
+				phase, code := "withheld", "withheld"
+				if startupUnknown(last.Phase) != "" {
+					phase = string(last.Phase)
+					if startupCodeAllowed(last.Phase, last.Code) {
+						code = string(last.Code)
+					}
+				}
+				t.Fatalf("STARTUP_PHASE_PRIMARY_FAILURE_CONTRACT observed_phase=%s observed_code=%s expected_phase=%s expected_code=%s", phase, code, wantPhase, wantCode)
 			}
 			entries, readErr := os.ReadDir(tmp)
 			preserved := fault == "init" || fault == "open" || fault == "panic" || fault == "website_panic"

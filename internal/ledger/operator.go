@@ -46,7 +46,26 @@ func InitOperatorObserved(ctx context.Context, dir string, credentials OperatorC
 	return initialize(ctx, dir, &credentials, observer)
 }
 
-func initializeOperator(tx *transaction, credentials OperatorCredentials) error {
+// prepareOperator performs the SDK's synchronous password hashing before the
+// bounded write transaction. The new record remains transient until saved there.
+func prepareOperator(ctx context.Context, app core.App, credentials OperatorCredentials) (*core.Record, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	collection, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	if err != nil {
+		return nil, err
+	}
+	record := core.NewRecord(collection)
+	record.SetEmail(credentials.Email)
+	record.SetPassword(credentials.Password)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func initializeOperator(tx *transaction, record *core.Record) error {
 	app := tx.app
 	collection, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
 	if err != nil {
@@ -61,9 +80,8 @@ func initializeOperator(tx *transaction, credentials OperatorCredentials) error 
 	if err := app.SaveWithContext(tx.ctx, collection); err != nil {
 		return err
 	}
-	record := core.NewRecord(collection)
-	record.SetEmail(credentials.Email)
-	record.SetPassword(credentials.Password)
+	// Only auth options changed; the prepared record's field schema and table
+	// identity remain valid. Save through the transaction app with SDK validation.
 	return app.SaveWithContext(tx.ctx, record)
 }
 

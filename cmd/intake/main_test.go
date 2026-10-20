@@ -63,7 +63,7 @@ func TestCLIExplicitInitExistingServeAndPrivateErrors(t *testing.T) {
 	}
 	out, stderr, success = runCLI(t, "init", "--state", dir)
 	if !success || stderr != "" || out != "{\"status\":\"initialized_empty\"}\n" {
-		t.Fatal("actual empty init output or logging contract failed")
+		t.Fatalf("SYNTHETIC_INIT_REFUSED stage=fixture_init constraint=closed_cli_completion code=%s; completion unconfirmed, raw output withheld", fixtureInitFailureCode(stderr))
 	}
 	out, stderr, success = runCLI(t, "init", "--state", dir)
 	checkFailure(t, out, stderr, success, ledger.CodeExisting)

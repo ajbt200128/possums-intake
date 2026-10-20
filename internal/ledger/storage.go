@@ -77,14 +77,21 @@ func initialize(ctx context.Context, dir string, operator *OperatorCredentials, 
 			result, owned = err, true
 		}
 	}()
+	var preparedOperator *core.Record
+	if operator != nil {
+		preparedOperator, err = prepareOperator(ctx, app, *operator)
+		if err != nil {
+			return initFailure(err)
+		}
+	}
 	s := newService(app)
 	runCtx, report := WithFailureReport(ctx)
 	err = s.run(runCtx, func(tx *transaction) error {
 		if err := migrateV1(tx); err != nil {
 			return err
 		}
-		if operator != nil {
-			return initializeOperator(tx, *operator)
+		if preparedOperator != nil {
+			return initializeOperator(tx, preparedOperator)
 		}
 		return nil
 	}, false)

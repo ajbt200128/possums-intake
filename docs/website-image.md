@@ -70,6 +70,38 @@ root vet and module verification passed. All 179 offline Python tests passed
 website HTTP path independently. Independent read-only packaging review found no
 issues. Browser execution **inside the image** remains `not_run`.
 
+## Newer managed-startup integration and initialization correction
+
+The website source was merged with newer application main
+`ef6a663cb7d08b39497bb2395ada83bf3fed504b`, retaining explicit managed-volume
+unlock, mount verification, selected diagnostics, accounting budgets and strict
+setup boundaries. Independent integration review found no actionable issue.
+Full merged race runs exposed initialization failures before intended later fault
+stages; a bounded twenty-repeat reproduction obtained the closed
+`LEDGER_WORK_CANCELLED` code at `initialize`. Original generic failures without
+retained codes remain cause-unknown; later evidence does not retrospectively
+classify them.
+
+Source inspection placed synchronous stock SDK password hashing inside the
+one-second initialization transaction. The correction prepares the new native
+record through the SDK before that transaction, with root-context checks before
+and after preparation. The transaction app still performs fresh collection
+settings decisions, stock credential validation and all atomic schema/credential
+writes. No password strength, accounting budget, empty-only policy or retry
+behavior changes. Synchronous bcrypt cannot be interrupted mid-call; no worker is
+detached and no hash/credential is retained in diagnostics.
+
+The corrected merged source passed the parent's full serial race/elpscheck suite,
+vet, module verification and all 185 offline Python tests (one optional fixture
+skipped). The implementation packet also passed focused ledger race repetitions
+and twenty relevant CLI/fault/operator race repetitions. Independent source/API
+review found no actionable issue; its default-cache offline test attempt was
+unavailable, so it is not independent execution evidence. The operator separately
+authorized an additive managed website setup boot followed by existing serving,
+with all other delivery writers paused. No live action occurred during this
+correction; the final managed-website candidate still requires fresh image and
+native release qualification.
+
 ## Release and deployment boundaries
 
 Local ARM results do not replace exact-current-main checks, independent fresh

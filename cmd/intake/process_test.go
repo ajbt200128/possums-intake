@@ -115,22 +115,25 @@ func syntheticAddress(t *testing.T) string {
 	listener.Close()
 	return address
 }
+func fixtureInitFailureCode(stderr string) ledger.Code {
+	var diagnostic ledger.Diagnostic
+	if json.Unmarshal([]byte(stderr), &diagnostic) == nil {
+		switch diagnostic.Code {
+		case ledger.CodeBegin, ledger.CodeWork, ledger.CodeWriter, ledger.CodeCommit, ledger.CodeClose,
+			"SITE_EXECUTION_LIMIT", "SITE_EXECUTION_INTERRUPTED", "SITE_BUNDLE_REFUSED", "SITE_BUNDLE_UNAVAILABLE",
+			"SITE_RENDER_UNAVAILABLE", "SITE_PUBLICATION_UNAVAILABLE", "SITE_CUSTOMER_SCHEMA_UNAVAILABLE", "SITE_CUSTOMER_SCHEMA_REFUSED":
+			return diagnostic.Code
+		}
+	}
+	return "SYNTHETIC_INIT_COMPLETION_UNKNOWN"
+}
+
 func initProcessState(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "state")
 	out, stderr, success := runCLI(t, "init", "--state", dir)
 	if !success || stderr != "" || out != "{\"status\":\"initialized_empty\"}\n" {
-		code := ledger.Code("SYNTHETIC_INIT_COMPLETION_UNKNOWN")
-		var diagnostic ledger.Diagnostic
-		if json.Unmarshal([]byte(stderr), &diagnostic) == nil {
-			switch diagnostic.Code {
-			case ledger.CodeBegin, ledger.CodeWork, ledger.CodeWriter, ledger.CodeCommit, ledger.CodeClose,
-				"SITE_EXECUTION_LIMIT", "SITE_EXECUTION_INTERRUPTED", "SITE_BUNDLE_REFUSED", "SITE_BUNDLE_UNAVAILABLE",
-				"SITE_RENDER_UNAVAILABLE", "SITE_PUBLICATION_UNAVAILABLE", "SITE_CUSTOMER_SCHEMA_UNAVAILABLE", "SITE_CUSTOMER_SCHEMA_REFUSED":
-				code = diagnostic.Code
-			}
-		}
-		t.Fatalf("SYNTHETIC_INIT_REFUSED stage=fixture_init constraint=closed_cli_completion code=%s; completion unconfirmed, raw output withheld", code)
+		t.Fatalf("SYNTHETIC_INIT_REFUSED stage=fixture_init constraint=closed_cli_completion code=%s; completion unconfirmed, raw output withheld", fixtureInitFailureCode(stderr))
 	}
 	return dir
 }
