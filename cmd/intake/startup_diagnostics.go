@@ -34,6 +34,7 @@ const (
 	phaseInit       startupPhase = "initialize"
 	phaseOpen       startupPhase = "open"
 	phaseHandler    startupPhase = "operator_handler"
+	phaseWebsite    startupPhase = "website_setup"
 	phaseBind       startupPhase = "listener_bind"
 )
 
@@ -156,6 +157,8 @@ func startupUnknown(phase startupPhase) ledger.Code {
 		return "SYNTHETIC_OPEN_CAUSE_UNKNOWN"
 	case phaseHandler:
 		return "SYNTHETIC_HANDLER_CAUSE_UNKNOWN"
+	case phaseWebsite:
+		return "SYNTHETIC_WEBSITE_CAUSE_UNKNOWN"
 	case phaseBind:
 		return "SYNTHETIC_BIND_CAUSE_UNKNOWN"
 	default:
@@ -201,6 +204,12 @@ func startupCodeAllowed(phase startupPhase, code ledger.Code) bool {
 	case phaseHandler:
 		switch code {
 		case codeHandler, ledger.CodeClosed, "LEDGER_OPERATOR_SETUP_INVALID":
+			return true
+		}
+	case phaseWebsite:
+		switch code {
+		case ledger.CodeClosed, "SITE_CUSTOMER_SCHEMA_REFUSED", "SITE_CUSTOMER_SCHEMA_UNAVAILABLE",
+			"SITE_PUBLICATION_UNAVAILABLE", "SITE_AUTH_CONFIG", "SITE_AUTH_MFA_UNSUPPORTED", "SITE_AUTH_UNAVAILABLE":
 			return true
 		}
 	case phaseBind:

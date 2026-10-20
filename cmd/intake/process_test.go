@@ -120,7 +120,17 @@ func initProcessState(t *testing.T) string {
 	dir := filepath.Join(t.TempDir(), "state")
 	out, stderr, success := runCLI(t, "init", "--state", dir)
 	if !success || stderr != "" || out != "{\"status\":\"initialized_empty\"}\n" {
-		t.Fatal("synthetic init failed")
+		code := ledger.Code("SYNTHETIC_INIT_COMPLETION_UNKNOWN")
+		var diagnostic ledger.Diagnostic
+		if json.Unmarshal([]byte(stderr), &diagnostic) == nil {
+			switch diagnostic.Code {
+			case ledger.CodeBegin, ledger.CodeWork, ledger.CodeWriter, ledger.CodeCommit, ledger.CodeClose,
+				"SITE_EXECUTION_LIMIT", "SITE_EXECUTION_INTERRUPTED", "SITE_BUNDLE_REFUSED", "SITE_BUNDLE_UNAVAILABLE",
+				"SITE_RENDER_UNAVAILABLE", "SITE_PUBLICATION_UNAVAILABLE", "SITE_CUSTOMER_SCHEMA_UNAVAILABLE", "SITE_CUSTOMER_SCHEMA_REFUSED":
+				code = diagnostic.Code
+			}
+		}
+		t.Fatalf("SYNTHETIC_INIT_REFUSED stage=fixture_init constraint=closed_cli_completion code=%s; completion unconfirmed, raw output withheld", code)
 	}
 	return dir
 }
@@ -215,7 +225,18 @@ func TestProcessAuthNativeRoutesPrivacyAndRestart(t *testing.T) {
 		}
 	}
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	for _, path := range []string{"/", "/_/", "/_/#/installer", "/api/collections", "/api/collections/_superusers/auth-with-password", "/api/records", "/api/files/x/y/z", "/api/realtime", "/api/settings", "/api/backups", "/api/backups/synthetic?token=SYNTHETIC_HOSTILE_PRIVATE_VALUE"} {
+	// The website is now default-on; native administration remains excluded
+	// without --operator and the accounting shared key grants no native access.
+	response, err := client.Get(p.base + "/")
+	if err != nil {
+		t.Fatal("default website request unavailable")
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != 200 || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") || bytes.Contains(body, []byte(syntheticAdminKey)) {
+		t.Fatal("default website response contract")
+	}
+	for _, path := range []string{"/_/", "/_/#/installer", "/api/collections", "/api/collections/_superusers/auth-with-password", "/api/records", "/api/files/x/y/z", "/api/realtime", "/api/settings", "/api/backups", "/api/backups/synthetic?token=SYNTHETIC_HOSTILE_PRIVATE_VALUE"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			request, _ := http.NewRequest(method, p.base+path, nil)
 			request.Header.Set("Authorization", "Bearer "+syntheticAdminKey)

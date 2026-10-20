@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -30,6 +29,9 @@ func executeContext(ctx context.Context, args []string) error {
 }
 
 func executeObserved(ctx context.Context, args []string, observer failureowner.Observer) error {
+	if len(args) > 0 && args[0] == "website-local" {
+		return executeWebsiteLocal(ctx, args[1:], observer)
+	}
 	if len(args) > 0 && args[0] == "synthetic-healthcheck" {
 		return syntheticHealthcheck(ctx, args[1:])
 	}
@@ -73,7 +75,7 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 		}
 	}()
 	mode := "serve"
-	if len(args) > 0 && (args[0] == "init" || args[0] == "serve" || args[0] == "synthetic-serve") {
+	if len(args) > 0 && (args[0] == "init" || args[0] == "website-init" || args[0] == "serve" || args[0] == "synthetic-serve") {
 		mode = args[0]
 		args = args[1:]
 	}
@@ -85,10 +87,13 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 		defaultListen = "0.0.0.0:8090"
 	}
 	listen := flags.String("listen", defaultListen, "Numeric listener")
-	operatorMode := flags.Bool("operator", false, "Opt-in restricted synthetic native dashboard (init/serve only)")
+	operatorMode := flags.Bool("operator", false, "Expose trusted native administration (init/serve only)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || (!synthetic && !filepath.IsAbs(*dir)) {
 		if synthetic {
 			return runtimeFailure(codeSyntheticOptions, "startup", "synthetic_listen_only", "no_effect", "Use synthetic-serve with optional --listen only. State is always newly temporary and native operator mode is mandatory.")
+		}
+		if mode == "website-init" {
+			return websiteSetupOptionsFailure()
 		}
 		return ledger.CanonicalFailure(&ledger.Diagnostic{Code: ledger.CodePath}, failuretype.RuntimeSetupUnknown)
 	}
@@ -100,23 +105,40 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 		}
 		*operatorMode = true
 	}
-	if mode == "init" {
-		listenSet := false
-		flags.Visit(func(f *flag.Flag) { listenSet = listenSet || f.Name == "listen" })
+	if mode == "init" || mode == "website-init" {
+		listenSet, operatorSet := false, false
+		flags.Visit(func(f *flag.Flag) {
+			listenSet = listenSet || f.Name == "listen"
+			operatorSet = operatorSet || f.Name == "operator"
+		})
+		if mode == "website-init" && (listenSet || operatorSet) {
+			return websiteSetupOptionsFailure()
+		}
 		if listenSet {
 			return runtimeFailure(codeListen, "startup", "serve_only_listener", "no_effect", "Use --listen only with serve; init creates empty state and starts no listener.")
 		}
-		var err error
-		if *operatorMode {
-			err = ledger.InitOperatorObserved(ctx, *dir, ledger.OperatorCredentials{Email: os.Getenv("LEDGER_OPERATOR_EMAIL"), Password: os.Getenv("LEDGER_OPERATOR_PASSWORD")}, observer)
-		} else {
-			err = ledger.InitObserved(ctx, *dir, observer)
+		owned = true // initialization helpers own primary and cleanup failures
+		if mode == "init" {
+			var err error
+			if *operatorMode {
+				err = ledger.InitOperatorObserved(ctx, *dir, ledger.OperatorCredentials{Email: os.Getenv("LEDGER_OPERATOR_EMAIL"), Password: os.Getenv("LEDGER_OPERATOR_PASSWORD")}, observer)
+			} else {
+				err = ledger.InitObserved(ctx, *dir, observer)
+			}
+			if err != nil {
+				return err
+			}
 		}
-		owned = true
-		if err != nil {
+		if err := initializeWebsiteStateObserved(ctx, *dir, observer); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(os.Stdout, `{"status":"initialized_empty"}`); err != nil {
+		status := "initialized_empty"
+		if mode == "website-init" {
+			status = "website_initialized"
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(struct {
+			Status string `json:"status"`
+		}{status}); err != nil {
 			fault := ledger.CanonicalFailure(err, failuretype.ResponseDeliveryUnknown)
 			failureowner.Observe(observer, fault.Kind())
 			return fault
@@ -210,6 +232,21 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 			owned = true
 			return err
 		}
+	}
+	startup.checkpoint(phaseWebsite)
+	if synthetic {
+		// synthetic-serve explicitly creates fresh disposable state on every run.
+		app, err := service.CustomerAuthApp()
+		if err != nil {
+			return err
+		}
+		if err := initializeWebsite(ctx, app); err != nil {
+			return err
+		}
+	}
+	handler, err = newWebsiteHandler(service, handler, observer)
+	if err != nil {
+		return err
 	}
 	owned = true // serve/maintenance own primary and distinct joined failures
 	startup.checkpoint(phaseBind)

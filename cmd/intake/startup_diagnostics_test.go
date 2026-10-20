@@ -139,7 +139,7 @@ type hostileStartupError struct{}
 func (hostileStartupError) Error() string { panic(startupSentinel) }
 
 func TestStartupProjectionKnownCodesAndPhaseUnknown(t *testing.T) {
-	for _, phase := range []startupPhase{phaseValidation, phaseScratch, phaseInit, phaseOpen, phaseHandler, phaseBind} {
+	for _, phase := range []startupPhase{phaseValidation, phaseScratch, phaseInit, phaseOpen, phaseHandler, phaseWebsite, phaseBind} {
 		for _, cause := range []error{hostileStartupError{}, &ledger.Diagnostic{Code: ledger.CodeBoundary, Stage: startupSentinel}, (*ledger.Diagnostic)(nil)} {
 			code := startupFailureCode(phase, cause)
 			d := startupHealthDiagnostic(startupRecord{1, "failed", phase, code})
@@ -152,14 +152,25 @@ func TestStartupProjectionKnownCodesAndPhaseUnknown(t *testing.T) {
 	for _, tc := range []struct {
 		phase startupPhase
 		code  ledger.Code
-	}{{phaseValidation, codeAdminKey}, {phaseValidation, "LEDGER_OPERATOR_SETUP_INVALID"}, {phaseScratch, codeScratch}, {phaseInit, ledger.CodeCommit}, {phaseOpen, ledger.CodeMissing}, {phaseHandler, codeHandler}, {phaseBind, codeBind}} {
+	}{{phaseValidation, codeAdminKey}, {phaseValidation, "LEDGER_OPERATOR_SETUP_INVALID"}, {phaseScratch, codeScratch}, {phaseInit, ledger.CodeCommit}, {phaseOpen, ledger.CodeMissing}, {phaseHandler, codeHandler}, {phaseWebsite, "SITE_CUSTOMER_SCHEMA_REFUSED"}, {phaseWebsite, "SITE_CUSTOMER_SCHEMA_UNAVAILABLE"}, {phaseWebsite, "SITE_PUBLICATION_UNAVAILABLE"}, {phaseWebsite, "SITE_AUTH_UNAVAILABLE"}, {phaseWebsite, "SITE_AUTH_CONFIG"}, {phaseWebsite, "SITE_AUTH_MFA_UNSUPPORTED"}, {phaseBind, codeBind}} {
 		err := &ledger.Diagnostic{Code: tc.code, Stage: startupSentinel, Constraint: startupSentinel, Outcome: startupSentinel, NextStep: startupSentinel}
 		r := startupRecord{1, "failed", tc.phase, startupFailureCode(tc.phase, err)}
 		d := startupHealthDiagnostic(r)
 		wire, _ := json.Marshal(d)
-		if d.Code != tc.code || !d.Kind().Valid() || d.Outcome != "not_ready" || bytes.Contains(wire, []byte(startupSentinel)) {
+		if d.Code != tc.code || d.Stage != string(tc.phase) || !d.Kind().Valid() || d.Outcome != "not_ready" || bytes.Contains(wire, []byte(startupSentinel)) {
 			t.Fatal("STARTUP_TYPED_PROJECTION_CONTRACT")
 		}
+	}
+}
+
+func TestWebsiteStartupCatalogRejectsCrossComponentCodes(t *testing.T) {
+	for _, phase := range []startupPhase{phaseValidation, phaseScratch, phaseInit, phaseOpen, phaseHandler, phaseBind} {
+		if startupCodeAllowed(phase, "SITE_CUSTOMER_SCHEMA_REFUSED") {
+			t.Fatal("STARTUP_WEBSITE_CODE_ACCEPTED_IN_OTHER_COMPONENT")
+		}
+	}
+	if startupCodeAllowed(phaseWebsite, codeHandler) || startupCodeAllowed(phaseWebsite, ledger.Code(startupSentinel)) {
+		t.Fatal("STARTUP_WEBSITE_CATALOG_NOT_CLOSED")
 	}
 }
 
@@ -218,7 +229,7 @@ func TestRecordedStartupFaultPhasesCleanupAndOwnership(t *testing.T) {
 	t.Setenv("LEDGER_ADMIN_KEY", syntheticAdminKey)
 	t.Setenv("LEDGER_OPERATOR_EMAIL", "synthetic@example.invalid")
 	t.Setenv("LEDGER_OPERATOR_PASSWORD", "synthetic-password")
-	for _, fault := range []string{"scratch", "init", "open", "handler", "bind", "panic"} {
+	for _, fault := range []string{"scratch", "init", "open", "handler", "bind", "panic", "website_panic"} {
 		t.Run(fault, func(t *testing.T) {
 			tmp := t.TempDir()
 			t.Setenv("TMPDIR", tmp)
@@ -236,7 +247,7 @@ func TestRecordedStartupFaultPhasesCleanupAndOwnership(t *testing.T) {
 				if record.State != "starting" {
 					return nil
 				}
-				if fault == "panic" && record.Phase == phaseInit {
+				if fault == "panic" && record.Phase == phaseInit || fault == "website_panic" && record.Phase == phaseWebsite {
 					panic(startupSentinel)
 				}
 				if (fault == "init" && record.Phase == phaseInit) || (fault == "open" && record.Phase == phaseOpen) || (fault == "handler" && record.Phase == phaseHandler) {
@@ -267,13 +278,13 @@ func TestRecordedStartupFaultPhasesCleanupAndOwnership(t *testing.T) {
 			o := &runtimeObserver{}
 			err = executeRecorded(context.Background(), []string{"synthetic-serve", "--listen", listener.Addr().String()}, o, r)
 			last := records[len(records)-1]
-			wantPhase := map[string]startupPhase{"scratch": phaseScratch, "init": phaseInit, "open": phaseOpen, "handler": phaseHandler, "bind": phaseBind, "panic": phaseInit}[fault]
-			wantCode := map[string]ledger.Code{"scratch": codeScratch, "init": ledger.CodeExisting, "open": ledger.CodeMissing, "handler": "LEDGER_OPERATOR_SETUP_INVALID", "bind": codeBind, "panic": startupUnknown(phaseInit)}[fault]
+			wantPhase := map[string]startupPhase{"scratch": phaseScratch, "init": phaseInit, "open": phaseOpen, "handler": phaseHandler, "bind": phaseBind, "panic": phaseInit, "website_panic": phaseWebsite}[fault]
+			wantCode := map[string]ledger.Code{"scratch": codeScratch, "init": ledger.CodeExisting, "open": ledger.CodeMissing, "handler": "LEDGER_OPERATOR_SETUP_INVALID", "bind": codeBind, "panic": startupUnknown(phaseInit), "website_panic": startupUnknown(phaseWebsite)}[fault]
 			if err == nil || last.State != "failed" || last.Phase != wantPhase || last.Code != wantCode {
 				t.Fatal("STARTUP_PHASE_PRIMARY_FAILURE_CONTRACT")
 			}
 			entries, readErr := os.ReadDir(tmp)
-			preserved := fault == "init" || fault == "open" || fault == "panic"
+			preserved := fault == "init" || fault == "open" || fault == "panic" || fault == "website_panic"
 			if readErr != nil || (preserved && len(entries) != 1) || (!preserved && len(entries) != 0) {
 				t.Fatal("STARTUP_EXISTING_SCRATCH_POLICY_CHANGED")
 			}

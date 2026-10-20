@@ -68,7 +68,7 @@ func TestMetricsActualInvalidConfigExecuteKeepsAccountingAvailable(t *testing.T)
 		t.Fatal("actual invalid configuration path unavailable")
 	}
 	dir := filepath.Join(t.TempDir(), "state")
-	if ledger.Init(context.Background(), dir) != nil {
+	if ledger.Init(context.Background(), dir) != nil || initializeWebsiteStateObserved(context.Background(), dir, nil) != nil {
 		t.Fatal("state fixture unavailable")
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
