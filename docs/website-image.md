@@ -13,7 +13,11 @@ storage/startup changes. The operator approved source integration and renewed
 qualification, not replacing the current persistent profile with disposable
 `synthetic-serve`. Preserve the existing disk/key and all explicit setup gates.
 The artifact results below describe the pre-integration website source, not the
-merged candidate or acceptance of live initialization/state.
+merged candidate or acceptance of live initialization/state. The operator later
+explicitly authorized one additive managed website setup boot, followed only
+after observed setup process exit zero by one serving activation on the same
+disk/key. Other delivery writers were confirmed paused. This supersedes the
+original single-update scope, not storage, qualification or nonreplay guards.
 
 ## Public inputs and dependency closure
 

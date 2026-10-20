@@ -42,6 +42,46 @@ against existing operator state:
 
 `intake serve --operator --state /absolute/initialized-synthetic-state`
 
+## Separately authorized managed-volume setup candidate
+
+After integration with the newer managed-storage source, the operator explicitly
+authorized one additive website setup boot and then one serving activation on the
+same existing synthetic disk/key, conditional on qualification and signed-release
+acceptance. Other delivery writers were confirmed paused. This is not permission
+to repeat ledger initialization, reset credentials, fund accounts, allocate new
+resources or retry a failed/unknown operation.
+
+`website-init` accepts explicit `--state` and optional `--tinfoil-volume` only.
+For the managed form, state must be a canonical absolute `ledger` child and the
+volume name must pass the existing closed name check. Explicit empty volume,
+initialization, operator and listener flags are refused before consuming the key
+or touching state, including flags supplied with false/empty values. Managed
+setup calls the existing preparation helper exactly once with initialization
+false, then uses the same existing-ledger validation and additive setup helpers.
+It never invokes the ledger/operator initializer. No admin/operator credential
+input, listener, healthcheck or managed diagnostic recorder is required/armed.
+
+The fixed release profile uses only the existing managed volume-key secret name;
+the agent never reads its value. Stock platform key custody, SDK/database
+maintenance, partial-setup and native-history retention boundaries remain. A
+successful unlock is not website setup completion, and platform Running is not a
+process exit receipt. Require observed setup exit zero before admitting the
+separate serving phase; otherwise preserve the original state and stop.
+
+Three repetitions of focused race/elpscheck CLI/setup/option tests passed, along
+with active error-level LSP checks of the three changed Go paths. Negative tests
+cover malformed options, unselected/invalid key input, cancellation before any
+volume request, unchanged existing/absent state and once-only failure ownership.
+Those tests send no control-socket request. The updated full serial source
+race/elpscheck suite, combined ordinary Chromium qualification, vet and module
+verification subsequently passed. Parent independently passed all 92 public
+release tests and actual pinned decoder probes over all six profiles: v0.1.14
+refuses persistent bindings with positive controls, while candidate v0.1.16 and
+runtime v0.1.17 accept the exact binding/owner with negative controls. Owned
+module-cache cleanup completed. Independent source/API security review found no
+actionable issue. These are source, syntax and fixture results, not actual
+Tinfoil unlock/setup; final image/native-build/signature/runtime gates remain.
+
 ## HTTPS boundary
 
 The ordinary runtime sets the website's fixed `TLSOffloaded` owner policy. It

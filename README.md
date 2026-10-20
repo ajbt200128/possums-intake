@@ -28,7 +28,9 @@ The three-page ELPS website is now wired into ordinary `serve` and disposable
 `synthetic-serve` by default in local source. Explicit `init` adds the initial
 website/auth schema; `website-init --state ...` adds compatible website setup to
 an existing stopped synthetic ledger without resetting balances, credentials or
-valid published code. Serve/login never initialize or seed state. Stock native
+valid published code. Optional `--tinfoil-volume ledger` unlocks existing managed
+storage before that additive setup; it never initializes the disk or ledger.
+Serve/login never initialize or seed state. Stock native
 key provisioning, scoped account snapshots and live publication passed the
 [combined browser qualification](docs/customer-site-browser.md).
 

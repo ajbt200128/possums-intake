@@ -84,7 +84,7 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 	}
 	listen := flags.String("listen", defaultListen, "Numeric listener")
 	operatorMode := flags.Bool("operator", false, "Expose trusted native administration (init/serve only)")
-	volumeName := flags.String("tinfoil-volume", "", "Opt-in managed-secret volume mount name (init/serve only)")
+	volumeName := flags.String("tinfoil-volume", "", "Opt-in managed-secret volume mount name (init/website-init/serve)")
 	initializeVolume := flags.Bool("initialize-volume", false, "Explicitly initialize a blank Tinfoil disk (init only)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || (!synthetic && !filepath.IsAbs(*dir)) {
 		if synthetic {
@@ -107,8 +107,10 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 	}
 	if mode == "website-init" {
 		invalidOption := false
-		flags.Visit(func(f *flag.Flag) { invalidOption = invalidOption || f.Name != "state" })
-		if invalidOption {
+		flags.Visit(func(f *flag.Flag) {
+			invalidOption = invalidOption || (f.Name != "state" && f.Name != "tinfoil-volume") || (f.Name == "tinfoil-volume" && *volumeName == "")
+		})
+		if invalidOption || (*volumeName != "" && (!validVolumeName(*volumeName) || !validVolumeStatePath(*dir))) {
 			return websiteSetupOptionsFailure()
 		}
 	}
@@ -150,6 +152,12 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 				err = ledger.InitObserved(ctx, *dir, observer)
 			}
 			if err != nil {
+				return err
+			}
+		} else if *volumeName != "" {
+			// Additive setup unlocks existing storage only; it grants no ledger,
+			// disk or operator-credential initialization authority.
+			if err := prepareManagedVolume(ctx, *volumeName, *dir, false); err != nil {
 				return err
 			}
 		}

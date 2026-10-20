@@ -15,8 +15,8 @@ import (
 
 func websiteSetupOptionsFailure() *ledger.Diagnostic {
 	d := ledger.CanonicalFailure(&ledger.Diagnostic{}, failuretype.RequestInvalid)
-	d.Code, d.Stage, d.Constraint, d.Outcome = "SITE_INITIALIZATION_OPTIONS_INVALID", "website_initialize", "explicit_absolute_state_only", "no_effect"
-	d.NextStep = "Use website-init --state with an absolute initialized ledger directory, without listener or operator options. This command never creates or changes credentials."
+	d.Code, d.Stage, d.Constraint, d.Outcome = "SITE_INITIALIZATION_OPTIONS_INVALID", "website_initialize", "explicit_state_optional_existing_volume_only", "no_effect"
+	d.NextStep = "Use website-init --state with an absolute initialized ledger directory and optionally --tinfoil-volume for existing storage. Never supply initialization, listener or operator flags. This adds website/auth schema only; it never initializes the ledger or creates or changes login credentials."
 	return d
 }
 
