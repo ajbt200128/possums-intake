@@ -137,6 +137,79 @@ No control-socket unlock or managed website setup completion is established by
 these tests. Native AMD64 exact-main independent A/B, publication, signed-phase
 verification and actual setup/serving remain separate gates.
 
+## Accepted native publication and synthetic activation
+
+The following supersedes the earlier pending native/setup/serving statements,
+not their historical local-only evidence. At publication and activation, exact
+private main was `5fea2c37abbe4a3dd66f30eac37bfc3dbd4c9017`, source check
+**39370806432** and native qualification **39371558499**, attempt 1, successful.
+Original unexpired artifacts A **12242120926**, B **12241263047** and archive
+**12241851528** were independently admitted/downloaded with distinct native
+runners and required fresh job steps. Matching AMD64 manifest/config/archive and
+actual ordinary/website/restart/synthetic/startup receipts passed. Receipt:
+
+- Image: `sha256:53e7927ef2e13a7346051734ac174ab3666cc01c86057d080084b3e2c0a9cb91`.
+- Archive: `fbaeecb696b388b3b06aa9e81c6689126fefc62d771548bd9e702537f66d195a`.
+
+The original owner adapter/shared qualification extraction was recovered from
+Git objects and independently reviewed, with only a pinned native policy-path
+relocation retaining identical policy bytes. Parent **71 focused offline
+regressions** passed after correcting two missing workflow fixtures. Exactly one
+digest-preserving, zero-retry owner image copy completed with unchanged
+qualification/package/private-source-link/full-inventory/baseline/unused-source
+checks and actual registry digest postchecks; owned auth cleanup completed.
+This was owner authority, not fabricated CI publication authority.
+
+Each public setup/serving handoff passed **92 offline tests**, exact frozen
+rendering/other-phase refusal, scoped read-only review and normal head-matched
+integration. Independently downloaded assets and supported cryptographic
+source/signer/tag/invocation/config/CVM/four-disk checks accepted:
+
+| Phase | Public source | Tag / signing run (attempt 1) | Manifest SHA256 |
+| --- | --- | --- | --- |
+| Additive setup | `167f53b909840e6d5561d0eab8ef6ea273adb695` | v0.1.15 / 39373021651 | `5effb08d0812012e2f49ed57541315642e1336972c8715615de62258d7b2b7b5` |
+| Existing-only serve | `43f98f3fca04f8a436c5045e3ed0ba9769c2cc28` | v0.1.16 / 39449002638 | `575305fb980fe5c3de8d6ea171f493f6ef02fbf72e6d3d5ff001b12953521b7d` |
+
+Retained native CLI 0.19.0 matched its published archive/checksums and original
+binary, without installation changes. The operator confirmed intentionally
+stopping the v0.1.14 predecessor. One v0.1.15 additive setup Deploy was accepted,
+without Stop/attachment/allocation, disk/ledger initialization, credential reset
+or key-value access. Two available/recent/advancing normal verified-TLS,
+nonredirecting vendor HTTP 200 snapshots confirmed the exact declared setup
+image and same created process **exited 0**, OOM false, restart count 0, policy
+`no`, absent Docker state-error text. Current native boot/tag and original
+storage/host/domain/shape matched before/after. Local caller checkout,
+hash-asset-name, host-tool lookup and guessed image-basename errors were
+corrected without weakening validation or replaying publication/setup.
+
+All source/original artifact/archive/registry/release/native gates were refreshed
+before **one Stop → authoritative Stopped → one v0.1.16 existing-only Deploy**.
+Fresh matching setup exit-zero observations preceded Stop. Same instance,
+original 1 GiB disk, host/domain, CPU2/memory8192/GPU0, CC on/debug off, saved
+variables and SSH settings were preserved. Only existing volume/admin secret
+names were selected. No Update/replan/repost, attach/allocation, initialization,
+reset/restore, credential changes, key-value access or retries occurred. Both
+setup and serving allowances are consumed; failed/unknown future outcomes never
+authorize replay.
+
+Two available/recent/advancing vendor snapshots confirmed the same exact serving
+image/process **running/healthy**, health exit 0, OOM false, restart count 0,
+policy `no`, absent state-error text and matching current boot/storage before and
+after. Credential-free normal verified-TLS/nonredirecting HTTPS checks returned
+200 for health, public home, customer login and native admin shell. Public text,
+login form, no-script/no-store/security headers and Secure/HttpOnly/host-only/
+SameSite CSRF cookie attributes passed; CSS and both font/OFL bytes/SHA256
+matched. Unauthenticated account home redirected to login. No cookie values,
+pages, raw payloads/errors, runtime identifiers/timestamps or secret values are
+included in retained evidence; native history/platform retention remain separate.
+
+No actual login, funding, inference, gateway/DNS change, payment or telemetry
+export was attempted. This establishes bounded synthetic readiness only, not
+native administrator/customer authenticated acceptance, native financial
+receipts, usable capacity/durability, safe restore, fresh runtime attestation or
+real-data/gateway integration. Browser-inside-image remains `not_run`. Later
+documentation-only commits are not new image or replacement qualification.
+
 ## Release and deployment boundaries
 
 Local ARM results do not replace exact-current-main checks, independent fresh
