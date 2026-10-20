@@ -1,0 +1,5 @@
+(site:load "shared.el")
+(site:load "options.el")
+(site:load "pages.el")
+(site:load "routes.el")
+(site:load "style.el")

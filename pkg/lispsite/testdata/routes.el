@@ -1,0 +1,5 @@
+(site:get 'front "/" 'public 'front)
+(site:get 'details "/details" 'public 'details)
+(site:get 'form "/form" 'session 'form-page)
+(site:post 'send "/send" 'public 'demo/send 'details 'form)
+(site:post 'clear "/clear" 'session 'demo/clear 'front 'details)

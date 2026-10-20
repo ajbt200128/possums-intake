@@ -1,0 +1,7 @@
+(defun page (title content)
+  (ui:document title (ui:main (ui:h1 title) (ui:text "\n") content)))
+(defmacro defgroup (name help)
+  (quasiquote (site:group (quote (unquote name)) (unquote help))))
+(defmacro defcustom (name default help &key type group)
+  (quasiquote (site:custom (quote (unquote name)) (unquote default)
+    (unquote help) (unquote type) (unquote group))))
