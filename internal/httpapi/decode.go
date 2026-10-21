@@ -86,7 +86,8 @@ func statusFor(code ledger.Code) int {
 		return http.StatusBadRequest
 	case ledger.CodeAccount:
 		return http.StatusNotFound
-	case ledger.CodeInsufficient, ledger.CodeDisabled, ledger.CodeConflict, ledger.CodeCharge, ledger.CodeExpired, ledger.CodeOverflow, ledger.CodeKeyWindow:
+	case ledger.CodeInsufficient, ledger.CodeDisabled, ledger.CodeConflict, ledger.CodeCharge, ledger.CodeExpired, ledger.CodeOverflow, ledger.CodeKeyWindow,
+		ledger.CodeRenewalClosed, ledger.CodeRenewalPrecondition, ledger.CodeRenewalNoProgress:
 		return http.StatusConflict
 	case ledger.CodeEvidence:
 		return http.StatusGone

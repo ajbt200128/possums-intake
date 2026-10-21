@@ -65,7 +65,7 @@ func TestOperatorPreparationNativeHashAndTransactionalSave(t *testing.T) {
 	})
 	s := newService(app)
 	if s.run(background, func(tx *transaction) error {
-		if err := migrateV1(tx); err != nil {
+		if err := initializeV2(tx); err != nil {
 			return err
 		}
 		fresh, err := tx.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
@@ -127,7 +127,7 @@ func TestOperatorPreparationInvalidDataRollsBackSchemaAndCredentials(t *testing.
 			s := newService(app)
 			var saveErr error
 			err = s.run(background, func(tx *transaction) error {
-				if err := migrateV1(tx); err != nil {
+				if err := initializeV2(tx); err != nil {
 					return err
 				}
 				saveErr = initializeOperator(tx, record)

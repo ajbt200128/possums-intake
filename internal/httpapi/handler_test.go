@@ -185,7 +185,7 @@ func TestReserveLookupSettleRefundAndPendingRows(t *testing.T) {
 	reserved := request(t, handler, http.MethodPost, "/reservations", headers, `{"account_id":"account-a","maximum":"400","timeout_seconds":600}`)
 	requireStatus(t, reserved, http.StatusOK)
 	reservation := decodeMap(t, reserved)["reservation"].(map[string]any)
-	exactKeys(t, reservation, "reservation_id", "idempotency_key", "account_id", "maximum", "timeout_seconds", "expires_at", "state", "charged_amount", "terminal_at", "retain_until")
+	exactKeys(t, reservation, "reservation_id", "idempotency_key", "account_id", "maximum", "timeout_seconds", "initial_expires_at", "expires_at", "state", "charged_amount", "terminal_at", "retain_until")
 	if reservation["state"] != "active" || reservation["maximum"] != "400" || reservation["timeout_seconds"] != float64(600) {
 		t.Fatalf("reservation row = %v", reservation)
 	}

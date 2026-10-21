@@ -14,7 +14,7 @@ func snapshotFixture(account string) ledger.BalanceSnapshot {
 	return ledger.BalanceSnapshot{
 		AccountBalance:      ledger.Account{AccountID: account, Balance: "18446744073709551615", Enabled: false},
 		Available:           "17",
-		PendingReservations: []ledger.Reservation{{ReservationID: strings.Repeat("a", 32), IdempotencyKey: "synthetic-key", AccountID: account, Maximum: "2", TimeoutSeconds: 60, ExpiresAt: 2000000000000, State: ledger.Active}},
+		PendingReservations: []ledger.Reservation{{ReservationID: strings.Repeat("a", 32), IdempotencyKey: "synthetic-key", AccountID: account, Maximum: "2", TimeoutSeconds: 60, InitialExpiresAt: 1999999940000, ExpiresAt: 2000000000000, State: ledger.Active}},
 	}
 }
 
@@ -26,7 +26,7 @@ func TestAccountSnapshotCompleteExactAndEscaped(t *testing.T) {
 		t.Fatal("complete snapshot view unavailable")
 	}
 	text := view[accountViewKey]
-	for _, expected := range []string{`Account: "row\n\t\x00\u96ea\u202e"`, "Balance (microunits): 18446744073709551615", "Available (microunits): 17", "Enabled: false", `reservation_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, `idempotency_key="synthetic-key"`, `account_id="row\n\t\x00\u96ea\u202e"`, "maximum=2", "timeout_seconds=60", "expires_at=2000000000000", `state="active"`, "charged_amount=null", "terminal_at=null", "retain_until=null"} {
+	for _, expected := range []string{`Account: "row\n\t\x00\u96ea\u202e"`, "Balance (microunits): 18446744073709551615", "Available (microunits): 17", "Enabled: false", `reservation_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, `idempotency_key="synthetic-key"`, `account_id="row\n\t\x00\u96ea\u202e"`, "maximum=2", "timeout_seconds=60", "initial_expires_at=1999999940000", "expires_at=2000000000000", `state="active"`, "charged_amount=null", "terminal_at=null", "retain_until=null"} {
 		if !strings.Contains(text, expected) {
 			t.Fatal("snapshot omitted or changed a defined field")
 		}

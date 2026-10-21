@@ -527,6 +527,7 @@ func siteSnapshot(c *siteClient, account, other string) error {
 			Account  string  `json:"account_id"`
 			Maximum  string  `json:"maximum"`
 			Timeout  int64   `json:"timeout_seconds"`
+			Initial  string  `json:"initial_expires_at"`
 			Expires  string  `json:"expires_at"`
 			State    string  `json:"state"`
 			Charged  *string `json:"charged_amount"`
@@ -541,10 +542,10 @@ func siteSnapshot(c *siteClient, account, other string) error {
 	p := snapshot.Pending[0]
 	expiry, parseErr := time.Parse("2006-01-02T15:04:05.000Z", p.Expires)
 	expires := expiry.UnixMilli()
-	if parseErr != nil || p.Account != account || p.State != "active" || p.Charged != nil || p.Terminal != nil || p.Retain != nil || p.Timeout != 600 || expires <= time.Now().UnixMilli() || p.ID == "" || p.Key == "" {
+	if parseErr != nil || p.Initial != p.Expires || p.Account != account || p.State != "active" || p.Charged != nil || p.Terminal != nil || p.Retain != nil || p.Timeout != 600 || expires <= time.Now().UnixMilli() || p.ID == "" || p.Key == "" {
 		return &siteProbeFailure{"IMAGE_WEBSITE_PENDING_UNCONFIRMED"}
 	}
-	want := fmt.Sprintf("Account: %s\nBalance (microunits): %s\nAvailable (microunits): %s\nEnabled: %t\nPending holds (amounts in microunits; timestamps in Unix milliseconds):\n- reservation_id=%s idempotency_key=%s account_id=%s maximum=%s timeout_seconds=%d expires_at=%d state=%s charged_amount=null terminal_at=null retain_until=null\n", strconv.QuoteToASCII(account), a.Balance, snapshot.Available, a.Enabled, strconv.QuoteToASCII(p.ID), strconv.QuoteToASCII(p.Key), strconv.QuoteToASCII(p.Account), p.Maximum, p.Timeout, expires, strconv.QuoteToASCII(p.State))
+	want := fmt.Sprintf("Account: %s\nBalance (microunits): %s\nAvailable (microunits): %s\nEnabled: %t\nPending holds (amounts in microunits; timestamps in Unix milliseconds):\n- reservation_id=%s idempotency_key=%s account_id=%s maximum=%s timeout_seconds=%d initial_expires_at=%d expires_at=%d state=%s charged_amount=null terminal_at=null retain_until=null\n", strconv.QuoteToASCII(account), a.Balance, snapshot.Available, a.Enabled, strconv.QuoteToASCII(p.ID), strconv.QuoteToASCII(p.Key), strconv.QuoteToASCII(p.Account), p.Maximum, p.Timeout, expires, expires, strconv.QuoteToASCII(p.State))
 	// Account-selector query strings are refused, never used as authority.
 	if _, err := c.do("GET", "/home?account_id="+url.QueryEscape(other), nil, 400, ""); err != nil {
 		return &siteProbeFailure{"IMAGE_WEBSITE_ISOLATION_UNCONFIRMED"}

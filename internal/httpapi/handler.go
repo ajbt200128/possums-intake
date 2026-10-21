@@ -42,16 +42,17 @@ type accountJSON struct {
 }
 
 type reservationJSON struct {
-	ReservationID  string  `json:"reservation_id"`
-	IdempotencyKey string  `json:"idempotency_key"`
-	AccountID      string  `json:"account_id"`
-	Maximum        string  `json:"maximum"`
-	TimeoutSeconds int64   `json:"timeout_seconds"`
-	ExpiresAt      string  `json:"expires_at"`
-	State          string  `json:"state"`
-	ChargedAmount  *string `json:"charged_amount"`
-	TerminalAt     *string `json:"terminal_at"`
-	RetainUntil    *string `json:"retain_until"`
+	ReservationID    string  `json:"reservation_id"`
+	IdempotencyKey   string  `json:"idempotency_key"`
+	AccountID        string  `json:"account_id"`
+	Maximum          string  `json:"maximum"`
+	TimeoutSeconds   int64   `json:"timeout_seconds"`
+	InitialExpiresAt string  `json:"initial_expires_at"`
+	ExpiresAt        string  `json:"expires_at"`
+	State            string  `json:"state"`
+	ChargedAmount    *string `json:"charged_amount"`
+	TerminalAt       *string `json:"terminal_at"`
+	RetainUntil      *string `json:"retain_until"`
 }
 
 type creditJSON struct {
@@ -73,6 +74,17 @@ type creditResponse struct {
 
 type reservationResponse struct {
 	Reservation reservationJSON `json:"reservation"`
+}
+
+type renewalResponse struct {
+	Reservation reservationJSON `json:"reservation"`
+	ObservedAt  string          `json:"observed_at"`
+}
+
+type renewalFailureResponse struct {
+	diagnostic
+	Reservation reservationJSON `json:"reservation"`
+	ObservedAt  string          `json:"observed_at"`
 }
 
 type balanceResponse struct {
@@ -130,6 +142,7 @@ func NewHandler(accounting ledger.Accounting, ready func() bool, adminKey string
 		"/accounts/provision":  h.provision,
 		"/credits":             h.credit,
 		"/reservations":        h.reserve,
+		"/reservations/renew":  h.renew,
 		"/reservations/settle": h.settle,
 		"/reservations/refund": h.refund,
 		"/reservations/lookup": h.lookup,
@@ -145,7 +158,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	buffered := &responseBuffer{header: http.Header{}}
 	_, custom := h.routes[r.URL.Path]
 	custom = custom && r.Method == http.MethodPost
-	complete := terminalCompletion(h.observer, time.Now())
+	observer := h.observer
+	if r.URL.Path == "/reservations/renew" {
+		// Renewal has typed transient diagnostics but no approved telemetry
+		// population. Do not silently add it to existing request/error metrics.
+		observer = nil
+	}
+	complete := terminalCompletion(observer, time.Now())
 	var report *ledger.FailureReport
 	if custom {
 		ctx, fresh := ledger.WithFailureReport(r.Context())
@@ -179,7 +198,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			buffered.reset()
 			writeJSON(buffered, http.StatusServiceUnavailable, diagUnknown)
 			if custom {
-				invalidateRequests(h.observer)
+				invalidateRequests(observer)
 			}
 		}
 		if custom {
@@ -194,7 +213,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if classified && !panicked && delivered && r.Context().Err() == nil {
 				class = statusClass(buffered.status)
 			}
-			observeFailures(h.observer, buffered.failures)
+			observeFailures(observer, buffered.failures)
 			complete(class)
 		}
 	}()
@@ -343,6 +362,42 @@ func (h *handler) reserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, reservationResponse{Reservation: toReservation(reservation)})
+}
+
+func (h *handler) renew(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ReservationID     string `json:"reservation_id"`
+		ExpectedExpiresAt string `json:"expected_expires_at"`
+	}
+	if !h.decode(w, r, &req, true) {
+		return
+	}
+	expected, err := time.Parse("2006-01-02T15:04:05.000Z", req.ExpectedExpiresAt)
+	if err != nil || expected.UTC().Format("2006-01-02T15:04:05.000Z") != req.ExpectedExpiresAt {
+		writeDiagnostic(w, http.StatusBadRequest, diagInput)
+		return
+	}
+	accountingInvoked(w)
+	renewal, err := h.accounting.Renew(r.Context(), ledger.RenewInput{
+		ReservationID: req.ReservationID, ExpectedExpiresAt: ledger.Millis(expected.UnixMilli()),
+	})
+	d := accountingReturned(w, r, err)
+	if d != nil {
+		// Only the core's confirmed decision refusals carry authoritative rows.
+		switch d.Code {
+		case ledger.CodeRenewalClosed, ledger.CodeRenewalPrecondition, ledger.CodeRenewalNoProgress, ledger.CodeDisabled:
+			if renewal.Reservation.ReservationID != "" && renewal.ObservedAt > 0 {
+				writeJSON(w, statusFor(d.Code), renewalFailureResponse{
+					diagnostic:  diagnostic{kind: d.Kind(), Code: string(d.Code), Stage: d.Stage, Constraint: d.Constraint, Outcome: d.Outcome, NextStep: d.NextStep},
+					Reservation: toReservation(renewal.Reservation), ObservedAt: formatMillis(renewal.ObservedAt),
+				})
+				return
+			}
+		}
+		h.writeFailure(w, d)
+		return
+	}
+	writeJSON(w, http.StatusOK, renewalResponse{Reservation: toReservation(renewal.Reservation), ObservedAt: formatMillis(renewal.ObservedAt)})
 }
 
 func (h *handler) settle(w http.ResponseWriter, r *http.Request) {
@@ -495,13 +550,14 @@ func toCredit(c ledger.Credit) creditJSON {
 
 func toReservation(r ledger.Reservation) reservationJSON {
 	out := reservationJSON{
-		ReservationID:  r.ReservationID,
-		IdempotencyKey: r.IdempotencyKey,
-		AccountID:      r.AccountID,
-		Maximum:        string(r.Maximum),
-		TimeoutSeconds: r.TimeoutSeconds,
-		ExpiresAt:      formatMillis(r.ExpiresAt),
-		State:          string(r.State),
+		ReservationID:    r.ReservationID,
+		IdempotencyKey:   r.IdempotencyKey,
+		AccountID:        r.AccountID,
+		Maximum:          string(r.Maximum),
+		TimeoutSeconds:   r.TimeoutSeconds,
+		InitialExpiresAt: formatMillis(r.InitialExpiresAt),
+		ExpiresAt:        formatMillis(r.ExpiresAt),
+		State:            string(r.State),
 	}
 	if r.ChargedAmount != nil {
 		charged := string(*r.ChargedAmount)

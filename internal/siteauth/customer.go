@@ -12,9 +12,16 @@ import (
 	"possums-intake/internal/ledger"
 )
 
+// customerTokenSeconds is the approved 12-hour native customer auth lifetime,
+// passed to the supported SDK TokenConfig.Duration setting (seconds).
+const customerTokenSeconds = 12 * 60 * 60
+
 // InitializeCustomerAuth is an explicit additive schema operation, never a
 // serve/login fallback. It neither creates credentials nor touches ledger rows.
 // Existing compatible state is preserved; collisions/incompatible state refuse.
+// A pre-existing collection keeps its current token duration: changing an
+// installation's lifetime is a separate supported native update, not a silent
+// side effect of re-running this additive initializer.
 func InitializeCustomerAuth(app core.App) (result error) {
 	defer func() {
 		if recover() != nil {
@@ -43,7 +50,7 @@ func InitializeCustomerAuth(app core.App) (result error) {
 		c.PasswordAuth.Enabled = true
 		c.PasswordAuth.IdentityFields = []string{"key_lookup"}
 		c.AuthRule = types.Pointer("")
-		c.AuthToken.Duration = 3600
+		c.AuthToken.Duration = customerTokenSeconds
 		c.Fields.GetByName("email").(*core.EmailField).Required = false
 		c.Fields.Add(&core.TextField{Name: "key_lookup", Hidden: true, Required: true, Min: 67, Max: 67, Pattern: `^v1_[0-9a-f]{64}$`})
 		c.Fields.Add(&core.TextField{Name: "account_id", Required: true, Min: 1, Max: 128})

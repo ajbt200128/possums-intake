@@ -22,6 +22,29 @@ Implementation orchestration mixes Possums DeepSeek v4.1 Flash for bounded routi
 
 `PLAN.md` pins the local execution contract (PocketBase v0.40.5, exact money/API schema, immutable timeouts, writer/RPC budgets, replay-safe bounded keys, storage and startup policy). `PRIVACY.md` governs accounting/telemetry boundaries. The operator has separately authorized commits/pushes to `ajbt200128/possums-intake` and preparation of a new **disposable synthetic-only Tinfoil test enclave**, including native operator dashboard login and direct native fake-account creation/editing. Local account-storage/accounting/browser/image qualification passed. An explicit disposable synthetic-serve startup/listener now exists and passed local compiled-CLI/source checks, but no image, release or deployed qualification covers it; see [disposable synthetic startup](docs/synthetic-startup.md) and [synthetic preparation](docs/synthetic-tinfoil.md). The operator authorized one CPU-only 2 CPU / 8192 MB no-volume disposable test instance at actual cost without another price-confirmation gate; no exact rate or spending ceiling is claimed and additional instances remain unauthorized. Do not activate production release/deployment templates by inference. No gateway cutover, real funds, real telemetry export or payments are authorized. Real-data/operator trust and access decisions remain separate gates.
 
+## Local renewal/auth source candidate
+
+The approved [renewable-hold contract](docs/gateway-hold-renewal.md) adds conditional
+lease extension and a narrow explicit stopped-service `ledger-upgrade --state`
+path from schema v1 to v2, preserving existing test state. Serve never upgrades or
+resets state; prior binaries refuse v2. [Customer native auth](docs/gateway-session-lifetime.md)
+uses 12-hour tokens for fresh setup, with an explicit supported duration-only
+native update for existing collections; website sessions remain 1h absolute/10m idle.
+
+The operator selected **uninterrupted accepted streams**, accepting uncollected
+usage if intake is unavailable or the hold expires. One unconfirmed renewal stops
+further renewals, not accepted work; terminal billing is attempted once at normal
+completion/genuine disconnect. This supersedes the earlier accounting cutoff,
+not new-admission reservation/auth checks. Gateway consumer work and all runtime
+configuration/migration/deployment gates remain separate. See the contract's
+qualification section for source evidence; policy approval is not live acceptance.
+
+The operator subsequently approved the guarded intake-only rollout, including one
+stopped existing-disk schema upgrade and the native existing-collection duration
+update. [Deployment decisions and pending gates](docs/gateway-renewal-deployment.md)
+track the minimal managed-unlock prerequisite and exact-source release work. No
+activation is claimed; gateway/client rollout remains separate.
+
 ## Local customer website
 
 The three-page ELPS website is now wired into ordinary `serve` and disposable

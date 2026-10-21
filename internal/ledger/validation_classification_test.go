@@ -88,7 +88,7 @@ func validationDatabase(t *testing.T) *dbx.DB {
 		t.Fatal("synthetic database connector unavailable")
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.NewQuery(schemaV1).Execute(); err != nil {
+	if _, err := db.NewQuery(schemaV2).Execute(); err != nil {
 		t.Fatal("synthetic exact DDL unavailable")
 	}
 	return db
@@ -256,7 +256,7 @@ func TestValidationDDLActualSQLiteBusy(t *testing.T) {
 	}
 	defer db.Close()
 	db.DB().SetMaxOpenConns(1)
-	if _, err := db.NewQuery(schemaV1).Execute(); err != nil {
+	if _, err := db.NewQuery(schemaV2).Execute(); err != nil {
 		t.Fatal("synthetic lock schema unavailable")
 	}
 	if _, err := db.NewQuery("BEGIN EXCLUSIVE").Execute(); err != nil {
