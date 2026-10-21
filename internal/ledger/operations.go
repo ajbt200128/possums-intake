@@ -296,16 +296,22 @@ func (s *Service) Cleanup(ctx context.Context, prune bool) (CleanupResult, error
 		if err := tx.query("SELECT "+reservationColumns+" FROM ledger_reservations WHERE state='active' AND expires_at<={:now} ORDER BY expires_at,reservation_id LIMIT 128", dbx.Params{"now": tx.now}).All(&due); err != nil {
 			return err
 		}
+		validatedAccounts := make(map[string]struct{}, len(due))
 		for _, r := range due {
 			if err := validateReservation(r); err != nil {
 				return err
 			}
-			a, err := tx.account(r.AccountID)
-			if err != nil {
-				return err
-			}
-			if _, _, err := tx.active(a, false); err != nil {
-				return err
+			if _, validated := validatedAccounts[r.AccountID]; !validated {
+				a, err := tx.account(r.AccountID)
+				if err != nil {
+					return err
+				}
+				if _, _, err := tx.active(a, false); err != nil {
+					return err
+				}
+				// Later expirations only reduce this validated hold sum; balances
+				// do not change within this serialized cleanup transaction.
+				validatedAccounts[r.AccountID] = struct{}{}
 			}
 			if err := tx.expire(&r); err != nil {
 				return err
