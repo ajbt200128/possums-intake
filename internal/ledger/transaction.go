@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync/atomic"
 
 	"possums-intake/internal/failuretype"
@@ -36,9 +37,10 @@ func (*callbackFailure) Error() string   { return "LEDGER_TRANSACTION_CALLBACK_A
 func (e *callbackFailure) Unwrap() error { return e.cause }
 
 type transaction struct {
-	app core.App
-	ctx context.Context
-	now int64
+	app    core.App
+	ctx    context.Context
+	now    int64
+	legacy bool // only explicit offline v1 validation/upgrade
 }
 
 func (tx *transaction) query(sql string, params dbx.Params) *dbx.Query {
@@ -337,6 +339,10 @@ func fatalStorage(err error) (fatal bool) {
 }
 
 func (tx *transaction) clock() error {
+	return tx.readClock(2, true)
+}
+
+func (tx *transaction) readClock(expectedVersion int, advance bool) error {
 	var version, count int
 	var high, wall int64
 	if err := tx.query("SELECT count(*) FROM ledger_meta", nil).Row(&count); err != nil {
@@ -348,7 +354,7 @@ func (tx *transaction) clock() error {
 	if err := tx.query("SELECT schema_version,clock_high_water_ms FROM ledger_meta WHERE singleton=1", nil).Row(&version, &high); err != nil {
 		return err
 	}
-	if version != 1 || high < 0 || high > 9999999999999 {
+	if version != expectedVersion || high < 0 || high > 9999999999999 {
 		return diagnostic(CodeSchema)
 	}
 	if err := tx.query("SELECT CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER)", nil).Row(&wall); err != nil {
@@ -359,10 +365,21 @@ func (tx *transaction) clock() error {
 	if tx.now <= 0 || tx.now > 9999999999999-KeyWindowMS {
 		return diagnostic(CodeCorrupt)
 	}
+	if !advance {
+		return nil
+	}
 	return tx.exec("UPDATE ledger_meta SET clock_high_water_ms={:now} WHERE singleton=1", dbx.Params{"now": tx.now})
 }
 
-const reservationColumns = "reservation_id,idempotency_key,account_id,maximum,timeout_seconds,expires_at,state,charged_amount,terminal_at,retain_until"
+const reservationColumns = "reservation_id,idempotency_key,account_id,maximum,timeout_seconds,initial_expires_at,expires_at,state,charged_amount,terminal_at,retain_until"
+
+func (tx *transaction) reservationColumns() string {
+	if tx.legacy {
+		return strings.Replace(reservationColumns, "initial_expires_at", "expires_at AS initial_expires_at", 1)
+	}
+	return reservationColumns
+}
+
 const creditColumns = "idempotency_key,account_id,amount,balance_after,committed_at,retain_until"
 
 func validateAccount(a Account) error {
@@ -377,11 +394,11 @@ func validateAccount(a Account) error {
 func validateReservation(r Reservation) error {
 	issued, err := keyIssued(r.IdempotencyKey)
 	maxAmount, amtErr := r.Maximum.units()
-	if err != nil || amtErr != nil || maxAmount == 0 || !idPattern.MatchString(r.ReservationID) || !validAccount(r.AccountID) || r.TimeoutSeconds < 1 || r.TimeoutSeconds > 1800 || int64(r.ExpiresAt) <= 0 || int64(r.ExpiresAt) > 9999999999999 {
+	if err != nil || amtErr != nil || maxAmount == 0 || !idPattern.MatchString(r.ReservationID) || !validAccount(r.AccountID) || r.TimeoutSeconds < 1 || r.TimeoutSeconds > 1800 || r.InitialExpiresAt <= 0 || r.InitialExpiresAt > r.ExpiresAt || int64(r.ExpiresAt) <= 0 || int64(r.ExpiresAt) > 9999999999999 {
 		return diagnostic(CodeCorrupt)
 	}
 	// The original admission must have satisfied the immutable new-key window.
-	admitted := int64(r.ExpiresAt) - r.TimeoutSeconds*1000
+	admitted := int64(r.InitialExpiresAt) - r.TimeoutSeconds*1000
 	if admitted <= 0 || issued > admitted+FutureSkewMS || admitted >= issued+KeyWindowMS {
 		return diagnostic(CodeCorrupt)
 	}
@@ -439,7 +456,7 @@ func (tx *transaction) account(id string) (Account, error) {
 func (tx *transaction) reservation(field, id string) (Reservation, error) {
 	var r Reservation
 	// field is a locally authored literal at every call site, never caller input.
-	err := tx.query("SELECT "+reservationColumns+" FROM ledger_reservations WHERE "+field+"={:id}", dbx.Params{"id": id}).One(&r)
+	err := tx.query("SELECT "+tx.reservationColumns()+" FROM ledger_reservations WHERE "+field+"={:id}", dbx.Params{"id": id}).One(&r)
 	if err != nil {
 		return r, err
 	}
@@ -455,7 +472,7 @@ func (tx *transaction) credit(key string) (Credit, error) {
 }
 func (tx *transaction) active(a Account, expire bool) ([]Reservation, uint64, error) {
 	rows := make([]Reservation, 0)
-	if err := tx.query("SELECT "+reservationColumns+" FROM ledger_reservations WHERE account_id={:id} AND state='active' ORDER BY reservation_id", dbx.Params{"id": a.AccountID}).All(&rows); err != nil {
+	if err := tx.query("SELECT "+tx.reservationColumns()+" FROM ledger_reservations WHERE account_id={:id} AND state='active' ORDER BY reservation_id", dbx.Params{"id": a.AccountID}).All(&rows); err != nil {
 		return nil, 0, err
 	}
 	var held uint64

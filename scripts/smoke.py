@@ -26,10 +26,10 @@ RPC_SECONDS = 5
 SHUTDOWN_SECONDS = 8
 OUTPUT_LIMIT = 64 * 1024
 ROUTES = ("/accounts/provision", "/credits", "/reservations",
-          "/reservations/settle", "/reservations/refund",
+          "/reservations/renew", "/reservations/settle", "/reservations/refund",
           "/reservations/lookup", "/balance")
 RESERVATION_FIELDS = {"reservation_id", "idempotency_key", "account_id", "maximum",
-                      "timeout_seconds", "expires_at", "state", "charged_amount",
+                      "timeout_seconds", "initial_expires_at", "expires_at", "state", "charged_amount",
                       "terminal_at", "retain_until"}
 TIME_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", re.ASCII)
 
@@ -263,7 +263,9 @@ def reservation(row, stage: str):
            int(row["maximum"]) <= 2**64 - 1, stage, "exact_positive_money")
     expect(type(row["timeout_seconds"]) is int and 1 <= row["timeout_seconds"] <= 1800,
            stage, "required_timeout")
+    utc(row["initial_expires_at"], stage)
     utc(row["expires_at"], stage)
+    expect(row["initial_expires_at"] <= row["expires_at"], stage, "original_expiry_preserved")
     if row["state"] == "active":
         expect(all(row[field] is None for field in ("charged_amount", "terminal_at", "retain_until")),
                stage, "active_null_terminal_fields")
@@ -341,11 +343,27 @@ def run_cases(s: Service):
     hold, _ = reserve("300")
     second, _ = reserve("100")
     balance("1000", [hold, second], "balance")
+    renewal_input = {"reservation_id": hold["reservation_id"], "expected_expires_at": hold["expires_at"]}
+    renewal = rpc("/reservations/renew", renewal_input, stage="renew")
+    expect(set(renewal) == {"reservation", "observed_at"}, "renew", "complete_renewal_fields")
+    utc(renewal["observed_at"], "renew")
+    renewed = renewal["reservation"]
+    reservation(renewed, "renew")
+    expect(renewed["expires_at"] > hold["expires_at"] and
+           {k: v for k, v in renewed.items() if k != "expires_at"} ==
+           {k: v for k, v in hold.items() if k != "expires_at"}, "renew", "only_expiry_extended")
+    expect(rpc("/reservations/renew", renewal_input, stage="renew")["reservation"] == renewed,
+           "renew", "duplicate_does_not_extend_again")
+    hold = renewed
+    balance("1000", [hold, second], "renew")
     identity = {"reservation_id": hold["reservation_id"]}
     settled = rpc("/reservations/settle", {**identity, "charged_amount": "250"}, stage="settle")
     reservation(settled.get("reservation"), "settle")
     expect(settled["reservation"]["state"] == "settled" and
            settled["reservation"]["charged_amount"] == "250", "settle", "committed_charge")
+    closed = rpc("/reservations/renew", renewal_input, stage="renew", status=409)
+    expect(closed.get("code") == "LEDGER_RENEWAL_CLOSED" and closed.get("reservation") == settled["reservation"],
+           "renew", "terminal_absorbs_renewal")
     for amount in ("250", "200"):
         expect(rpc("/reservations/settle", {**identity, "charged_amount": amount}, stage="settle") == settled,
                "settle", "first_terminal_wins")
@@ -372,7 +390,13 @@ def run_cases(s: Service):
     expect(rpc("/reservations/lookup", {"reservation_id": expiring["reservation_id"]}, stage="lookup")["reservation"] == expired,
            "lookup", "retained_expiry")
     balance("750", [], "expiry")
-    for path in ("/", "/_/", "/api/collections", "/api/settings", "/api/backups",
+    # Ordinary serve now owns the public website root; it is not a native route.
+    # Keep the accounting/native denial assertions without claiming root is absent.
+    for method, body, expected in (("GET", None, 200), ("POST", {}, 415)):
+        status, payload = run_curl(s.port, None, method, "/", body, None, "website")
+        expect(status == expected and s.key.encode() not in payload,
+               "website", "public_root_and_no_accounting_key")
+    for path in ("/_/", "/api/collections", "/api/settings", "/api/backups",
                  "/api/files", "/api/realtime", "/api/collections/_superusers/auth-with-password"):
         for body in (None, {}):
             doc = rpc(path, body, stage="routes", status=404, auth="missing")

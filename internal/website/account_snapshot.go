@@ -36,8 +36,8 @@ func snapshotView(account string, snapshot ledger.BalanceSnapshot) (map[string]s
 		}
 	}
 	for _, row := range snapshot.PendingReservations {
-		_, err := fmt.Fprintf(&out, "- reservation_id=%s idempotency_key=%s account_id=%s maximum=%s timeout_seconds=%d expires_at=%d state=%s charged_amount=%s terminal_at=%s retain_until=%s\n",
-			strconv.QuoteToASCII(row.ReservationID), strconv.QuoteToASCII(row.IdempotencyKey), strconv.QuoteToASCII(row.AccountID), row.Maximum, row.TimeoutSeconds, int64(row.ExpiresAt), strconv.QuoteToASCII(string(row.State)), nullableMoney(row.ChargedAmount), nullableMillis(row.TerminalAt), nullableMillis(row.RetainUntil))
+		_, err := fmt.Fprintf(&out, "- reservation_id=%s idempotency_key=%s account_id=%s maximum=%s timeout_seconds=%d initial_expires_at=%d expires_at=%d state=%s charged_amount=%s terminal_at=%s retain_until=%s\n",
+			strconv.QuoteToASCII(row.ReservationID), strconv.QuoteToASCII(row.IdempotencyKey), strconv.QuoteToASCII(row.AccountID), row.Maximum, row.TimeoutSeconds, int64(row.InitialExpiresAt), int64(row.ExpiresAt), strconv.QuoteToASCII(string(row.State)), nullableMoney(row.ChargedAmount), nullableMillis(row.TerminalAt), nullableMillis(row.RetainUntil))
 		if err != nil {
 			return nil, accountViewLimit()
 		}

@@ -64,7 +64,7 @@ func TestHTTPExpiryPostRunRoleWithEqualCategoryDeliveryAndOverflow(t *testing.T)
 				wire := decodeMap(t, out)
 				row := wire["reservation"].(map[string]any)
 				exactKeys(t, wire, "code", "stage", "constraint", "outcome", "next_step", "reservation")
-				exactKeys(t, row, "reservation_id", "idempotency_key", "account_id", "maximum", "timeout_seconds", "expires_at", "state", "charged_amount", "terminal_at", "retain_until")
+				exactKeys(t, row, "reservation_id", "idempotency_key", "account_id", "maximum", "timeout_seconds", "initial_expires_at", "expires_at", "state", "charged_amount", "terminal_at", "retain_until")
 				if wire["outcome"] != "expired" || row["state"] != "expired" || row["charged_amount"] != "0" || row["terminal_at"] != row["expires_at"] {
 					t.Fatal("post-run role altered canonical authoritative expiry row")
 				}

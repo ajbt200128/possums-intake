@@ -74,7 +74,7 @@ func TestSchemaDriftRejectedAndMigrationRollback(t *testing.T) {
 	if e := partial.run(background, func(tx *transaction) error { return tx.exec("CREATE TABLE ledger_accounts (account_id TEXT)", nil) }, false); e != nil {
 		t.Fatal("fixture table failed")
 	}
-	e = partial.run(background, migrateV1, false)
+	e = partial.run(background, initializeV2, false)
 	codeIs(t, e, CodeSchema)
 	var count int
 	if e := app.DB().NewQuery("SELECT count(*) FROM sqlite_schema WHERE name='ledger_meta'").Row(&count); e != nil || count != 0 {

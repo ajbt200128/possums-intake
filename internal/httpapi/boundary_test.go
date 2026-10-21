@@ -47,6 +47,10 @@ func (s stubLedger) Reserve(context.Context, ledger.ReserveInput) (ledger.Reserv
 	s.maybePanic("reserve")
 	return s.reservation, s.result(nil)
 }
+func (s stubLedger) Renew(context.Context, ledger.RenewInput) (ledger.Renewal, error) {
+	s.maybePanic("renew")
+	return ledger.Renewal{Reservation: s.reservation}, s.result(nil)
+}
 func (s stubLedger) Settle(context.Context, ledger.SettleInput) (ledger.Reservation, error) {
 	s.maybePanic("settle")
 	return s.reservation, s.result(nil)
@@ -78,6 +82,9 @@ func (panicLedger) Credit(context.Context, ledger.CreditInput) (ledger.Credit, e
 func (panicLedger) Reserve(context.Context, ledger.ReserveInput) (ledger.Reservation, error) {
 	panic("SYNTHETIC_PRIVATE_SENTINEL")
 }
+func (panicLedger) Renew(context.Context, ledger.RenewInput) (ledger.Renewal, error) {
+	panic("SYNTHETIC_PRIVATE_SENTINEL")
+}
 func (panicLedger) Settle(context.Context, ledger.SettleInput) (ledger.Reservation, error) {
 	panic("SYNTHETIC_PRIVATE_SENTINEL")
 }
@@ -103,6 +110,7 @@ var routesAndBodies = []struct {
 	{"/accounts/provision", `{"account_id":"a"}`},
 	{"/credits", `{"account_id":"a","amount":"1"}`},
 	{"/reservations", `{"account_id":"a","maximum":"1","timeout_seconds":600}`},
+	{"/reservations/renew", `{"reservation_id":"` + strings.Repeat("a", 32) + `","expected_expires_at":"2030-01-01T00:00:00.000Z"}`},
 	{"/reservations/settle", `{"reservation_id":"` + strings.Repeat("a", 32) + `","charged_amount":"0"}`},
 	{"/reservations/refund", `{"reservation_id":"` + strings.Repeat("a", 32) + `"}`},
 	{"/reservations/lookup", `{"reservation_id":"` + strings.Repeat("a", 32) + `"}`},

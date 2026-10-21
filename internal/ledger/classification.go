@@ -26,9 +26,9 @@ func defaultFailureKind(code Code) failuretype.Type {
 	switch code {
 	case CodeInput:
 		return failuretype.RequestInvalid
-	case CodeNativeHold, CodeExpired:
+	case CodeNativeHold, CodeExpired, CodeRenewalClosed, CodeRenewalNoProgress:
 		return failuretype.PolicyRefused
-	case CodeKey, CodeKeyWindow, CodeConflict:
+	case CodeKey, CodeKeyWindow, CodeConflict, CodeRenewalPrecondition:
 		return failuretype.IdempotencyRefused
 	case CodeAccount:
 		return failuretype.AccountMissing

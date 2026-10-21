@@ -96,6 +96,13 @@ func TestHTTPFailureOwnerAuthParserAndPopulation(t *testing.T) {
 			}
 			out := request(t, h, "POST", route.path, headers, body)
 			closedDiagnostic(t, out)
+			if route.path == "/reservations/renew" {
+				expectFailures(t, spy)
+				if len(spy.classes) != 0 {
+					t.Fatal("renewal expanded telemetry population")
+				}
+				continue
+			}
 			expectFailures(t, spy, fixture.want)
 			if len(spy.classes) != 1 || spy.classes[0] != telemetry.Status4xx {
 				t.Fatal("terminal population changed")
