@@ -342,10 +342,22 @@ func TestRuntimeDiagnosticClassificationAndPrivacy(t *testing.T) {
 	if diagnostic(t, err).Category != DeadlineExceeded {
 		t.Fatal("LISPSITE_TEST_DEADLINE_CATEGORY")
 	}
-	b := fixture()
-	b["init.el"] = `(dotimes (i 2147483647))`
-	_, err = prepare(context.Background(), b)
-	if d := diagnostic(t, err); d.Code != "EXECUTION_LIMIT" || d.Constraint != "step_budget" {
+}
+
+func TestPreparationStepBudgetDiagnostic(t *testing.T) {
+	ctx := context.Background()
+	e, _, err := environment(ctx)
+	if err != nil {
+		t.Fatal("LISPSITE_TEST_ENVIRONMENT")
+	}
+	// Exercise the real evaluator budget without racing Prepare's independent
+	// wall-clock deadline; cancellation/deadline classification is tested above.
+	v := e.LoadStringContext(ctx, "init.el", `(dotimes (i 2147483647))`)
+	if v.Type != lisp.LError {
+		t.Fatal("LISPSITE_TEST_STEP_NOT_ENFORCED")
+	}
+	d := evaluationFault(ctx, v, true)
+	if d.Code != "EXECUTION_LIMIT" || d.Constraint != "step_budget" || d.Stage != "bundle_prepare" || d.Category != Refused {
 		t.Fatal("LISPSITE_TEST_STEP_CATEGORY")
 	}
 }
