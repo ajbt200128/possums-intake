@@ -63,8 +63,8 @@ r.CODES.update({
 
 def parse(args):
     names = {"--sourceSHA", "--qualification-run", "--qualification-attempt", "--expected-image",
-             "--expected-archive", "--writers-quiet-confirmed"}
-    r.require(len(args) == 13 and args[0] == "publish", "arguments")
+             "--expected-archive", "--writers-quiet-confirmed", "--checks-run", "--checks-attempt"}
+    r.require(len(args) == 17 and args[0] == "publish", "arguments")
     values = {}
     for key, value in zip(args[1::2], args[2::2], strict=True):
         r.require(key in names and key not in values, "arguments")
@@ -74,6 +74,8 @@ def parse(args):
               and r.pin(values["--expected-archive"], r"[0-9a-f]{64}"), "arguments")
     return {"source": values["--sourceSHA"], "qualification_run": p.positive(values["--qualification-run"]),
             "qualification_attempt": p.positive(values["--qualification-attempt"]), "baseline": d.BASELINE,
+            "checks_run": p.positive(values["--checks-run"]),
+            "checks_attempt": p.positive(values["--checks-attempt"]),
             "expected_image": values["--expected-image"], "expected_archive": values["--expected-archive"],
             "writers_quiet_confirmed": True}
 
@@ -166,6 +168,8 @@ class Tools:
 
 
 def admit(api, ctx):
+    r.require(all(type(ctx.get(key)) is int and ctx[key] > 0 for key in ("checks_run", "checks_attempt")),
+              "arguments")
     r.require(ctx.get("baseline") == d.BASELINE and ctx.get("writers_quiet_confirmed") is True,
               "diagnostic_approval")
     return p.boundary("diagnostic_evidence", lambda: p.admit_qualified(api, ctx, p.repository_gate(api)))
