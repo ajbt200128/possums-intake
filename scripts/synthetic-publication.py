@@ -196,13 +196,18 @@ def step_gate(job, names):
                   and matches[0].get("conclusion") == "success", "build")
 
 
-def admit(api, ctx, workflow=WORKFLOW):
-    """Authenticated reads only. Artifact IDs are selected here, never user input."""
-    source = ctx["source"]
+def repository_gate(api):
     repo = api.repo()
     r.require(type(repo.get("id")) is int and repo["id"] > 0
               and repo.get("full_name") == REPO and r.boolean(repo.get("private"), True)
               and repo.get("owner", {}).get("login") == OWNER and repo.get("default_branch") == "main", "synthetic_approval")
+    return repo
+
+
+def admit(api, ctx, workflow=WORKFLOW):
+    """CI authority stays separate from reusable authenticated qualification."""
+    source = ctx["source"]
+    repo = repository_gate(api)
     current = api.repo(f"/actions/runs/{ctx['run']}")
     r.require(current.get("id") == ctx["run"] and type(current.get("run_attempt")) is int
               and current["run_attempt"] == 1
@@ -213,6 +218,12 @@ def admit(api, ctx, workflow=WORKFLOW):
               and current.get("head_repository", {}).get("full_name") == REPO
               and current.get("actor", {}).get("login") == OWNER
               and current.get("triggering_actor", {}).get("login") == OWNER, "synthetic_approval")
+    return admit_qualified(api, ctx, repo)
+
+
+def admit_qualified(api, ctx, repo):
+    """UNCHANGED evidence gates; caller supplies independently checked authority/repo."""
+    source = ctx["source"]
     checks = api.pages(f"/actions/workflows/check.yml/runs?branch=main&head_sha={source}&status=completed", "workflow_runs")
     eligible = []
     for check in checks:
