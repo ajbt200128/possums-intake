@@ -724,6 +724,19 @@ class DeliveryTests(unittest.TestCase):
         self.f.data["qualification"]["cases"]["migration_failure_refused"] = "unknown"
         self.stop("qualification", lambda: r.candidate_gate(self.f, self.f.candidate))
 
+    def test_fresh_v3_schema_refusal_uses_exact_current_cli_contract(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
+        view = {"code": "LEDGER_STARTUP_SCHEMA", "stage": "state_validation",
+                "constraint": "supported_schema_and_metadata", "outcome": "unavailable",
+                "next_step": "This source requires the fresh merged schema v3. Preserve incompatible state and inspect privately; no migration, empty reset or financial restore is authorized."}
+        result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
+        with patch.object(smoke, "command", return_value=result):
+            fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA")
+        view["next_step"] = "Inspect schema privately. No down-migration, empty reset or financial restore is authorized."
+        result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
+        with patch.object(smoke, "command", return_value=result):
+            self.stop("image_privacy", lambda: fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA"))
+
     def test_actual_image_negative_requires_exact_closed_diagnostic(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
         view = {"code": "LEDGER_STARTUP_SCHEMA", **smoke.STARTUP_EXPECTED["LEDGER_STARTUP_SCHEMA"]}
