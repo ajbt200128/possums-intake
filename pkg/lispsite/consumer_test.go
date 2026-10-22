@@ -23,6 +23,20 @@ func TestStandaloneSinglePage(t *testing.T) {
 	}
 }
 
+func TestStandaloneInertHostAndDetails(t *testing.T) {
+	r, err := lispsite.Prepare(context.Background(), lispsite.Bundle{"init.el": `
+(defun welcome (v p) (ui:document "Example" (ui:main (ui:details "More" (ui:host 'example)))))
+(site:get 'welcome "/" 'public 'welcome)
+`}, lispsite.Policy{HostComponents: []string{"example"}})
+	if err != nil {
+		t.Fatal("LISPSITE_TEST_CONSUMER_HOST_PREPARE")
+	}
+	page, err := r.Page(context.Background(), "welcome")
+	if err != nil || page.Children[0].Children[0].Children[0].Kind != "host" {
+		t.Fatal("LISPSITE_TEST_CONSUMER_HOST_PAGE")
+	}
+}
+
 func TestDependencyBoundary(t *testing.T) {
 	// Use the pinned CLI supplied in PATH by the offline acceptance command.
 	cmd := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", ".")

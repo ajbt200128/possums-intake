@@ -245,7 +245,7 @@ func environment(ctx context.Context) (*lisp.LEnv, lisp.TemplateOption, error) {
 	}
 	for pkg, defs := range map[string][]builtin{
 		"site": {{"load", lisp.Formals("name"), loadFile}, {"get", lisp.Formals("name", "path", "policy", "entry"), getRoute}, {"post", lisp.Formals("name", "path", "policy", "action", "success", "error"), postRoute}, {"group", lisp.Formals("name", "help"), optionGroup}, {"custom", lisp.Formals("name", "default", "help", "type", "group"), customOption}, {"style", lisp.Formals("values"), styleValues}, {"url", lisp.Formals("name"), routeURL}, {"option", lisp.Formals("preferences", "name"), optionValue}},
-		"ui":   {{"document", lisp.Formals("title", "content"), documentNode}, {"main", lisp.Formals(lisp.VarArgSymbol, "children"), mainNode}, {"group", lisp.Formals(lisp.VarArgSymbol, "children"), groupNode}, {"h1", lisp.Formals("text"), headingNode}, {"p", lisp.Formals("text"), paragraphNode}, {"text", lisp.Formals("text"), textNode}, {"face", lisp.Formals("name", "text"), faceNode}, {"link", lisp.Formals("url", "text"), linkNode}, {"notice", lisp.Formals("suffix"), noticeNode}, {"login-form", lisp.Formals("action"), loginNode}, {"post-form", lisp.Formals("action", "text"), postNode}},
+		"ui":   {{"document", lisp.Formals("title", "content"), documentNode}, {"host", lisp.Formals("name"), hostNode}, {"details", lisp.Formals("summary", "content"), detailsNode}, {"main", lisp.Formals(lisp.VarArgSymbol, "children"), mainNode}, {"group", lisp.Formals(lisp.VarArgSymbol, "children"), groupNode}, {"h1", lisp.Formals("text"), headingNode}, {"p", lisp.Formals("text"), paragraphNode}, {"text", lisp.Formals("text"), textNode}, {"face", lisp.Formals("name", "text"), faceNode}, {"link", lisp.Formals("url", "text"), linkNode}, {"notice", lisp.Formals("suffix"), noticeNode}, {"login-form", lisp.Formals("action"), loginNode}, {"post-form", lisp.Formals("action", "text"), postNode}},
 	} {
 		e.DefinePackage(lisp.Symbol(pkg))
 		e.InPackage(lisp.Symbol(pkg))
@@ -525,6 +525,14 @@ func linkNode(_ *lisp.LEnv, a *lisp.LVal) *lisp.LVal      { return node("link", 
 func noticeNode(_ *lisp.LEnv, a *lisp.LVal) *lisp.LVal    { return node("notice", a.Cells...) }
 func loginNode(_ *lisp.LEnv, a *lisp.LVal) *lisp.LVal     { return node("login-form", a.Cells...) }
 func postNode(_ *lisp.LEnv, a *lisp.LVal) *lisp.LVal      { return node("post-form", a.Cells...) }
+func detailsNode(_ *lisp.LEnv, a *lisp.LVal) *lisp.LVal   { return node("details", a.Cells...) }
+func hostNode(e *lisp.LEnv, a *lisp.LVal) *lisp.LVal {
+	s := state(e)
+	if s == nil || a.Cells[0].Type != lisp.LSymbol || !s.revision.admission.hosts[a.Cells[0].Str] {
+		return refused(e)
+	}
+	return node("host", lisp.String(a.Cells[0].Str))
+}
 
 // Faces are closed presentation choices, never caller-supplied CSS/classes.
 func faceNode(e *lisp.LEnv, a *lisp.LVal) *lisp.LVal {
@@ -607,6 +615,9 @@ func (r *Revision) PageWithView(ctx context.Context, entry string, view map[stri
 		return Node{}, evaluationFault(ctx, nil, false)
 	}
 	if !ok || page.Kind != "document" {
+		if text > MaxTextBytes {
+			return Node{}, fault("PAGE_TEXT_LIMIT", "page_evaluation", "complete_page_text_budget", Refused)
+		}
 		return Node{}, renderFault()
 	}
 	return page, nil
@@ -671,6 +682,29 @@ func (r *Revision) copyNode(v *lisp.LVal, depth int, count, text *int) (Node, bo
 			}
 			n.Children = append(n.Children, child)
 		}
+	case "host":
+		if len(args) != 1 {
+			return Node{}, false
+		}
+		var ok bool
+		n.Target, ok = take(args[0])
+		if !ok || !r.admission.hosts[n.Target] {
+			return Node{}, false
+		}
+	case "details":
+		if len(args) != 2 {
+			return Node{}, false
+		}
+		var ok bool
+		n.Text, ok = take(args[0])
+		if !ok {
+			return Node{}, false
+		}
+		child, ok := r.copyNode(args[1], depth+1, count, text)
+		if !ok || child.Kind == "document" || child.Kind == "main" {
+			return Node{}, false
+		}
+		n.Children = []Node{child}
 	case "h1", "p", "text", "notice", "tooltip":
 		if len(args) != 1 {
 			return Node{}, false

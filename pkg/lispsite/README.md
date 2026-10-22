@@ -14,6 +14,16 @@ module or repository.
   PocketBase storage, accounting, publication, logging or telemetry.
 - The host supplies reserved paths/prefixes and allowed action/form bindings as
   copied `Policy` data. The library never executes backend actions.
+- Optional `Policy.HostComponents` admits at most 32 unique stable names (lowercase
+  letter followed by at most 47 lowercase letters, digits or hyphens). The empty
+  policy denies every host component. `(ui:host 'example)` returns only an inert
+  leaf `Node{Kind: "host", Target: "example"}`; no values, URLs, actions or callbacks
+  are carried or invoked. Hosts must independently validate and bind these names;
+  admitting a name does not grant its eventual host capability.
+- `(ui:details "Summary" content-node)` produces semantic disclosure presentation:
+  one summary string and one child other than document/main. It shares the normal
+  depth, node and text bounds. Rendering, escaping and no-JS behavior belong to
+  the consumer, not to this library.
 - `Diagnostic` exposes closed content-free evidence. Application adapters must
   validate complete tuples before mapping them; never forward upstream errors.
 
