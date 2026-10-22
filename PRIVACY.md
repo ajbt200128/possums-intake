@@ -36,6 +36,49 @@ The operator subsequently authorized sandbox read/write setup and local syntheti
 
 Application SDK credentials and the local listener's signing secret may be consumed privately by the explicitly selected local sandbox process, never copied into chat, tool history, arguments, source, diagnostics or ledger records. `.env`, editor/backup/terminal history, process memory, CLI's own locally stored authentication and Stripe's audit/network retention are independent persistence boundaries. No whole-host transience or secure-erasure claim is made. MCP OAuth is separate authority, not an application SDK credential; a sandbox label alone is not proof of API scope. Preserve disabled ordinary-serving defaults, supported signature/API validation, bounded TLS-verified SDK calls, no automatic creation replay, and explicit CLI telemetry opt-out. Never capture raw CLI listener output into agent history. The operator subsequently requested Go-only private startup and authorized the agent to start the local sandbox for their browser test. A separately selected development command may read only the literal application-key assignment from bounded ignored `.env`, privately supervise one pinned CLI listener with an isolated empty configuration, pass its actual listener secret to the existing Go runtime in memory, and emit one fixed content-free readiness marker after a passive local HTTPS check using that runtime's exact ephemeral certificate as the trusted root. No raw CLI output, persistent diagnostics, TLS bypass, extra listener, background reconciliation, automatic Checkout, payment submission or process restart follows. Ordinary serving and the manual sandbox command do not gain dotenv loading or CLI startup. See [the scoped local sandbox plan](docs/stripe-sandbox-local.md) for sequencing and unqualified activation gates.
 
+## Renewable reservation and customer-duration packet
+
+The operator approved local source/disposable-synthetic qualification of
+[conditional renewable holds](docs/gateway-hold-renewal.md) and
+[12-hour customer auth tokens](docs/gateway-session-lifetime.md). Renewals retain
+only the existing reservation plus immutable original expiry (`initial_expires_at`)
+and update current expiry; no renewal history, owner registry, new identifiers,
+model/token/quote metadata or activity telemetry. Active reserve-key evidence stays
+for the entire renewed lifetime; existing bounded terminal retention and clock
+watermark replay protection remain. Additional lease observation time is transient
+first-party response data, not diagnostics or telemetry. Renewal requests do not
+expand the existing telemetry observation population.
+
+The operator expressly accepted continuing already accepted gateway work through
+intake/renewal outages or hold expiry, without an accounting-driven stream cutoff.
+After one unconfirmed renewal, no further renewals/recovery loop for that operation;
+one best-effort terminal billing attempt at normal completion or genuine disconnect,
+with unknown outcomes preserved and uncollected cost accepted. This is not new
+admission authority or post-expiry collection. Initial work still requires a
+confirmed valid reservation. Gateway implementation/qualification is separate.
+
+The duration-only native customer collection update preserves credentials/signing
+material and leaves website 1-hour absolute/10-minute idle sessions unchanged.
+Existing tokens retain their original expiry. No automatic serve-time migration,
+credential recreation or state reset. A narrow explicit stopped-service schema
+upgrade must preserve existing test state; local qualification is not permission
+to run it on an installation. No live/paid probe, secret binding, runtime update,
+installation, deployment, publication, push/merge or telemetry export follows
+from local source approval alone.
+
+The operator subsequently explicitly approved the intake-only deployment through
+normal review/CI, native matching-build/provenance/signing and protected approval
+gates, including a minimal managed existing-disk upgrade path, one stopped-service
+migration boot, one serving activation and one verified native duration-only update.
+[Rollout decisions and gates](docs/gateway-renewal-deployment.md) record the scope.
+Preserve operator test state, disk/key, credentials and bindings. No automatic
+migration while serving, reset, initialization, restore, old-binary rollback after
+v2, mutation retry, new resource, real funds, gateway/client rollout, inference or
+telemetry export. Only manual operator tests currently consume intake; this is
+operator-confirmed inventory, not logging/discovery evidence. No secret values in
+agent history; use supported private entry if native authentication is required.
+Approval is not evidence of migration, the existing duration setting or deployment.
+
 ## Selected persistent-volume key custody
 
 For the standalone synthetic permanent-storage packet, the operator explicitly chose **Tinfoil-managed secret delivery** after disclosure that the platform holds the original disk key and can decrypt the disk. This supersedes the earlier customer-only-key/attended-unlock choice for this packet. Automatic startup unlock is intended; keep an independent copy of the original key in the operator's password manager. No customer-controlled confidentiality from Tinfoil is claimed.

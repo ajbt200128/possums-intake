@@ -86,6 +86,34 @@ transaction/commit uncertainty supplies no usable receipt. Renewal adds no worke
 automatic retry or hold-expiry grace. The accepted renewal route remains excluded
 from the existing request/error telemetry population.
 
+## Conditional renewal (local source candidate)
+
+The approved [renewal contract](../../docs/gateway-hold-renewal.md) adds immutable
+`initial_expires_at` to every reservation DTO, including pending snapshots. Current
+`expires_at` may increase only through `/reservations/renew`; original maximum,
+account, reserve key and timeout remain unchanged. `expected_expires_at` must use
+exact fixed UTC milliseconds. No new idempotency header is required.
+
+Equal expectation conditionally extends an enabled unexpired hold to effective
+accounting time plus its original timeout. An older expectation (not before initial
+expiry) returns current active state without extending again; future expectation
+refuses. Terminal/expiry races remain absorbing. Successful replies include the
+same transaction's `observed_at`. Known closed/precondition/no-progress/disabled
+refusals include the authoritative `reservation` and `observed_at` alongside the
+usual closed diagnostic; unknown completion never supplies a usable row.
+
+`LEDGER_RENEWAL_CLOSED`, `LEDGER_RENEWAL_PRECONDITION` and
+`LEDGER_RENEWAL_NO_PROGRESS` are 409. Existing disabled 409/evidence 410/input 400
+and storage/unknown 503 remain. A successful HTTP reply is current lease evidence,
+not proof that this delivery extended it or charged anything. Renewals retain typed
+transient failure handling but do not expand request or error telemetry populations.
+
+The gateway's separately approved policy is uninterrupted accepted work: after one
+unconfirmed renewal, stop renewal attempts, not the stream. Attempt terminal billing
+once at normal completion/genuine disconnect. Expired usage can remain uncollected;
+no automatic recovery, replay or post-expiry debit. This supersedes the earlier
+29-minute accounting cutoff policy, not initial reservation/authentication checks.
+
 ## Error status map
 
 Closed request diagnostics (locally authored, never from ledger or parser):

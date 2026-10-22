@@ -26,6 +26,31 @@ Implementation orchestration mixes Possums DeepSeek v4.1 Flash for bounded routi
 
 The operator authorized local synthetic-only fixed-denomination Stripe top-ups after the [reviewed plan](docs/stripe-topup-plan.md). The optional ledger schema, offline-only supported SDK adapter, signed webhook coordinator and authenticated host-owned top-up surfaces are implemented and source-tested. Final full race/browser/vet/module checks, local app/Linux-image builds and the existing isolated generated-image runtime/privacy qualifier pass. No real Stripe credentials or processor calls are needed; ordinary serving remains payment-disabled. Explicit `synthetic-payments-init --state ...` adds only optional feature schema to an existing stopped local synthetic ledger. Refund/chargeback automation and ledger clawbacks are out of scope; losses are accepted. See [scope, evidence and remaining gates](docs/stripe-topup-local.md). No real payments, gateway integration or deployment follows.
 
+## Renewable-hold predecessor and retained behavior
+
+**Historical rollout:** the v1-to-v2 upgrade described here belongs to the accepted predecessor release. The current merged-account schema v3 retains renewals and the twelve-hour native token default but has no upgrade/migration command; use the [current release record](docs/merged-account-deployment.md). Existing incompatible state still refuses, and no reset authority is inferred.
+
+The approved [renewable-hold contract](docs/gateway-hold-renewal.md) adds conditional
+lease extension and a narrow explicit stopped-service `ledger-upgrade --state`
+path from schema v1 to v2, preserving existing test state. Serve never upgrades or
+resets state; prior binaries refuse v2. [Customer native auth](docs/gateway-session-lifetime.md)
+uses 12-hour tokens for fresh setup, with an explicit supported duration-only
+native update for existing collections; website sessions remain 1h absolute/10m idle.
+
+The operator selected **uninterrupted accepted streams**, accepting uncollected
+usage if intake is unavailable or the hold expires. One unconfirmed renewal stops
+further renewals, not accepted work; terminal billing is attempted once at normal
+completion/genuine disconnect. This supersedes the earlier accounting cutoff,
+not new-admission reservation/auth checks. Gateway consumer work and all runtime
+configuration/migration/deployment gates remain separate. See the contract's
+qualification section for source evidence; policy approval is not live acceptance.
+
+The operator subsequently approved the guarded intake-only rollout, including one
+stopped existing-disk schema upgrade and the native existing-collection duration
+update. [Deployment decisions and pending gates](docs/gateway-renewal-deployment.md)
+track the minimal managed-unlock prerequisite and exact-source release work. No
+activation is claimed; gateway/client rollout remains separate.
+
 ## Local customer website
 
 **Latest local schema:** [one merged Accounts auth collection](docs/merged-account-schema.md) now holds SDK authentication, exact balance and enabled state. The generated record ID is the sole account ID; the older separate credential/account creation recipe is superseded. Fresh synthetic initialization only—no migration tooling or implicit reset. Existing old layouts refuse before SDK bootstrap. This source change is not activated in the currently running sandbox and has no new image/deployed/gateway qualification.
