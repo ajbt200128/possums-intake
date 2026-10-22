@@ -222,9 +222,17 @@ def admit(api, ctx, workflow=WORKFLOW):
 
 
 def admit_qualified(api, ctx, repo):
-    """UNCHANGED evidence gates; caller supplies independently checked authority/repo."""
+    """Caller supplies checked authority/repo; native callers pin exact checks."""
     source = ctx["source"]
-    checks = api.pages(f"/actions/workflows/check.yml/runs?branch=main&head_sha={source}&status=completed", "workflow_runs")
+    if "checks_run" in ctx or "checks_attempt" in ctx:
+        r.require(all(type(ctx.get(key)) is int and ctx[key] > 0 for key in ("checks_run", "checks_attempt")),
+                  "arguments")
+        check = api.repo(f"/actions/runs/{ctx['checks_run']}")
+        run_gate(check, "check.yml", source, ctx["checks_attempt"], {"push", "workflow_dispatch"})
+        r.require(check["id"] == ctx["checks_run"], "synthetic_evidence")
+        checks = [check]
+    else:
+        checks = api.pages(f"/actions/workflows/check.yml/runs?branch=main&head_sha={source}&status=completed", "workflow_runs")
     eligible = []
     for check in checks:
         try:
@@ -232,6 +240,7 @@ def admit_qualified(api, ctx, repo):
             r.require(type(check.get("run_attempt")) is int and check["run_attempt"] > 0, "checks")
             observed = api.repo(f"/actions/runs/{check['id']}/attempts/{check['run_attempt']}")
             run_gate(observed, "check.yml", source, check["run_attempt"], {"push", "workflow_dispatch"})
+            r.require(observed["id"] == check["id"], "synthetic_evidence")
             eligible.append(observed)
         except r.Stop as error:
             if error.code == "synthetic_evidence":

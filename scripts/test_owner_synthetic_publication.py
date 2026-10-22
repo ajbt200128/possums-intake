@@ -22,6 +22,28 @@ p, d = n.p, n.d
 SECRET = "SYNTHETIC_SECRET_SENTINEL"  # noqa: S105 - offline synthetic sentinel, not a credential
 
 
+class NativeAPI(fixtures.FakeAPI):
+    """Exact native reads are independent of the CI discovery-list fixture."""
+    def __init__(self):
+        super().__init__()
+        self.check_run = copy.deepcopy(self.checks[0])
+        self.check_attempt = copy.deepcopy(self.check_run)
+
+    def repo(self, suffix=""):
+        if suffix in ("/actions/runs/10", "/actions/runs/10/attempts/1"):
+            self.reads.append(suffix)
+            if self.on_read:
+                self.on_read(suffix)
+            return copy.deepcopy(self.check_run if suffix == "/actions/runs/10" else self.check_attempt)
+        return super().repo(suffix)
+
+
+class NativeFixture(fixtures.Fixture):
+    def __init__(self, root):
+        super().__init__(root)
+        self.api = NativeAPI()
+
+
 class NativePinsTests(unittest.TestCase):
     def test_production_pins_match_independently_qualified_packages(self):
         self.assertEqual(n.NATIVE_GH, Path("/nix/store/a1i791nra2ivwww08klq5q97wngql6yn-gh-2.88.1/bin/gh"))
@@ -36,10 +58,10 @@ class OwnerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="intake-owner-test-")
         self.addCleanup(self.tmp.cleanup)
-        self.f = fixtures.Fixture(self.tmp.name)
+        self.f = NativeFixture(self.tmp.name)
         self.ctx = {key: value for key, value in self.f.api.ctx.items() if key != "run"}
         self.ctx.update(expected_image=self.f.digest, expected_archive=self.f.archive_hash,
-                        writers_quiet_confirmed=True)
+                        writers_quiet_confirmed=True, checks_run=10, checks_attempt=1)
         self.env = patch.dict(os.environ, {"GITHUB_TOKEN": SECRET, "GITHUB_ACTOR": p.OWNER})
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -58,7 +80,8 @@ class OwnerTests(unittest.TestCase):
     def args(self):
         return ["publish", "--sourceSHA", self.ctx["source"], "--qualification-run", "20",
                 "--qualification-attempt", "1", "--expected-image", self.f.digest,
-                "--expected-archive", self.f.archive_hash, "--writers-quiet-confirmed", "true"]
+                "--expected-archive", self.f.archive_hash, "--writers-quiet-confirmed", "true",
+                "--checks-run", "10", "--checks-attempt", "1"]
 
     def refused(self, operation, code=None, outcome="no_effect"):
         with self.assertRaises(r.Stop) as caught:
@@ -98,7 +121,8 @@ class OwnerTests(unittest.TestCase):
             for args in (["publish"], ["hostile"], self.args() + ["--unknown", SECRET]):
                 self.refused(lambda args=args: n.main(args), "arguments")
             for index, bad in ((2, SECRET), (4, "01"), (6, "0"), (8, "hostile"),
-                               (10, "hostile"), (12, "false"), (11, "--sourceSHA")):
+                               (10, "hostile"), (12, "false"), (11, "--sourceSHA"),
+                               (14, "01"), (16, "0"), (15, "--checks-run")):
                 args = self.args()
                 args[index] = bad
                 self.refused(lambda args=args: n.main(args), "arguments")
@@ -108,6 +132,183 @@ class OwnerTests(unittest.TestCase):
             run.assert_not_called()
             command.assert_not_called()
         self.assertEqual(n.parse(self.args()), self.ctx)
+
+    def test_native_cli_requires_both_canonical_checks_pins_before_any_work(self):
+        with patch.object(n, "publish") as publish, patch.object(n, "native_env") as env, \
+                patch.object(Path, "lstat") as stat, patch.object(n.smoke, "run_bounded") as run, \
+                patch.object(p, "command") as command:
+            for key in ("--checks-run", "--checks-attempt"):
+                index = self.args().index(key)
+                missing = self.args()
+                del missing[index:index + 2]
+                self.refused(lambda missing=missing: n.main(missing), "arguments")
+                self.refused(lambda key=key: n.main(self.args() + [key, "1"]), "arguments")
+                for bad in ("0", "01", "-1", "", "1.0", "true", True, 1, "1" * 21):
+                    with self.subTest(key=key, bad=bad):
+                        args = self.args()
+                        args[index + 1] = bad
+                        self.refused(lambda args=args: n.main(args), "arguments")
+            self.refused(lambda: n.main(self.args()[:-4]), "arguments")
+            publish.assert_not_called()
+            env.assert_not_called()
+            stat.assert_not_called()
+            run.assert_not_called()
+            command.assert_not_called()
+
+    def test_internal_native_checks_pins_are_strict_integers_before_api(self):
+        for key in ("checks_run", "checks_attempt"):
+            for bad in (None, 0, -1, True, False, "10", "01", 1.0):
+                with self.subTest(key=key, bad=bad):
+                    ctx = dict(self.ctx, **{key: bad})
+                    with patch.object(p, "repository_gate") as repository:
+                        self.refused(lambda ctx=ctx: n.admit(self.f.api, ctx), "arguments")
+                        repository.assert_not_called()
+                    self.refused(lambda ctx=ctx: p.admit_qualified(self.f.api, ctx, self.f.api.repo_data), "arguments")
+            ctx = dict(self.ctx)
+            del ctx[key]
+            self.refused(lambda ctx=ctx: n.admit(self.f.api, ctx), "arguments")
+            self.refused(lambda ctx=ctx: p.admit_qualified(self.f.api, ctx, self.f.api.repo_data), "arguments")
+        ctx = {key: value for key, value in self.ctx.items() if key not in ("checks_run", "checks_attempt")}
+        self.refused(lambda: n.admit(self.f.api, ctx), "arguments")
+        self.assertEqual(self.f.api.reads, [])
+        self.no_copy()
+
+    def test_native_exact_checks_accept_empty_discovery_without_querying_it(self):
+        self.f.api.checks = []
+        original = self.f.api.pages
+        def pages(suffix, field):
+            self.assertNotEqual(field, "workflow_runs")
+            return original(suffix, field)
+        with patch.object(self.f.api, "pages", side_effect=pages):
+            instance = self.instance()
+            self.assertEqual(instance.execute()["imageDigest"], self.f.digest)
+        reads = self.f.api.reads
+        self.assertEqual(reads.count("/actions/runs/10"), 3)
+        self.assertEqual(reads.count("/actions/runs/10"), reads.count("/actions/runs/10/attempts/1"))
+        self.assertFalse(any("/actions/workflows/check.yml/runs" in path for path in reads))
+        self.assertEqual(sum(args[1] == "copy" for args in self.f.calls), 1)
+
+    def test_native_selects_the_actual_pinned_run_and_attempt_not_fixture_defaults(self):
+        ctx = dict(self.ctx, checks_run=17, checks_attempt=3)
+        check = dict(self.f.api.check_run, id=17, run_attempt=3, event="push")
+        original = self.f.api.repo
+        def repo(suffix=""):
+            if suffix in ("/actions/runs/17", "/actions/runs/17/attempts/3"):
+                self.f.api.reads.append(suffix)
+                return copy.deepcopy(check)
+            self.assertFalse(suffix.startswith("/actions/runs/10"))
+            return original(suffix)
+        with patch.object(self.f.api, "repo", side_effect=repo):
+            n.admit(self.f.api, ctx)
+        self.assertIn("/actions/runs/17", self.f.api.reads)
+        self.assertIn("/actions/runs/17/attempts/3", self.f.api.reads)
+        self.assertFalse(any("/actions/workflows/check.yml/runs" in path for path in self.f.api.reads))
+        self.no_copy()
+
+    def test_default_ci_still_discovers_checks_and_requires_actions_authority(self):
+        self.assertNotIn("checks_run", self.f.api.ctx)
+        self.assertNotIn("checks_attempt", self.f.api.ctx)
+        p.admit(self.f.api, self.f.api.ctx, d.WORKFLOW)
+        self.assertTrue(any("/actions/workflows/check.yml/runs" in path for path in self.f.api.reads))
+        self.f.api.checks = []
+        self.refused(lambda: p.admit(self.f.api, self.f.api.ctx, d.WORKFLOW), "checks")
+        self.f.api.current["status"] = "completed"
+        forged = dict(self.f.api.ctx, checks_run=10, checks_attempt=1)
+        for workflow in (p.WORKFLOW, d.WORKFLOW):
+            with patch.object(p, "admit_qualified") as qualified:
+                self.refused(lambda workflow=workflow: p.admit(self.f.api, forged, workflow), "synthetic_approval")
+                qualified.assert_not_called()
+        self.no_copy()
+
+    def test_exact_run_and_attempt_metadata_must_each_match_native_pins(self):
+        vectors = (("id", 11), ("id", True), ("repository", {"full_name": "fork/repo"}),
+                   ("head_repository", {"full_name": "fork/repo"}),
+                   ("path", ".github/workflows/other.yml"), ("head_sha", "2" * 40),
+                   ("head_branch", "feature"), ("event", "pull_request"),
+                   ("status", "in_progress"), ("conclusion", "failure"),
+                   ("run_attempt", 2), ("run_attempt", 0), ("run_attempt", True),
+                   ("run_attempt", "1"))
+        instance = self.instance()
+        for target in (self.f.api.check_run, self.f.api.check_attempt):
+            for key, value in vectors:
+                with self.subTest(target="run" if target is self.f.api.check_run else "attempt", key=key, value=value):
+                    original = target[key]
+                    target[key] = value
+                    try:
+                        self.refused(instance.execute)
+                    finally:
+                        target[key] = original
+                    self.assertFalse(instance.used)
+                    self.no_copy()
+        self.f.api.main = "2" * 40
+        self.refused(instance.execute, "stale")
+        self.no_copy()
+
+    def test_checks_attempt_identity_is_also_bound_in_default_ci(self):
+        self.f.api.check_attempt["id"] = 11
+        self.refused(lambda: p.admit(self.f.api, self.f.api.ctx, d.WORKFLOW), "synthetic_evidence")
+        self.no_copy()
+
+    def test_failed_exact_checks_reads_never_fall_back_to_successful_discovery(self):
+        original = self.f.api.repo
+        for path in ("/actions/runs/10", "/actions/runs/10/attempts/1"):
+            for failure in (r.Stop("synthetic_evidence", status=503), RuntimeError("hostile " + SECRET)):
+                with self.subTest(path=path, failure=type(failure).__name__):
+                    def repo(suffix="", path=path, failure=failure):
+                        if suffix == path:
+                            raise failure
+                        return original(suffix)
+                    with patch.object(self.f.api, "repo", side_effect=repo), \
+                            patch.object(self.f.api, "pages") as pages:
+                        self.refused(lambda: n.admit(self.f.api, self.ctx))
+                        pages.assert_not_called()
+        self.no_copy()
+
+    def test_unknown_exact_checks_responses_refuse_without_discovery_fallback(self):
+        original = self.f.api.repo
+        for path in ("/actions/runs/10", "/actions/runs/10/attempts/1"):
+            for response in (None, [], {}, {"id": 10}):
+                with self.subTest(path=path, response=response):
+                    def repo(suffix="", path=path, response=response):
+                        return response if suffix == path else original(suffix)
+                    with patch.object(self.f.api, "repo", side_effect=repo), \
+                            patch.object(self.f.api, "pages") as pages:
+                        self.refused(lambda: n.admit(self.f.api, self.ctx))
+                        pages.assert_not_called()
+        self.no_copy()
+
+    def test_changed_or_unavailable_checks_refresh_after_auth_never_copies(self):
+        for kind in ("run", "attempt", "main", "unavailable"):
+            with self.subTest(kind=kind):
+                instance = self.instance()
+                original_prepare = instance.auth.prepare
+                original_read = self.f.api.on_read
+                run = copy.deepcopy(self.f.api.check_run)
+                attempt = copy.deepcopy(self.f.api.check_attempt)
+                main = self.f.api.main
+                def prepare(kind=kind, original_prepare=original_prepare):
+                    path = original_prepare()
+                    if kind == "run":
+                        self.f.api.check_run["run_attempt"] = 2
+                    elif kind == "attempt":
+                        self.f.api.check_attempt["id"] = 11
+                    elif kind == "main":
+                        self.f.api.main = "2" * 40
+                    else:
+                        def unavailable(suffix):
+                            if suffix == "/actions/runs/10":
+                                raise r.Stop("synthetic_evidence", status=503)
+                        self.f.api.on_read = unavailable
+                    return path
+                try:
+                    with patch.object(instance.auth, "prepare", side_effect=prepare):
+                        self.refused(instance.execute)
+                    self.assertFalse(instance.used)
+                    self.assertIsNone(instance.auth.directory)
+                    self.no_copy()
+                finally:
+                    self.f.api.check_run, self.f.api.check_attempt, self.f.api.main = run, attempt, main
+                    self.f.api.on_read = original_read
 
     def test_native_real_qualification_without_actions_forgery_ci_guards_unchanged(self):
         original = copy.deepcopy(self.f.api.current)
@@ -233,7 +434,7 @@ class OwnerTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 root = self.f.root / ("changed-" + kind)
                 root.mkdir()
-                f = fixtures.Fixture(root)
+                f = NativeFixture(root)
                 ctx = dict(self.ctx)
                 auth = p.Authfile()
                 original = auth.prepare
