@@ -1,5 +1,7 @@
 # Local customer authentication and account snapshot — approved contract
 
+**Historical split-schema contract:** the operator subsequently selected and locally implemented [one merged Accounts auth collection](merged-account-schema.md), with its generated record ID as the sole financial/customer identity. The separate `customer_keys`/external `account_id` layout and two-record provisioning recipe below are superseded, not a migration requirement. Section 1's raw-key format and domain-separated adapter remain applicable. The later [UI contract](stripe-topup-ui.md) supersedes the old technical snapshot presentation below. Use the merged-account document for current fresh-state setup and qualification; this historical record does not authorize resetting running/deployed state.
+
 **Status: operator-approved for isolated synthetic local implementation.** The
 operator explicitly approved this scoped storage/privacy/implementation contract;
 [the intake policy](../PRIVACY.md#customer-key-authentication-and-scoped-website-account-reads)
