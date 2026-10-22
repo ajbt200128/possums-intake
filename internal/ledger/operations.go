@@ -10,32 +10,6 @@ import (
 	"github.com/pocketbase/dbx"
 )
 
-func (s *Service) Provision(ctx context.Context, id string) (Account, error) {
-	if !validAccount(id) {
-		return Account{}, diagnostic(CodeInput)
-	}
-	var result Account
-	err := s.run(ctx, func(tx *transaction) error {
-		a, err := tx.account(id)
-		if err == nil {
-			_, _, err = tx.active(a, true)
-			result = a
-			return err
-		}
-		if d, ok := err.(*Diagnostic); !ok || d.Code != CodeAccount {
-			return err
-		}
-		if _, err := tx.createAccount(NativeAccountCreate{AccountID: id, Balance: "0", Enabled: true}); err != nil {
-			return err
-		}
-		result = Account{AccountID: id, Balance: "0", Enabled: true}
-		return nil
-	}, true)
-	if err != nil {
-		return Account{}, err
-	}
-	return result, nil
-}
 func (s *Service) Credit(ctx context.Context, in CreditInput) (Credit, error) {
 	issued, err := keyIssued(in.IdempotencyKey)
 	if err != nil {
@@ -74,7 +48,7 @@ func (s *Service) Credit(ctx context.Context, in CreditInput) (Credit, error) {
 			return err
 		}
 		retain := retention(issued, tx.now)
-		if err := tx.exec("UPDATE ledger_accounts SET balance={:after} WHERE account_id={:id}", dbx.Params{"after": string(money(after)), "id": in.AccountID}); err != nil {
+		if err := tx.exec("UPDATE accounts SET balance={:after} WHERE id={:id}", dbx.Params{"after": string(money(after)), "id": in.AccountID}); err != nil {
 			return err
 		}
 		if err := tx.exec("INSERT INTO ledger_credits(idempotency_key,account_id,amount,balance_after,committed_at,retain_until) VALUES({:key},{:id},{:amount},{:after},{:now},{:retain})", dbx.Params{"key": in.IdempotencyKey, "id": in.AccountID, "amount": string(in.Amount), "after": string(money(after)), "now": tx.now, "retain": int64(retain)}); err != nil {
@@ -279,7 +253,7 @@ func (s *Service) finish(ctx context.Context, id string, state State, charge Mon
 			if total < charged {
 				return diagnostic(CodeCorrupt)
 			}
-			if err := tx.exec("UPDATE ledger_accounts SET balance={:balance} WHERE account_id={:id}", dbx.Params{"balance": string(money(total - charged)), "id": a.AccountID}); err != nil {
+			if err := tx.exec("UPDATE accounts SET balance={:balance} WHERE id={:id}", dbx.Params{"balance": string(money(total - charged)), "id": a.AccountID}); err != nil {
 				return err
 			}
 		}
@@ -349,7 +323,7 @@ func (s *Service) Lookup(ctx context.Context, id string) (Reservation, error) {
 }
 
 // Cleanup expires up to 128 due rows; prune=true also prunes at most 128
-// eligible terminal/credit rows COMBINED. It never loops through a backlog.
+// eligible terminal/credit/optional-payment rows COMBINED. It never loops through a backlog.
 func (s *Service) Cleanup(ctx context.Context, prune bool) (CleanupResult, error) {
 	var result CleanupResult
 	err := s.run(ctx, func(tx *transaction) error {
@@ -408,6 +382,11 @@ func (s *Service) Cleanup(ctx context.Context, prune bool) (CleanupResult, error
 			}
 			result.Pruned++
 		}
+		payments, err := tx.prunePayments(CleanupLimit - result.Pruned)
+		if err != nil {
+			return err
+		}
+		result.Pruned += payments
 		return nil
 	}, true)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"possums-intake/internal/httpapi"
 	"possums-intake/internal/ledger"
 	"possums-intake/internal/telemetry"
+	"possums-intake/internal/testfixture"
 )
 
 type httpOutageExporter struct {
@@ -57,6 +58,9 @@ func TestHTTPCompleteWindowOutageAndShutdownPreserveAccounting(t *testing.T) {
 		t.Fatal("storage fixture unavailable")
 	}
 	defer service.Close()
+	if _, err := testfixture.Create(ctx, service, "synthetic000000"); err != nil {
+		t.Fatal("synthetic auth fixture unavailable")
+	}
 	now := time.Unix(1_800_000_000, 0).UTC() // aligned synthetic window, not request timestamps
 	exporter := &httpOutageExporter{started: make(chan metricdata.ResourceMetrics, 1)}
 	runtime, tick := telemetry.NewHTTPTestRuntime(ctx, exporter, func() time.Time { return now })
@@ -81,9 +85,9 @@ func TestHTTPCompleteWindowOutageAndShutdownPreserveAccounting(t *testing.T) {
 	}
 	identity := func(n int) string { return fmt.Sprintf("v1.%013d.%032x", time.Now().UnixMilli(), n) }
 	for _, out := range []*httptest.ResponseRecorder{
-		post("/accounts/provision", `{"account_id":"synthetic"}`, "", true),
-		post("/credits", `{"account_id":"synthetic","amount":"10"}`, identity(1), true),
-		post("/balance", `{"account_id":"synthetic"}`, "", true),
+		post("/balance", `{"account_id":"synthetic000000"}`, "", true),
+		post("/credits", `{"account_id":"synthetic000000","amount":"10"}`, identity(1), true),
+		post("/balance", `{"account_id":"synthetic000000"}`, "", true),
 	} {
 		if out.Code != 200 {
 			t.Fatal("actual accounting operation failed")
@@ -136,16 +140,16 @@ func TestHTTPCompleteWindowOutageAndShutdownPreserveAccounting(t *testing.T) {
 		t.Fatal("HTTP terminal population mismatched")
 	}
 	// Export is actively blocked outside any transaction; accounting still works.
-	out := post("/credits", `{"account_id":"synthetic","amount":"5"}`, identity(2), true)
+	out := post("/credits", `{"account_id":"synthetic000000","amount":"5"}`, identity(2), true)
 	if out.Code != 200 {
 		t.Fatal("outage changed accounting")
 	}
 	runtime.Shutdown() // cancels and joins the blocked exporter, no partial flush
-	out = post("/credits", `{"account_id":"synthetic","amount":"5"}`, identity(3), true)
+	out = post("/credits", `{"account_id":"synthetic000000","amount":"5"}`, identity(3), true)
 	if out.Code != 200 {
 		t.Fatal("shutdown changed accounting")
 	}
-	out = post("/balance", `{"account_id":"synthetic"}`, "", true)
+	out = post("/balance", `{"account_id":"synthetic000000"}`, "", true)
 	var snapshot struct {
 		Available string `json:"available"`
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"possums-intake/internal/testfixture"
 	"strings"
 	"sync"
 	"testing"
@@ -78,16 +79,16 @@ func TestPublicationLedgerRestartAndLoggingIsolation(t *testing.T) {
 			service.Close()
 		}
 	}()
-	if _, err = service.Provision(ctx, "synthetic-publication-account"); err != nil {
+	if _, err = testfixture.Create(ctx, service, "publication0000"); err != nil {
 		t.Fatal("PUBLICATION_LEDGER_PROVISION")
 	}
-	if _, err = service.Credit(ctx, ledger.CreditInput{AccountID: "synthetic-publication-account", Amount: "100", IdempotencyKey: fmt.Sprintf("v1.%013d.00000000000000000000000000000001", time.Now().UnixMilli())}); err != nil {
+	if _, err = service.Credit(ctx, ledger.CreditInput{AccountID: "publication0000", Amount: "100", IdempotencyKey: fmt.Sprintf("v1.%013d.00000000000000000000000000000001", time.Now().UnixMilli())}); err != nil {
 		t.Fatal("PUBLICATION_LEDGER_CREDIT")
 	}
-	if _, err = service.Reserve(ctx, ledger.ReserveInput{AccountID: "synthetic-publication-account", Maximum: "20", IdempotencyKey: fmt.Sprintf("v1.%013d.00000000000000000000000000000002", time.Now().UnixMilli()), TimeoutSeconds: 60}); err != nil {
+	if _, err = service.Reserve(ctx, ledger.ReserveInput{AccountID: "publication0000", Maximum: "20", IdempotencyKey: fmt.Sprintf("v1.%013d.00000000000000000000000000000002", time.Now().UnixMilli()), TimeoutSeconds: 60}); err != nil {
 		t.Fatal("PUBLICATION_LEDGER_HOLD")
 	}
-	before, err := service.Balance(ctx, "synthetic-publication-account")
+	before, err := service.Balance(ctx, "publication0000")
 	if err != nil {
 		t.Fatal("PUBLICATION_LEDGER_BALANCE")
 	}
@@ -116,7 +117,7 @@ func TestPublicationLedgerRestartAndLoggingIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal("PUBLICATION_LEDGER_RESTART")
 	}
-	after, err := service.Balance(ctx, "synthetic-publication-account")
+	after, err := service.Balance(ctx, "publication0000")
 	if err != nil || before.AccountBalance != after.AccountBalance || before.Available != after.Available || len(after.PendingReservations) != 1 || before.PendingReservations[0] != after.PendingReservations[0] {
 		t.Fatal("PUBLICATION_CHANGED_FINANCIAL_STATE")
 	}

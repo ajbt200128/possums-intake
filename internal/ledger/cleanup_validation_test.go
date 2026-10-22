@@ -15,13 +15,13 @@ func TestCleanupValidatesEachAccountOncePerTransaction(t *testing.T) {
 		name     string
 		accounts []string
 	}{
-		{"single_account", []string{"a"}},
-		{"interleaved_accounts", []string{"a", "b", "c"}},
+		{"single_account", []string{"aaaaaaaaaaaaaaa"}},
+		{"interleaved_accounts", []string{"aaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbb", "ccccccccccccccc"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, now := testService(t)
 			for i, id := range tc.accounts {
-				a, err := s.Provision(background, id)
+				a, err := fixtureAccount(s, background, id)
 				must(t, a, err)
 				c, err := s.Credit(background, CreditInput{id, "100", key(now, i+1)})
 				must(t, c, err)
@@ -43,7 +43,7 @@ func TestCleanupValidatesEachAccountOncePerTransaction(t *testing.T) {
 				activeReads := make([]int, len(tc.accounts))
 				db.QueryLogFunc = func(_ context.Context, _ time.Duration, statement string, _ *sql.Rows, _ error) {
 					for i, id := range tc.accounts {
-						if statement == "SELECT account_id,balance,enabled FROM ledger_accounts WHERE account_id='"+id+"'" {
+						if statement == "SELECT id AS account_id,balance,enabled FROM accounts WHERE id='"+id+"'" {
 							accountReads[i]++
 						}
 						if strings.HasPrefix(statement, "SELECT ") && strings.HasSuffix(statement, " FROM ledger_reservations WHERE account_id='"+id+"' AND state='active' ORDER BY reservation_id") {
@@ -76,17 +76,17 @@ func TestCleanupValidatesEachAccountOncePerTransaction(t *testing.T) {
 
 func TestCleanupCorruptionCannotBeConcealedByExpiry(t *testing.T) {
 	for _, corruption := range []string{"undued_active_row", "impossible_held_sum"} {
-		for _, corruptAccount := range []string{"a", "b"} {
+		for _, corruptAccount := range []string{"aaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbb"} {
 			t.Run(corruption+"/"+corruptAccount, func(t *testing.T) {
 				s, _, now := testService(t)
-				for i, id := range []string{"a", "b"} {
-					a, err := s.Provision(background, id)
+				for i, id := range []string{"aaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbb"} {
+					a, err := fixtureAccount(s, background, id)
 					must(t, a, err)
 					c, err := s.Credit(background, CreditInput{id, "10", key(now, i+1)})
 					must(t, c, err)
 				}
 				var holds []Reservation
-				for i, id := range []string{"a", "a", "b", "b"} {
+				for i, id := range []string{"aaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbb"} {
 					holds = append(holds, reserve(t, s, ReserveInput{id, "2", int64(i + 1), key(now, i+10)}))
 				}
 				undued := reserve(t, s, ReserveInput{corruptAccount, "2", 600, key(now, 20)})
@@ -97,7 +97,7 @@ func TestCleanupCorruptionCannotBeConcealedByExpiry(t *testing.T) {
 					}
 					// The full hold sum is six; expiring even one due row would
 					// conceal the impossible pre-expiry balance of five.
-					return tx.exec("UPDATE ledger_accounts SET balance='5' WHERE account_id={:id}", dbx.Params{"id": corruptAccount})
+					return tx.exec("UPDATE accounts SET balance='5' WHERE id={:id}", dbx.Params{"id": corruptAccount})
 				}, false); err != nil {
 					t.Fatal("synthetic corruption fixture failed")
 				}
@@ -119,7 +119,7 @@ func TestCleanupCorruptionCannotBeConcealedByExpiry(t *testing.T) {
 					t.Fatal("corrupt cleanup returned a receipt or retained readiness")
 				}
 				expectedAttempts := 0
-				if corruptAccount == "b" {
+				if corruptAccount == "bbbbbbbbbbbbbbb" {
 					expectedAttempts = 2
 				}
 				if attemptedExpirations != expectedAttempts {
@@ -137,7 +137,7 @@ func TestCleanupCorruptionCannotBeConcealedByExpiry(t *testing.T) {
 					}
 				}
 				var total Money
-				if err := s.app.DB().NewQuery("SELECT balance FROM ledger_accounts WHERE account_id={:id}").Bind(dbx.Params{"id": corruptAccount}).Row(&total); err != nil {
+				if err := s.app.DB().NewQuery("SELECT balance FROM accounts WHERE id={:id}").Bind(dbx.Params{"id": corruptAccount}).Row(&total); err != nil {
 					t.Fatal("synthetic balance inspection failed")
 				}
 				expectedTotal := Money("10")

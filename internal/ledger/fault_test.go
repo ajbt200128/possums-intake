@@ -13,11 +13,14 @@ import (
 
 func TestWriterWaitFastReleaseAndBoundedCancellation(t *testing.T) {
 	s, _, _ := testService(t)
+	if _, err := fixtureAccount(s, background, "aaaaaaaaaaaaaaa"); err != nil {
+		t.Fatal("fixture creation unavailable")
+	}
 	s.gate <- struct{}{}
 	released := make(chan struct{})
 	timer := time.AfterFunc(30*time.Millisecond, func() { <-s.gate; close(released) })
 	start := time.Now()
-	a, e := s.Provision(background, "a")
+	a, e := s.Balance(background, "aaaaaaaaaaaaaaa")
 	must(t, a, e)
 	<-released
 	timer.Stop()
@@ -26,7 +29,7 @@ func TestWriterWaitFastReleaseAndBoundedCancellation(t *testing.T) {
 	}
 	s.gate <- struct{}{}
 	ctx, cancel := context.WithTimeout(background, 30*time.Millisecond)
-	_, e = s.Provision(ctx, "cancelled")
+	_, e = s.Balance(ctx, "cancelled000000")
 	cancel()
 	codeIs(t, e, CodeWriter)
 	<-s.gate
@@ -34,14 +37,14 @@ func TestWriterWaitFastReleaseAndBoundedCancellation(t *testing.T) {
 	// started and no possibility of a detached mutation after rejection.
 	s.gate <- struct{}{}
 	start = time.Now()
-	_, e = s.Provision(background, "timed-out")
+	_, e = s.Balance(background, "timedout0000000")
 	codeIs(t, e, CodeWriter)
 	elapsed := time.Since(start)
 	<-s.gate
 	if elapsed < 1900*time.Millisecond || elapsed > 3*time.Second {
 		t.Fatal("writer wait outside qualified local bounds")
 	}
-	for _, id := range []string{"cancelled", "timed-out"} {
+	for _, id := range []string{"cancelled000000", "timedout0000000"} {
 		_, e = s.Balance(background, id)
 		codeIs(t, e, CodeAccount)
 	}
@@ -50,14 +53,14 @@ func TestCancelledWorkRollsBackAndQueryBudget(t *testing.T) {
 	s, _, _ := testService(t)
 	ctx, cancel := context.WithCancel(background)
 	e := s.run(ctx, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('cancelled000000','cancelled','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO accounts(id,balance,enabled) VALUES('cancelled000000','0',1)", nil); e != nil {
 			return e
 		}
 		cancel() // cancellation after a write, before callback/commit completion
 		return nil
 	}, true)
 	codeIs(t, e, CodeWork)
-	_, e = s.Balance(background, "cancelled")
+	_, e = s.Balance(background, "cancelled000000")
 	codeIs(t, e, CodeAccount)
 	start := time.Now()
 	e = s.run(background, func(tx *transaction) error {
@@ -71,19 +74,19 @@ func TestCancelledWorkRollsBackAndQueryBudget(t *testing.T) {
 	// Callback that returns nil after the budget is still rolled back by the
 	// mandatory check immediately before PocketBase attempts commit.
 	e = s.run(background, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('overbudget00000','over-budget','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO accounts(id,balance,enabled) VALUES('overbudget00000','0',1)", nil); e != nil {
 			return e
 		}
 		<-tx.ctx.Done()
 		return nil
 	}, true)
 	codeIs(t, e, CodeWork)
-	_, e = s.Balance(background, "over-budget")
+	_, e = s.Balance(background, "overbudget00000")
 	codeIs(t, e, CodeAccount)
 }
 func TestExternalSQLiteLockBusyBudgetAndNoLaterEffect(t *testing.T) {
 	s, dir, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	// A raw synthetic lock fixture, NOT a second running PocketBase authority.
 	locker, e := connect(filepath.Join(dir, "data.db"), false)
 	if e != nil {
@@ -98,7 +101,7 @@ func TestExternalSQLiteLockBusyBudgetAndNoLaterEffect(t *testing.T) {
 		t.Fatal("lock acquisition failed")
 	}
 	defer tx.Rollback()
-	input := CreditInput{"a", "5", key(now, 2)}
+	input := CreditInput{"aaaaaaaaaaaaaaa", "5", key(now, 2)}
 	start := time.Now()
 	_, e = s.Credit(background, input)
 	codeIs(t, e, CodeStorage)
@@ -109,7 +112,7 @@ func TestExternalSQLiteLockBusyBudgetAndNoLaterEffect(t *testing.T) {
 	}
 	start = time.Now()
 	e = s.run(background, func(tx *transaction) error {
-		return tx.exec("UPDATE ledger_accounts SET balance='105' WHERE account_id='a'", nil)
+		return tx.exec("UPDATE accounts SET balance='105' WHERE id='aaaaaaaaaaaaaaa'", nil)
 	}, false) // first statement writes, exercising the actual busy handler
 	codeIs(t, e, CodeStorage)
 	elapsed := time.Since(start)
@@ -118,14 +121,14 @@ func TestExternalSQLiteLockBusyBudgetAndNoLaterEffect(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(background, 20*time.Millisecond)
 	e = s.run(ctx, func(tx *transaction) error {
-		return tx.exec("UPDATE ledger_accounts SET balance='105' WHERE account_id='a'", nil)
+		return tx.exec("UPDATE accounts SET balance='105' WHERE id='aaaaaaaaaaaaaaa'", nil)
 	}, false)
 	cancel()
 	codeIs(t, e, CodeWork)
 	if e := tx.Rollback(); e != nil {
 		t.Fatal("lock release failed")
 	}
-	if balance(t, s, "a").AccountBalance.Balance != "100" {
+	if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "100" {
 		t.Fatal("rejected locked work committed later")
 	}
 	c, e := s.Credit(background, input)
@@ -145,13 +148,13 @@ func TestBeginFailureAndObservedFatalStorage(t *testing.T) {
 	s, _, _ := testService(t)
 	original := s.app
 	s.app = failedBegin{original, errors.New("SYNTHETIC_HOSTILE_BEGIN")}
-	_, e := s.Provision(background, "never-entered")
+	_, e := s.Balance(background, "neverentered000")
 	codeIs(t, e, CodeBegin)
 	if Failure(e).Outcome != "no_effect" || Failure(e).Stage != "transaction_begin" {
 		t.Fatal("begin failure invented rollback")
 	}
 	s.app = original
-	_, e = s.Balance(background, "never-entered")
+	_, e = s.Balance(background, "neverentered000")
 	codeIs(t, e, CodeAccount)
 	// Obtain an ACTUAL typed SQLite NOTADB error without reflecting its text.
 	path := filepath.Join(t.TempDir(), "corrupt.db")
@@ -168,7 +171,7 @@ func TestBeginFailureAndObservedFatalStorage(t *testing.T) {
 		t.Fatal("actual fatal driver category not recognized")
 	}
 	s.app = failedBegin{original, storageErr}
-	_, e = s.Provision(background, "fatal")
+	_, e = s.Balance(background, "fatal0000000000")
 	codeIs(t, e, CodeBegin)
 	if s.Ready() {
 		t.Fatal("observed fatal storage failure left readiness true")
@@ -196,7 +199,7 @@ func (a stalledCompletion) RunInTransaction(fn func(core.App) error) error {
 }
 func TestCommitStallRetainsGateUntilActualCompletion(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	original := s.app
 	reached := make(chan struct{})
 	release := make(chan struct{})
@@ -207,7 +210,10 @@ func TestCommitStallRetainsGateUntilActualCompletion(t *testing.T) {
 		err error
 	}
 	done := make(chan response, 1)
-	go func() { c, e := s.Credit(ctx, CreditInput{"a", "5", key(now, 2)}); done <- response{c, e} }()
+	go func() {
+		c, e := s.Credit(ctx, CreditInput{"aaaaaaaaaaaaaaa", "5", key(now, 2)})
+		done <- response{c, e}
+	}()
 	<-reached
 	cancel()
 	// Cancellation must not release a committing transaction or pretend rollback.
@@ -218,7 +224,7 @@ func TestCommitStallRetainsGateUntilActualCompletion(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 	wait, cancelWait := context.WithTimeout(background, 20*time.Millisecond)
-	_, e := s.Provision(wait, "blocked")
+	_, e := s.Balance(wait, "blocked00000000")
 	cancelWait()
 	codeIs(t, e, CodeWriter)
 	close(release)
@@ -227,10 +233,10 @@ func TestCommitStallRetainsGateUntilActualCompletion(t *testing.T) {
 		t.Fatal("observed commit lost its authoritative result")
 	}
 	s.app = original
-	if balance(t, s, "a").AccountBalance.Balance != "105" {
+	if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "105" {
 		t.Fatal("stall effect not committed exactly once")
 	}
-	_, e = s.Balance(background, "blocked")
+	_, e = s.Balance(background, "blocked00000000")
 	codeIs(t, e, CodeAccount)
 }
 
@@ -247,14 +253,14 @@ func (a stalledBegin) RunInTransaction(fn func(core.App) error) error {
 }
 func TestBeginStallCancelledCallbackMakesNoEffect(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	original := s.app
 	reached := make(chan struct{})
 	release := make(chan struct{})
 	s.app = stalledBegin{original, reached, release}
 	ctx, cancel := context.WithCancel(background)
 	done := make(chan error, 1)
-	go func() { _, e := s.Credit(ctx, CreditInput{"a", "5", key(now, 2)}); done <- e }()
+	go func() { _, e := s.Credit(ctx, CreditInput{"aaaaaaaaaaaaaaa", "5", key(now, 2)}); done <- e }()
 	<-reached
 	cancel()
 	select {
@@ -266,7 +272,7 @@ func TestBeginStallCancelledCallbackMakesNoEffect(t *testing.T) {
 	close(release)
 	codeIs(t, <-done, CodeWork)
 	s.app = original
-	if balance(t, s, "a").AccountBalance.Balance != "100" {
+	if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "100" {
 		t.Fatal("cancelled begin caused effect")
 	}
 }
@@ -292,10 +298,10 @@ func (a afterCommitFailure) RunInTransaction(fn func(core.App) error) error {
 }
 func TestCompletionEvidenceLossAndSameIdentityResolution(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	original := s.app
 	s.app = lostCompletionApp{original}
-	input := CreditInput{"a", "5", key(now, 2)}
+	input := CreditInput{"aaaaaaaaaaaaaaa", "5", key(now, 2)}
 	c, e := s.Credit(background, input)
 	codeIs(t, e, CodeCommit)
 	if c != (Credit{}) || Failure(e).Outcome != "unknown" {
@@ -306,13 +312,13 @@ func TestCompletionEvidenceLossAndSameIdentityResolution(t *testing.T) {
 	if must(t, recovered, e).BalanceAfter != "105" {
 		t.Fatal("same-identity uncertainty resolution failed")
 	}
-	if balance(t, s, "a").AccountBalance.Balance != "105" {
+	if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "105" {
 		t.Fatal("uncertain mutation replayed money")
 	}
 	// An observed successful completion remains successful despite a later local
 	// framework error. That is distinct from loss of completion evidence above.
 	s.app = afterCommitFailure{original}
-	c, e = s.Credit(background, CreditInput{"a", "1", key(now, 3)})
+	c, e = s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "1", key(now, 3)})
 	if must(t, c, e).BalanceAfter != "106" {
 		t.Fatal("known completion was erased by later framework failure")
 	}
@@ -321,16 +327,16 @@ func TestCompletionEvidenceLossAndSameIdentityResolution(t *testing.T) {
 func TestRollbackAndPanicNeverExposeHostilePayload(t *testing.T) {
 	s, _, _ := testService(t)
 	e := s.run(background, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('rollback0000000','rollback','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO accounts(id,balance,enabled) VALUES('rollback0000000','0',1)", nil); e != nil {
 			return e
 		}
 		return errors.New("SYNTHETIC_HOSTILE_SQL_OR_SDK_TEXT")
 	}, true)
 	codeIs(t, e, CodeStorage)
-	_, e = s.Balance(background, "rollback")
+	_, e = s.Balance(background, "rollback0000000")
 	codeIs(t, e, CodeAccount)
 	e = s.run(background, func(tx *transaction) error {
-		if e := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('panic0000000000','panic','0',1)", nil); e != nil {
+		if e := tx.exec("INSERT INTO accounts(id,balance,enabled) VALUES('panic0000000000','0',1)", nil); e != nil {
 			return e
 		}
 		panic("SYNTHETIC_HOSTILE_PANIC")
@@ -345,10 +351,10 @@ func TestRollbackAndPanicNeverExposeHostilePayload(t *testing.T) {
 }
 func TestBoundedCleanupAndReadsIndependentOfBacklog(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "1000", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "1000", now)
 	var expiry int64
 	for i := 0; i < 130; i++ {
-		r := reserve(t, s, ReserveInput{"a", "1", 1, key(now, i+2)})
+		r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "1", 1, key(now, i+2)})
 		expiry = int64(r.ExpiresAt)
 	}
 	advance(t, s, expiry)
@@ -358,7 +364,7 @@ func TestBoundedCleanupAndReadsIndependentOfBacklog(t *testing.T) {
 	}
 	// Remaining two holds are due; balance must terminalize them even when a
 	// lifecycle tick has not caught up, not merely omit them from availability.
-	b := balance(t, s, "a")
+	b := balance(t, s, "aaaaaaaaaaaaaaa")
 	if b.Available != "1000" || len(b.PendingReservations) != 0 {
 		t.Fatal("account read depended on cleanup keeping up")
 	}

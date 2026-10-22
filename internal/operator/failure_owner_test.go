@@ -130,7 +130,7 @@ func TestNativeActualSDKPreliminaryPATCHLookupOwnsNoRowsAndFaultSeparately(t *te
 			t.Fatal("preliminary lookup changed readiness/authority or exposed a cause")
 		}
 		o.want(t, fault.kind)
-		if snapshot, err := s.Balance(context.Background(), "native-synthetic"); err != nil || snapshot.Available != "18446744073709551615" {
+		if snapshot, err := s.Balance(context.Background(), id); err != nil || snapshot.Available != "18446744073709551615" {
 			t.Fatal("preliminary lookup reached mutation")
 		}
 	}
@@ -168,12 +168,12 @@ func TestNativeActualCompletionHookAndIndependentDeliveryCancellationCountTwice(
 		return context.DeadlineExceeded
 	})
 	defer app.OnRecordAfterCreateSuccess(ledger.AccountCollectionName).Unbind(hook)
-	req := httptest.NewRequest("POST", accountRecords, strings.NewReader(`{"account_id":"native-owner-commit","balance":"10","enabled":true}`)).WithContext(ctx)
+	req := httptest.NewRequest("POST", accountRecords, strings.NewReader(nativeAccountBody(t, `{"id":"nativeowner0001","balance":"10","enabled":true}`))).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", token)
 	abortNative(t, h, &nativeIOFault{http.Header{}, context.Canceled}, req)
 	o.want(t, failuretype.DeadlineExceeded, failuretype.Cancelled)
-	if snapshot, err := s.Balance(context.Background(), "native-owner-commit"); err != nil || snapshot.Available != "10" {
+	if snapshot, err := s.Balance(context.Background(), "nativeowner0001"); err != nil || snapshot.Available != "10" {
 		t.Fatal("hook/delivery fault erased known commit")
 	}
 }
@@ -184,14 +184,14 @@ func TestNativeActualStockRequestCancellationDoesNotProveRollback(t *testing.T) 
 	h := observedNative(t, s, app, o)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	req := httptest.NewRequest("POST", accountRecords, strings.NewReader(`{"account_id":"native-owner-no-effect","balance":"10","enabled":true}`)).WithContext(ctx)
+	req := httptest.NewRequest("POST", accountRecords, strings.NewReader(nativeAccountBody(t, `{"id":"nativeowner0002","balance":"10","enabled":true}`))).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", token)
 	abortNative(t, h, &nativeIOFault{http.Header{}, context.Canceled}, req)
 	o.want(t, failuretype.Cancelled)
 	// Stock controllers do not use Service's cancellation admission gate. The
 	// observed interrupted delivery cannot be reported as a financial rollback.
-	if snapshot, err := s.Balance(context.Background(), "native-owner-no-effect"); err != nil || snapshot.Available != "10" {
+	if snapshot, err := s.Balance(context.Background(), "nativeowner0002"); err != nil || snapshot.Available != "10" {
 		t.Fatal("stock commit evidence changed")
 	}
 }
@@ -211,8 +211,8 @@ func TestNativeActualSDKReadBoundaryKeepsTypedFailure(t *testing.T) {
 	req.Header.Set("Authorization", login(t, h))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 400 {
-		t.Fatal("SDK read boundary drifted")
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "SITE_KEY_UNAVAILABLE") {
+		t.Fatal("pre-form SDK read boundary lost closed preparation outcome")
 	}
 	o.want(t, failuretype.DeadlineExceeded)
 }
@@ -287,9 +287,9 @@ func TestNativeStockCommittedWriteErrorStaysUnknownAndOwnedOnce(t *testing.T) {
 		return errors.New(hostile)
 	})
 	defer app.OnRecordAfterCreateSuccess(ledger.AccountCollectionName).Unbind(id)
-	expectClosed(t, request(t, h, "POST", accountRecords, `{"account_id":"stock-committed-error","balance":"10","enabled":true}`, token), 400, "native_account_request")
+	expectClosed(t, request(t, h, "POST", accountRecords, `{"id":"nativeowner0003","balance":"10","enabled":true}`, token), 400, "native_account_request")
 	o.want(t, failuretype.NativeWriteUnknown)
-	if snapshot, err := s.Balance(context.Background(), "stock-committed-error"); err != nil || snapshot.Available != "10" {
+	if snapshot, err := s.Balance(context.Background(), "nativeowner0003"); err != nil || snapshot.Available != "10" {
 		t.Fatal("stock error erased observed commit")
 	}
 }

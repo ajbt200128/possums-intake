@@ -19,6 +19,9 @@ let
       [ "iosevka-term-regular.woff2" "iosevka-term-bold.woff2" "OFL.txt" ];
   lispsiteFixtures = map (name: "pkg/lispsite/testdata/" + name)
     [ "init.el" "options.el" "pages.el" "routes.el" "shared.el" "style.el" ];
+  # Public historical DDL fixtures used by fresh-schema refusal tests.
+  ledgerFixtures = map (name: "internal/ledger/testdata/" + name)
+    [ "split_schema_v1.sql" "split_schema_v2.sql" ];
   # Only declared build inputs: never private state, .git, env, or documentation.
   src = pkgs.lib.cleanSourceWith {
     src = root;
@@ -31,6 +34,7 @@ let
         || builtins.elem rel operatorInputs
         || builtins.elem rel websiteInputs
         || builtins.elem rel lispsiteFixtures
+        || builtins.elem rel ledgerFixtures
         || (pkgs.lib.hasSuffix ".go" rel && (pkgs.lib.hasPrefix "cmd/" rel
           || pkgs.lib.hasPrefix "internal/" rel || pkgs.lib.hasPrefix "pkg/" rel));
   };
@@ -38,7 +42,7 @@ let
     pname = "possums-intake";
     version = "0.1.0-local";
     inherit src;
-    vendorHash = "sha256-3HwXGLiB+gstzqW8iLoE2VstcHjkl5yfxsoMURd+/UU=";
+    vendorHash = "sha256-aw8Q3cv7yJeDUuJ2TU2EKy97hmKY6y5LYv1OtGtg/EY=";
     env.CGO_ENABLED = "0";
     env.GOTOOLCHAIN = "local";
     # This nixpkgs buildGoModule revision duplicates a top-level GOFLAGS

@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/types"
 	"possums-intake/internal/failureowner"
 	"possums-intake/internal/failuretype"
 	"possums-intake/internal/httpapi"
@@ -28,10 +27,10 @@ import (
 )
 
 // These PUBLIC, throwaway fixture credentials have no value outside this mode.
-// Never create this collection or these records in ordinary init/serve.
-const localWebsiteIdentity = "demo@example.invalid"
+// Never create these records in ordinary init/serve.
+const localWebsiteIdentity = "v1_0000000000000000000000000000000000000000000000000000000000000000"
 const localWebsiteKey = "local-demo-key"
-const localWebsiteCollection = "website_local_synthetic"
+const localWebsiteCollection = ledger.AccountCollectionName
 
 func websiteLocalFailure(stage, constraint string) *ledger.Diagnostic {
 	d := ledger.CanonicalFailure(&ledger.Diagnostic{}, failuretype.RuntimeSetupUnknown)
@@ -192,16 +191,14 @@ func seedWebsiteCustomer(ctx context.Context, app core.App) (result error) {
 		}
 	}()
 	err := app.RunInTransaction(func(tx core.App) error {
-		c := core.NewAuthCollection(localWebsiteCollection)
-		c.AuthAlert.Enabled = false
-		c.PasswordAuth.Enabled = true
-		c.PasswordAuth.IdentityFields = []string{"email"}
-		c.AuthRule = types.Pointer("")
-		if err := tx.SaveWithContext(ctx, c); err != nil {
+		c, err := tx.FindCollectionByNameOrId(localWebsiteCollection)
+		if err != nil {
 			return err
 		}
 		record := core.NewRecord(c)
-		record.SetEmail(localWebsiteIdentity)
+		record.Set("key_lookup", localWebsiteIdentity)
+		record.Set("balance", "0")
+		record.Set("enabled", true)
 		record.SetPassword(localWebsiteKey)
 		return tx.SaveWithContext(ctx, record)
 	})

@@ -39,6 +39,7 @@ func (d *Diagnostic) Error() string {
 		Diagnostic{"RENDER_UNAVAILABLE", "page_evaluation", "bounded_complete_page_cause_unknown", RenderUnknown},
 		Diagnostic{"PAGE_REFUSED", "page_evaluation", "declared_presentation_capability", Refused},
 		Diagnostic{"PAGE_VIEW_REFUSED", "page_evaluation", "bounded_string_view", Refused},
+		Diagnostic{"PAGE_TEXT_LIMIT", "page_evaluation", "complete_page_text_budget", Refused},
 		Diagnostic{"EXECUTION_LIMIT", "bundle_prepare", "step_budget", Refused},
 		Diagnostic{"EXECUTION_LIMIT", "bundle_prepare", "evaluation_nesting", Refused},
 		Diagnostic{"EXECUTION_LIMIT", "page_evaluation", "step_budget", Refused},

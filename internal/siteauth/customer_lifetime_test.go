@@ -59,7 +59,7 @@ func setNativeDuration(t *testing.T, app core.App, seconds int64) {
 
 func createSyntheticCustomer(t *testing.T, f *keyFixture) string {
 	t.Helper()
-	response := f.request(t, "POST", "/api/collections/"+siteauth.CustomerCollection+"/records", map[string]any{"password": syntheticKey, "passwordConfirm": syntheticKey, "account_id": "synthetic-lifetime-account"})
+	response := f.request(t, "POST", "/api/collections/"+siteauth.CustomerCollection+"/records", map[string]any{"password": syntheticKey, "passwordConfirm": syntheticKey, "balance": "0", "enabled": true})
 	var created struct {
 		ID string `json:"id"`
 	}
@@ -102,7 +102,7 @@ func TestCustomerTokenLifetimeNativeUpdate(t *testing.T) {
 	recordID := createSyntheticCustomer(t, f)
 	adapter := customerAdapter(t, app)
 	oldToken, oldPrincipal, err := adapter.Login(context.Background(), syntheticKey)
-	if err != nil || oldPrincipal.AccountID != "synthetic-lifetime-account" {
+	if err != nil || oldPrincipal.AccountID != recordID {
 		t.Fatal("SYNTHETIC_ORIGINAL_LOGIN_UNAVAILABLE")
 	}
 	assertLifetime(t, oldToken, originalLifetime)
@@ -160,18 +160,18 @@ func TestCustomerTokenLifetimeNativeUpdate(t *testing.T) {
 		t.Fatal("duration update changed unrelated native auth settings")
 	}
 	record, err = app.FindRecordById(siteauth.CustomerCollection, recordID)
-	if err != nil || record.TokenKey() != tokenKey || record.GetString("password:hash") != passwordHash || record.GetString("account_id") != "synthetic-lifetime-account" {
+	if err != nil || record.TokenKey() != tokenKey || record.GetString("password:hash") != passwordHash || record.Id != recordID {
 		t.Fatal("duration update changed recorded credential or binding")
 	}
 
 	// The already-issued one-hour token keeps its original expiry and validity.
 	principal, err := adapter.Validate(context.Background(), oldToken)
-	if err != nil || principal.AccountID != "synthetic-lifetime-account" || !tokenExpiry(t, oldToken).Equal(oldExpiry) {
+	if err != nil || principal.AccountID != recordID || !tokenExpiry(t, oldToken).Equal(oldExpiry) {
 		t.Fatal("duration update altered an existing customer token")
 	}
 	// New logins receive the approved twelve-hour lifetime.
 	newToken, newPrincipal, err := adapter.Login(context.Background(), syntheticKey)
-	if err != nil || newPrincipal.AccountID != "synthetic-lifetime-account" || newToken == oldToken {
+	if err != nil || newPrincipal.AccountID != recordID || newToken == oldToken {
 		t.Fatal("SYNTHETIC_UPDATED_LOGIN_UNAVAILABLE")
 	}
 	assertLifetime(t, newToken, customerLifetime)
@@ -275,12 +275,14 @@ func TestCustomerStoredDurationRestart(t *testing.T) {
 	}
 	lookup, secret := syntheticMaterial(key)
 	record := core.NewRecord(c)
-	record.Set("account_id", "synthetic-lifetime-account")
+	record.Set("balance", "0")
+	record.Set("enabled", true)
 	record.Set("key_lookup", lookup)
 	record.SetPassword(secret)
 	if app.Save(record) != nil {
 		t.Fatal("SYNTHETIC_LIFETIME_RECORD_UNAVAILABLE")
 	}
+	recordID := record.Id
 	handler, err := operator.NewHandler(http.NotFoundHandler(), app, s)
 	if err != nil {
 		t.Fatal("SYNTHETIC_LIFETIME_ROUTER_UNAVAILABLE")
@@ -333,7 +335,7 @@ func TestCustomerStoredDurationRestart(t *testing.T) {
 		t.Fatal("SYNTHETIC_LIFETIME_DURATION_DID_NOT_PERSIST")
 	}
 	adapter = customerAdapter(t, app)
-	if p, err := adapter.Validate(ctx, token); err != nil || p.AccountID != "synthetic-lifetime-account" {
+	if p, err := adapter.Validate(ctx, token); err != nil || p.AccountID != recordID {
 		t.Fatal("SYNTHETIC_LIFETIME_TOKEN_DID_NOT_SURVIVE_RESTART")
 	}
 	restarted, _, err := adapter.Login(ctx, key)

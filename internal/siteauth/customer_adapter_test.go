@@ -13,7 +13,7 @@ import (
 func TestCustomerAdapterCurrentBindingAndSDKAuthority(t *testing.T) {
 	f := newKeyFixture(t)
 	key := strings.Repeat("A", 128)
-	created := f.request(t, "POST", "/api/collections/customer_keys/records", map[string]any{"password": key, "passwordConfirm": key, "account_id": "synthetic-account-a"})
+	created := f.request(t, "POST", "/api/collections/accounts/records", map[string]any{"password": key, "passwordConfirm": key})
 	if created.Code != 200 {
 		t.Fatal("native customer provision unavailable")
 	}
@@ -22,20 +22,20 @@ func TestCustomerAdapterCurrentBindingAndSDKAuthority(t *testing.T) {
 		t.Fatal("customer adapter setup unavailable")
 	}
 	token, p, err := a.Login(context.Background(), key)
-	if err != nil || token == "" || p.AccountID != "synthetic-account-a" || p.CollectionID != siteauth.CustomerCollectionID {
+	if err != nil || token == "" || p.AccountID != p.RecordID || len(p.RecordID) != 15 || p.CollectionID != siteauth.CustomerCollectionID {
 		t.Fatal("customer SDK binding unavailable")
 	}
 	r, err := f.app.FindRecordById(siteauth.CustomerCollection, p.RecordID)
 	if err != nil {
 		t.Fatal("customer record unavailable")
 	}
-	r.Set("account_id", "synthetic-account-b")
+	r.Set("balance", "17")
 	if f.app.Save(r) != nil {
 		t.Fatal("synthetic binding update unavailable")
 	}
 	current, err := a.Validate(context.Background(), token)
-	if err != nil || current.AccountID != "synthetic-account-b" {
-		t.Fatal("adapter returned stale binding")
+	if err != nil || current.AccountID != r.Id || current.RecordID != r.Id {
+		t.Fatal("adapter returned a non-record account identity")
 	}
 	c, err := f.app.FindCollectionByNameOrId(siteauth.CustomerCollection)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestCustomerAdapterCurrentBindingAndSDKAuthority(t *testing.T) {
 func TestCustomerSchemaInitializationPreservesExistingCredentials(t *testing.T) {
 	f := newKeyFixture(t)
 	key := strings.Repeat("A", 43)
-	response := f.request(t, "POST", "/api/collections/customer_keys/records", map[string]any{"password": key, "passwordConfirm": key, "account_id": "synthetic-account"})
+	response := f.request(t, "POST", "/api/collections/accounts/records", map[string]any{"password": key, "passwordConfirm": key})
 	if response.Code != 200 {
 		t.Fatal("synthetic provision unavailable")
 	}
@@ -106,7 +106,7 @@ func TestCustomerSchemaInitializationPreservesExistingCredentials(t *testing.T) 
 		t.Fatal("incompatible customer schema admitted")
 	}
 	var count int
-	if f.app.DB().NewQuery("SELECT count(*) FROM customer_keys").Row(&count) != nil || count != 1 {
+	if f.app.DB().NewQuery("SELECT count(*) FROM accounts").Row(&count) != nil || count != 1 {
 		t.Fatal("incompatible schema refusal deleted credential")
 	}
 }

@@ -91,22 +91,25 @@ try {
     await admin.locator('#login_pass').fill('synthetic-customer-site-admin-password');
     await admin.locator('.auth-with-password-form button.next').click();
     await admin.waitForFunction(() => window.app?.pb?.authStore?.isValid && window.app?.store?.collections?.length > 0);
-    const provision = async (key, account) => {
-        await admin.goto(origin+'/_/#/collections?collection=customer_keys', {waitUntil:'networkidle'});
+    const createAccount = async (key) => {
+        await admin.goto(origin+'/_/#/collections?collection=accounts', {waitUntil:'networkidle'});
         await admin.locator('.new-record-btn').click();
         const modal = admin.locator('.record-upsert-modal');
         await modal.locator('input[name="password"]').fill(key);
         await modal.locator('input[name="passwordConfirm"]').fill(key);
-        await modal.locator('textarea[name="account_id"]').fill(account);
-        const response = await responseAfter(admin, r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/collections/customer_keys/records',
+        ensure(await modal.locator('[name="account_id"]').count() === 0);
+        await modal.locator('input[name="enabled"]').check();
+        const response = await responseAfter(admin, r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/collections/accounts/records',
             () => modal.getByRole('button', {name:'Create',exact:true}).click());
         ensure(response.status() === 200);
+        const record = await response.json();
+        ensure(/^[a-z0-9]{15}$/.test(record.id) && !('account_id' in record));
         await modal.waitFor({state:'hidden'});
         await admin.waitForLoadState('networkidle');
     };
     stage = 'provision';
-    await provision('A'.repeat(128), 'synthetic-site-a');
-    await provision('C'.repeat(64), 'synthetic-site-b');
+    await createAccount('A'.repeat(128));
+    await createAccount('C'.repeat(64));
     const login = async (page, key) => {
         await page.goto(origin+'/login', {waitUntil:'networkidle'});
         const field = page.locator('#key');
@@ -135,13 +138,20 @@ try {
     await login(other, 'C'.repeat(64));
     const snapshot = async () => {
         const text = await customer.locator('main').textContent();
-        for (const field of ['synthetic-site-a','Balance (microunits): 100','Available (microunits): 90','Enabled: true','maximum=7','maximum=3','timeout_seconds=600','expires_at=','state="active"','charged_amount=null','terminal_at=null','retain_until=null']) ensure(text.includes(field));
-        ensure(text.split('reservation_id=').length === 3 && !text.includes('synthetic-site-b'));
+        for (const field of ['Balance: $0.0001 USD','Available: $0.00009 USD','Pending holds:\n','Reserved: $0.000007 USD','Reserved: $0.000003 USD','Timeout: 600 seconds; state: active','Charged: none; completed: none; retained until: none']) ensure(text.includes(field));
+        ensure(text.split('Reservation: ').length === 3 && text.split('Request key: ').length === 3);
+        ensure((text.match(/expires: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z/g) || []).length === 2);
+        ensure((text.match(/initial expiry: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z/g) || []).length === 2);
+        ensure(text.split('Balance: ').length === 2 && text.split('Available: ').length === 2);
+        for (const field of ['synthetic-site-a','synthetic-site-b','Enabled','microunits','Account details','account_id=','maximum=']) ensure(!text.includes(field));
+        ensure(await customer.locator('details').count() === 0);
     };
     stage = 'snapshot';
     await snapshot();
     const otherText = await other.locator('main').textContent();
-    ensure(otherText.includes('synthetic-site-b') && otherText.includes('Available (microunits): 0') && !otherText.includes('synthetic-site-a') && !otherText.includes('reservation_id='));
+    ensure(otherText.includes('Balance: $0.00 USD') && otherText.includes('Available: $0.00 USD') && otherText.includes('Pending holds:\n(none)'));
+    for (const field of ['synthetic-site-a','synthetic-site-b','Reservation: ','Request key: ','Enabled','microunits','$0.0001 USD']) ensure(!otherText.includes(field));
+    ensure(await other.locator('details').count() === 0);
     const oldCSS = await customer.locator('link[rel="stylesheet"]').getAttribute('href');
     const editor = () => admin.locator('.field-type-json .code-editor-content');
     const edit = async () => {

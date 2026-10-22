@@ -49,17 +49,17 @@ func TestAccountSnapshotSettlementAndExpiryRaces(t *testing.T) {
 			text := html.UnescapeString(body)
 			if mode == "expiry" {
 				var d *ledger.Diagnostic
-				if !errors.As(settlementErr, &d) || d.Code != ledger.CodeExpired || !strings.Contains(text, "Balance (microunits): 100") || !strings.Contains(text, "Available (microunits): 100") || strings.Contains(text, "reservation_id=") {
+				if !errors.As(settlementErr, &d) || d.Code != ledger.CodeExpired || !strings.Contains(text, "Balance: $0.0001 USD") || !strings.Contains(text, "Available: $0.0001 USD") || !strings.Contains(text, "Pending holds:\n(none)") || strings.Contains(text, "Reservation: ") {
 					t.Fatal("SITE_TEST_EXPIRY_SNAPSHOT_OR_LATE_SETTLEMENT")
 				}
 			} else {
-				prior := strings.Contains(text, "Balance (microunits): 100") && strings.Contains(text, "Available (microunits): 91") && strings.Count(text, "reservation_id=") == 1
-				after := strings.Contains(text, "Balance (microunits): 97") && strings.Contains(text, "Available (microunits): 97") && !strings.Contains(text, "reservation_id=")
+				prior := strings.Contains(text, "Balance: $0.0001 USD") && strings.Contains(text, "Available: $0.000091 USD") && strings.Count(text, "Reservation: ") == 1 && strings.Contains(text, "Reserved: $0.000009 USD") && strings.Contains(text, row.IdempotencyKey) && strings.Contains(text, time.UnixMilli(int64(row.ExpiresAt)).UTC().Format(time.RFC3339Nano))
+				after := strings.Contains(text, "Balance: $0.000097 USD") && strings.Contains(text, "Available: $0.000097 USD") && strings.Contains(text, "Pending holds:\n(none)") && !strings.Contains(text, "Reservation: ")
 				if settlementErr != nil || (!prior && !after) {
 					t.Fatal("SITE_TEST_SETTLEMENT_MIXED_SNAPSHOT")
 				}
 				_, body = f.request(t, "GET", "/home", nil, "")
-				if !strings.Contains(body, "Available (microunits): 97") || strings.Contains(body, "reservation_id=") {
+				if !strings.Contains(body, "Available: $0.000097 USD") || !strings.Contains(body, "Pending holds:\n(none)") || strings.Contains(body, "Reservation: ") {
 					t.Fatal("SITE_TEST_SETTLED_CURRENT_SNAPSHOT")
 				}
 			}
@@ -69,7 +69,7 @@ func TestAccountSnapshotSettlementAndExpiryRaces(t *testing.T) {
 
 func TestAccountDisabledSpendingStillHasCompleteRead(t *testing.T) {
 	f := newAccountFixture(t)
-	record, err := f.sdk.FindFirstRecordByData("ledger_accounts", "account_id", accountHTTPA)
+	record, err := f.sdk.FindRecordById(ledger.AccountCollectionName, accountHTTPA)
 	if err != nil {
 		t.Fatal("SITE_TEST_DISABLED_ACCOUNT_LOOKUP")
 	}
@@ -78,7 +78,7 @@ func TestAccountDisabledSpendingStillHasCompleteRead(t *testing.T) {
 		t.Fatal("SITE_TEST_DISABLED_ACCOUNT_LOGIN")
 	}
 	response, body := f.request(t, "GET", "/home", nil, "")
-	if response.StatusCode != 200 || !strings.Contains(body, "Enabled: false") || !strings.Contains(body, "Available (microunits): 0") || strings.Contains(body, "reservation_id=") {
+	if response.StatusCode != 200 || strings.Contains(body, "Enabled") || strings.Contains(body, "SYNTHETIC_A") || strings.Contains(body, "<details") || !strings.Contains(body, "Balance: $0.00 USD") || !strings.Contains(body, "Available: $0.00 USD") || !strings.Contains(body, "Pending holds:\n(none)") || strings.Contains(body, "Reservation: ") {
 		t.Fatal("SITE_TEST_DISABLED_ACCOUNT_READ")
 	}
 }
@@ -100,7 +100,7 @@ func TestAccountWholeListLimitHTTPDoesNotExposePartialData(t *testing.T) {
 	before := calls.Load()
 	response, body := f.request(t, "GET", "/home", nil, "")
 	kinds := f.observer.counts()
-	if response.StatusCode != 503 || calls.Load() != before+1 || !strings.Contains(body, "SITE_ACCOUNT_VIEW_LIMIT") || strings.Contains(body, "SYNTHETIC_A") || strings.Contains(body, "Balance (microunits)") || strings.Contains(body, "reservation_id=") || len(kinds) != failures+1 || kinds[len(kinds)-1] != failuretype.PolicyRefused {
+	if response.StatusCode != 503 || calls.Load() != before+1 || !strings.Contains(body, "SITE_ACCOUNT_VIEW_LIMIT") || strings.Contains(body, "SYNTHETIC_A") || strings.Contains(body, "Balance: ") || strings.Contains(body, "Reservation: ") || len(kinds) != failures+1 || kinds[len(kinds)-1] != failuretype.PolicyRefused {
 		t.Fatal("SITE_TEST_WHOLE_LIST_LIMIT_HTTP")
 	}
 }

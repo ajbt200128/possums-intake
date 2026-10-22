@@ -16,12 +16,12 @@ func customerKeyFailure(w http.ResponseWriter, status int, err error) bool {
 	message, next := "", ""
 	switch d.Code {
 	case "SITE_KEY_INPUT":
-		if d.Constraint != "gateway_key_and_account_format" {
+		if d.Constraint != "gateway_key_format" {
 			return false
 		}
 		status = http.StatusBadRequest
 		message = "Customer-key preparation refused; no credential was saved by this step."
-		next = "Use a privately generated gateway-format key in both password fields and the exact ledger account identity; do not share input values."
+		next = "Use a privately generated gateway-format key in both password fields; the SDK creates the account identity. Do not share input values."
 	case "SITE_KEY_UNAVAILABLE":
 		if d.Constraint != "preparation_cause_unknown" {
 			return false

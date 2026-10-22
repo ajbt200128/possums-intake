@@ -139,7 +139,6 @@ func NewHandler(accounting ledger.Accounting, ready func() bool, adminKey string
 		observer:   observer,
 	}
 	h.routes = map[string]http.HandlerFunc{
-		"/accounts/provision":  h.provision,
 		"/credits":             h.credit,
 		"/reservations":        h.reserve,
 		"/reservations/renew":  h.renew,
@@ -292,22 +291,6 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 // native/framework route. It never reveals installer/dashboard/CRUD surfaces.
 func (h *handler) notFound(w http.ResponseWriter) {
 	writeDiagnostic(w, http.StatusNotFound, diagNotFound)
-}
-
-func (h *handler) provision(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		AccountID string `json:"account_id"`
-	}
-	if !h.decode(w, r, &req, true) {
-		return
-	}
-	accountingInvoked(w)
-	account, err := h.accounting.Provision(r.Context(), req.AccountID)
-	if d := accountingReturned(w, r, err); d != nil {
-		h.writeFailure(w, d)
-		return
-	}
-	writeJSON(w, http.StatusOK, accountResponse{AccountBalance: []accountJSON{toAccount(account)}})
 }
 
 func (h *handler) credit(w http.ResponseWriter, r *http.Request) {

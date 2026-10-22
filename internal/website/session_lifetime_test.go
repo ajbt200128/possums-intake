@@ -5,28 +5,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pocketbase/pocketbase/tools/types"
+	"possums-intake/internal/siteauth"
 )
 
 // The approved pairing is independent: a twelve-hour native customer token does
 // not extend the website's one-hour absolute / ten-minute idle session.
 func TestTwelveHourNativeTokenStillCappedToOneHourSession(t *testing.T) {
-	b := newBrowser(t)
-	c, err := b.app.FindCollectionByNameOrId("website_synthetic")
-	if err != nil {
-		t.Fatal("SITE_TEST_COLLECTION_LOOKUP")
+	f := newAccountFixture(t)
+	b := f.browser
+	c, err := f.sdk.FindCollectionByNameOrId(siteauth.CustomerCollection)
+	if err != nil || c.AuthToken.Duration != 12*60*60 {
+		t.Fatal("SITE_TEST_MERGED_CUSTOMER_TOKEN_LIFETIME")
 	}
-	// Twelve hours, the intake customer auth default; unrelated to the session.
-	c.AuthToken.Duration = 12 * 60 * 60
-	c.AuthRule = types.Pointer("")
-	if b.app.Save(c) != nil {
-		t.Fatal("SITE_TEST_COLLECTION_UPDATE")
-	}
+	// Exercise the actual merged account's supported SDK login, without a
+	// separate credential binding or overriding the initialized token lifetime.
 	if b.host.sessions.Lifetime != time.Hour || b.host.sessions.IdleTimeout != 10*time.Minute {
 		t.Fatal("SITE_TEST_SESSION_POLICY_CHANGED")
 	}
 	before := time.Now()
-	b.login(t)
+	if accountLogin(t, b, keyHTTPA) != 303 {
+		t.Fatal("SITE_TEST_MERGED_CUSTOMER_LOGIN")
+	}
 	ctx := sessionContext(t, b)
 	// One-hour absolute deadline, not the twelve-hour native token expiry.
 	if delta := b.host.sessions.Deadline(ctx).Sub(before); delta > time.Hour+time.Second || delta < 59*time.Minute {

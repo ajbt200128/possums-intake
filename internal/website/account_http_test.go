@@ -21,8 +21,8 @@ import (
 	"possums-intake/internal/siteauth"
 )
 
-const accountHTTPA = "SYNTHETIC_A\n\t\x00雪\u202e<script>"
-const accountHTTPB = "SYNTHETIC_B"
+const accountHTTPA = "websiteaccounta"
+const accountHTTPB = "websiteaccountb"
 const keyHTTPA = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 const keyHTTPB = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
 
@@ -70,15 +70,14 @@ func newAccountFixture(t *testing.T) *accountFixture {
 	}
 	var credential *core.Record
 	for i, account := range []string{accountHTTPA, accountHTTPB} {
-		if _, err := service.Provision(ctx, account); err != nil {
-			t.Fatal("SITE_TEST_ACCOUNT_PROVISION")
-		}
 		key := []string{keyHTTPA, keyHTTPB}[i]
 		lookup := sha256.Sum256([]byte("possums-intake/customer-key/lookup/v1\x00" + key))
 		password := sha256.Sum256([]byte("possums-intake/customer-key/password/v1\x00" + key))
 		record := core.NewRecord(collection)
 		record.Set("key_lookup", "v1_"+hex.EncodeToString(lookup[:]))
-		record.Set("account_id", account)
+		record.Id = account
+		record.Set("balance", "0")
+		record.Set("enabled", true)
 		record.SetPassword(base64.RawURLEncoding.EncodeToString(password[:]))
 		if app.Save(record) != nil {
 			t.Fatal("SITE_TEST_ACCOUNT_CREDENTIAL")
@@ -142,13 +141,29 @@ func TestAccountSDKHTTPCompleteIsolationAndBinding(t *testing.T) {
 	if response.StatusCode != 200 || f.counter.calls.Load() != 2 || strings.Contains(body, "<script>") || strings.Contains(decoded, accountHTTPB) {
 		t.Fatal("SITE_TEST_ACCOUNT_HTTP_SCOPE")
 	}
-	for _, field := range []string{strconv.QuoteToASCII(accountHTTPA), "Balance (microunits): 18446744073709551615", "Available (microunits): 18446744073709551597", "Enabled: true", "maximum=7", "maximum=11", "timeout_seconds=60", "expires_at=", `state="active"`, "charged_amount=null", "terminal_at=null", "retain_until=null"} {
+	for _, field := range []string{"Balance: $18446744073709.551615 USD", "Available: $18446744073709.551597 USD", "Pending holds:\n", "Reserved: $0.000007 USD", "Reserved: $0.000011 USD", "Timeout: 60 seconds; state: active", "Charged: none; completed: none; retained until: none"} {
 		if !strings.Contains(decoded, field) {
 			t.Fatal("SITE_TEST_ACCOUNT_HTTP_FIELD")
 		}
 	}
-	if strings.Count(decoded, "reservation_id=") != 2 {
+	if strings.Count(decoded, "Reservation: ") != 2 || strings.Count(decoded, "Request key: ") != 2 || strings.Count(decoded, "Balance: ") != 1 || strings.Count(decoded, "Available: ") != 1 {
 		t.Fatal("SITE_TEST_ACCOUNT_HTTP_HOLD_COUNT")
+	}
+	for _, forbidden := range []string{accountHTTPA, strconv.QuoteToASCII(accountHTTPA), "SYNTHETIC_A", "Enabled", "microunits", "18446744073709551615", "<details", "Account details"} {
+		if strings.Contains(decoded, forbidden) {
+			t.Fatal("SITE_TEST_ACCOUNT_HTTP_INTERNAL_FIELD")
+		}
+	}
+	snapshot, err := f.service.Balance(ctx, accountHTTPA)
+	if err != nil || len(snapshot.PendingReservations) != 2 {
+		t.Fatal("SITE_TEST_ACCOUNT_HTTP_AUTHORITATIVE_ROWS")
+	}
+	for _, row := range snapshot.PendingReservations {
+		for _, field := range []string{"Reservation: " + strconv.QuoteToASCII(row.ReservationID), "Request key: " + strconv.QuoteToASCII(row.IdempotencyKey), "expires: " + time.UnixMilli(int64(row.ExpiresAt)).UTC().Format(time.RFC3339Nano), "initial expiry: " + time.UnixMilli(int64(row.InitialExpiresAt)).UTC().Format(time.RFC3339Nano)} {
+			if !strings.Contains(decoded, field) {
+				t.Fatal("SITE_TEST_ACCOUNT_HTTP_COMPLETE_ROW")
+			}
+		}
 	}
 	// A second cookie jar shares the revision/service, never A's private view.
 	other := *f.browser
@@ -160,42 +175,31 @@ func TestAccountSDKHTTPCompleteIsolationAndBinding(t *testing.T) {
 		t.Fatal("SITE_TEST_SECOND_ACCOUNT_LOGIN")
 	}
 	_, body = other.request(t, "GET", "/home", nil, "")
-	if !strings.Contains(body, "Available (microunits): 0") || strings.Contains(body, "18446744073709551615") || strings.Contains(body, "reservation_id=") || strings.Contains(body, "SYNTHETIC_A") {
+	if !strings.Contains(body, "Balance: $0.00 USD") || !strings.Contains(body, "Available: $0.00 USD") || !strings.Contains(body, "Pending holds:\n(none)") || strings.Contains(body, "$18446744073709.551615") || strings.Contains(body, "Reservation: ") || strings.Contains(body, "SYNTHETIC_") {
 		t.Fatal("SITE_TEST_ACCOUNT_VIEW_LEAK")
 	}
-	// Reassignment cannot silently switch an already signed-in browser to B.
-	f.credential.Set("account_id", accountHTTPB)
-	if f.sdk.Save(f.credential) != nil {
-		t.Fatal("SITE_TEST_ACCOUNT_REBIND")
+	// There is no binding to reassign. Deleting the same auth/wallet row
+	// invalidates B before a financial read and cannot switch B's session to A.
+	if f.credential.Collection().Fields.GetByName("account_id") != nil {
+		t.Fatal("SITE_TEST_SECOND_IDENTITY")
 	}
-	before := f.counter.calls.Load()
-	response, _ = f.request(t, "GET", "/home", nil, "")
-	if response.StatusCode != 303 || f.counter.calls.Load() != before {
-		t.Fatal("SITE_TEST_REBOUND_SESSION_ACCOUNT_READ")
-	}
-	if accountLogin(t, f.browser, keyHTTPA) != 303 {
-		t.Fatal("SITE_TEST_REBOUND_FRESH_LOGIN")
-	}
-	_, body = f.request(t, "GET", "/home", nil, "")
-	if strings.Contains(body, "SYNTHETIC_A") || !strings.Contains(body, "Available (microunits): 0") {
-		t.Fatal("SITE_TEST_REBOUND_ACCOUNT_VIEW")
-	}
-	// Trusted native deletion is permitted; no account/session initialization is recovery.
-	record, err := f.sdk.FindFirstRecordByData("ledger_accounts", "account_id", accountHTTPB)
+	record, err := f.sdk.FindRecordById(ledger.AccountCollectionName, accountHTTPB)
 	if err != nil || f.sdk.Delete(record) != nil {
 		t.Fatal("SITE_TEST_NATIVE_ACCOUNT_DELETE")
 	}
-	failuresBefore := len(f.observer.counts())
-	before = f.counter.calls.Load()
-	response, body = f.request(t, "GET", "/home", nil, "")
-	if response.StatusCode != 503 || f.counter.calls.Load() != before+1 || strings.Contains(body, accountHTTPB) || strings.Contains(body, "Balance (microunits)") || len(f.observer.counts()) != failuresBefore+1 {
-		t.Fatal("SITE_TEST_ACCOUNT_MISSING_ONCE_ONLY")
+	before := f.counter.calls.Load()
+	response, body = other.request(t, "GET", "/home", nil, "")
+	if response.StatusCode != 303 || f.counter.calls.Load() != before || strings.Contains(body, "Balance: ") {
+		t.Fatal("SITE_TEST_DELETED_SESSION_ACCOUNT_READ")
 	}
-	if accountLogin(t, f.browser, keyHTTPA) != 503 {
+	if accountLogin(t, &other, keyHTTPB) == 303 {
 		t.Fatal("SITE_TEST_MISSING_ACCOUNT_LOGIN_GRANTED")
 	}
-	_, err = f.service.Balance(ctx, accountHTTPB)
-	if err == nil {
+	if _, err = f.service.Balance(ctx, accountHTTPB); err == nil {
 		t.Fatal("SITE_TEST_LOGIN_RECREATED_ACCOUNT")
+	}
+	response, body = f.request(t, "GET", "/home", nil, "")
+	if response.StatusCode != 200 || !strings.Contains(body, "$18446744073709.551615") {
+		t.Fatal("SITE_TEST_OTHER_ACCOUNT_CHANGED")
 	}
 }

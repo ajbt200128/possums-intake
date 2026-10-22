@@ -34,7 +34,7 @@ func assertOperatorPreparationEmpty(t *testing.T, app core.App) {
 		t.Fatal("transient preparation persisted credentials")
 	}
 	var objects int
-	if app.DB().NewQuery("SELECT count(*) FROM sqlite_schema WHERE name LIKE 'ledger_%'").Row(&objects) != nil || objects != 0 {
+	if app.DB().NewQuery("SELECT count(*) FROM sqlite_schema WHERE name='accounts'").Row(&objects) != nil || objects != 0 {
 		t.Fatal("initialization schema escaped transaction")
 	}
 }
@@ -65,7 +65,7 @@ func TestOperatorPreparationNativeHashAndTransactionalSave(t *testing.T) {
 	})
 	s := newService(app)
 	if s.run(background, func(tx *transaction) error {
-		if err := initializeV2(tx); err != nil {
+		if err := initializeSchema(tx); err != nil {
 			return err
 		}
 		fresh, err := tx.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
@@ -127,7 +127,7 @@ func TestOperatorPreparationInvalidDataRollsBackSchemaAndCredentials(t *testing.
 			s := newService(app)
 			var saveErr error
 			err = s.run(background, func(tx *transaction) error {
-				if err := initializeV2(tx); err != nil {
+				if err := initializeSchema(tx); err != nil {
 					return err
 				}
 				saveErr = initializeOperator(tx, record)

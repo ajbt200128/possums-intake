@@ -58,7 +58,7 @@ func TestBufferPagesHaveOnlyAuthoredWhitespace(t *testing.T) {
 	for _, tc := range []struct{ entry, want string }{
 		{"public-home", "Possums\nPrivate inference, with clear boundaries.\nSign in\n"},
 		{"login-page", "Sign in\nKey: [input] Sign in\nSign-in requires first-party cookies. Tor New Identity or restarting your browser may end your session.\nBack to Possums\n"},
-		{"signed-home", "Home\nYou are signed in.\nSign out\n"},
+		{"signed-home", "Home\nYou are signed in.\nBalance: unavailable\nAvailable: unavailable\n\n\nSign out\n"},
 	} {
 		t.Run(tc.entry, func(t *testing.T) {
 			p, err := r.Page(context.Background(), tc.entry)
@@ -96,7 +96,7 @@ func TestNoticeUsesOnlyBundleAuthoredSuffix(t *testing.T) {
 		t.Fatal("SITE_TEST_NOTICE_PAGE")
 	}
 	out, err := r.Render(p, "", "Synthetic notice")
-	if err != nil || !strings.HasPrefix(mainBufferText(t, out), "Sign in\nSynthetic notice\t  Key:") {
+	if err != nil || !strings.HasPrefix(mainBufferText(t, out), "Sign in\nKey: [input] Sign in\nSynthetic notice\t  Sign-in requires") {
 		t.Fatal("SITE_TEST_NOTICE_SUFFIX")
 	}
 }

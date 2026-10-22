@@ -18,7 +18,7 @@ actual response writes, outside accounting transactions. All accounting goes thr
   error (`LEDGER_RUNTIME_KEY_INVALID`). The key is never echoed in an error,
   response, header or body, never placed in a URL, and compared with
   `crypto/subtle.ConstantTimeCompare`.
-- Every accounting route — including reads, `provision` and `balance` — requires
+- Every accounting route — including reads, renewal and `balance` — requires
   the same `Authorization: Bearer <key>` header. `GET /healthz` never does.
 
 ## Request contract
@@ -43,16 +43,16 @@ against `18446744073709551615`; `amount`/`maximum` must be positive and
 `charged_amount` may be zero. `timeout_seconds` must be a JSON integer 1–1800,
 not a fraction, exponent or string. These monetary/timeout semantics are checked
 once by the ledger core, yielding `LEDGER_INPUT_INVALID` 400; HTTP checks JSON
-shape/presence/types, not pricing, usage or duplicate financial rules. Opaque account
-IDs preserve the gateway's 1–128 UTF-8-byte identity, including controls escaped in
-JSON. Native PocketBase mutation bodies remain separately strict against unknown
-fields/modifiers; they are not the gateway accounting interface.
+shape/presence/types, not pricing, usage or duplicate financial rules. Account IDs
+are the actual generated 15-character lowercase-alphanumeric `accounts.id` values;
+no external label or credential-to-wallet binding remains. Native PocketBase
+administration follows supported SDK validation and trusted stock authority, not
+this custom accounting parser or a new project permission tier.
 
 ## Routes and success shapes
 
 | Path | Request fields | Success body |
 | --- | --- | --- |
-| `/accounts/provision` | `account_id` | `{"account_balance":[account]}` |
 | `/credits` | `account_id`, `amount` (+ `Idempotency-Key`) | `{"credit":credit}` |
 | `/reservations` | `account_id`, `maximum`, `timeout_seconds` (+ `Idempotency-Key`) | `{"reservation":reservation}` |
 | `/reservations/renew` | `reservation_id`, `expected_expires_at` | `{"reservation":reservation,"observed_at":"…"}` |
@@ -67,7 +67,24 @@ object). `pending_reservations` is always a list, never null. Account fields are
 exactly `account_id`, `balance`, `enabled`. Reservation fields are exactly the
 table fields with fixed UTC `YYYY-MM-DDTHH:mm:ss.SSSZ` time strings and null
 `charged_amount`/`terminal_at`/`retain_until` while active. Credit fields are
-exactly the credit table fields. `ledger_meta` is never returned.
+exactly the credit table fields. Reservations include both immutable
+`initial_expires_at` and current `expires_at`. `ledger_meta` and all SDK auth fields
+are never returned.
+
+`/accounts/provision` is retired and returns a closed 404; it stays reserved from
+Lisp route ownership. Create one account through the supported native Accounts
+auth-record editor, not through shared-key accounting. The generated record ID is
+then the account reference for credits and reservations. Customer credentials must
+never enter custom accounting calls.
+
+Renewal compares the exact canonical UTC millisecond `expected_expires_at` with the
+current deadline, extending only an active enabled-account hold before expiry.
+An older valid token returns the current row without extending it again; a future
+token is refused. Terminal/expired states remain absorbing. Known renewal
+refusals can include the committed authoritative reservation and `observed_at`;
+transaction/commit uncertainty supplies no usable receipt. Renewal adds no worker,
+automatic retry or hold-expiry grace. The accepted renewal route remains excluded
+from the existing request/error telemetry population.
 
 ## Conditional renewal (local source candidate)
 
@@ -115,6 +132,7 @@ Closed ledger diagnostics map as:
 | `LEDGER_INPUT_INVALID`, `LEDGER_KEY_INVALID` | 400 |
 | `LEDGER_ACCOUNT_UNKNOWN` | 404 |
 | `LEDGER_CREDIT_INSUFFICIENT`, `LEDGER_ADMISSION_DISABLED`, `LEDGER_KEY_CONFLICT`, `LEDGER_CHARGE_EXCEEDS_HOLD`, `LEDGER_SETTLEMENT_EXPIRED`, `LEDGER_AMOUNT_OVERFLOW`, `LEDGER_KEY_WINDOW` | 409 |
+| `LEDGER_RENEWAL_CLOSED`, `LEDGER_RENEWAL_PRECONDITION`, `LEDGER_RENEWAL_NO_PROGRESS` | 409 |
 | `LEDGER_EVIDENCE_UNAVAILABLE` | 410 |
 | writer/work/begin/storage/random/corrupt/commit/closed and all startup codes | 503 |
 
@@ -138,12 +156,12 @@ get a closed fixed `LEDGER_HTTP_NOT_FOUND` 404.
 `devenv shell -- env OTEL_SDK_DISABLED=true go test ./internal/httpapi -count=1` runs, against an actual
 isolated ledger where state matters and stubs for error/privacy boundaries:
 
-- provision/credit/reserve/lookup/settle/refund/balance success, complete field
+- native-created account credit/reserve/renew/lookup/settle/refund/balance success, retired provisioning refusal, complete field
   sets, pending-row list, account scoping and expired-row receipt;
 - every accounting route without/with a wrong/duplicated key, and the key never
   echoed;
-- ignored additive fields on all seven routes, changed extras on idempotent retries,
-  JSON media-type parameters and exact escaped-control account identity;
+- ignored additive fields, changed extras on idempotent retries,
+  JSON media-type parameters and exact generated record identity;
 - duplicate keys, null/missing known fields, non-object and trailing JSON,
   malformed UTF-8, oversized/compressed/query inputs, money/timeout wire rules;
 - pinned status for each closed ledger code, unexpected errors and panics as

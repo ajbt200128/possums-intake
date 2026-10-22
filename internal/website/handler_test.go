@@ -219,10 +219,16 @@ func TestCookieFlagsCSRFStaleFormsAndNeutralCredentials(t *testing.T) {
 	wrong := form.Clone()
 	wrong.Set("key", "incorrect-synthetic-key")
 	response, body = b.request(t, "POST", "/login", wrong, b.server.URL)
-	if response.StatusCode != 401 || !strings.Contains(body, "SITE_AUTH_REFUSED") {
+	if response.StatusCode != 401 || !strings.Contains(body, `<span id="form-error" role="alert">Invalid credentials. Please try again.</span>`) || !strings.Contains(body, `aria-describedby="form-error"`) {
 		t.Fatal("SITE_TEST_AUTH_REFUSAL")
 	}
-	for _, echoed := range []string{"incorrect-synthetic-key", "absent-website@example.invalid"} {
+	if strings.Index(body, `id="form-error"`) <= strings.Index(body, "</form>") {
+		t.Fatal("SITE_TEST_AUTH_REFUSAL_BELOW_FORM")
+	}
+	if !strings.Contains(b.host.revision.CSS(), "#form-error{font-weight:700;color:#b91c1c}") {
+		t.Fatal("SITE_TEST_AUTH_REFUSAL_RED")
+	}
+	for _, echoed := range []string{"incorrect-synthetic-key", "absent-website@example.invalid", "SITE_AUTH_REFUSED", "stage=", "constraint=", "outcome="} {
 		if strings.Contains(body, echoed) {
 			t.Fatal("SITE_TEST_KEY_ECHO")
 		}

@@ -128,28 +128,31 @@ try {
         const response = await fetch(origin + path, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + key, ...extra }, body: JSON.stringify(body) });
         return { status: response.status, body: await response.json() };
     };
-    const fakeAccount = "synthetic-native-editor-account";
-    await page.goto(origin + "/_/#/collections?collection=ledger_accounts", { waitUntil: "networkidle" });
+    const customerKey = "A".repeat(64);
+    await page.goto(origin + "/_/#/collections?collection=accounts", { waitUntil: "networkidle" });
     stage = "native_ui_account_collection_ready";
-    await page.waitForFunction(() => app.store.activeCollection?.name === "ledger_accounts");
+    await page.waitForFunction(() => app.store.activeCollection?.name === "accounts");
     stage = "native_ui_new_account_modal";
     await page.locator(".new-record-btn").click();
     stage = "native_ui_fill_new_account";
-    await page.locator('textarea[name="account_id"]').fill(fakeAccount);
+    ensure(await page.locator('[name="account_id"]').count() === 0);
+    await page.locator('input[name="password"]').fill(customerKey);
+    await page.locator('input[name="passwordConfirm"]').fill(customerKey);
     await page.locator('textarea[name="balance"]').fill("100");
     await page.locator('input[name="enabled"]').check();
-    const createdResponse = page.waitForResponse(r => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/collections/ledger_accounts/records");
+    const createdResponse = page.waitForResponse(r => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/collections/accounts/records");
     stage = "native_ui_submit_account_create";
     await page.getByRole("button", { name: "Create", exact: true }).click();
     const created = await createdResponse;
     stage = "native_ui_account_create_response";
     ensure(created.status() === 200);
     const nativeRecord = await created.json();
-    ensure(nativeRecord.account_id === fakeAccount && nativeRecord.balance === "100" && nativeRecord.enabled === true && /^[a-z0-9]{15}$/.test(nativeRecord.id));
-    await page.locator('textarea[name="account_id"]').waitFor({ state: "detached" });
-    ensure((await accounting("/balance", { account_id: fakeAccount })).body.available === "100");
+    ensure(!Object.hasOwn(nativeRecord, "account_id") && nativeRecord.balance === "100" && nativeRecord.enabled === true && /^[a-z0-9]{15}$/.test(nativeRecord.id));
+    const accountID = nativeRecord.id;
+    await page.locator('textarea[name="balance"]').waitFor({ state: "detached" });
+    ensure((await accounting("/balance", { account_id: accountID })).body.available === "100");
     const openEditor = async () => {
-        await page.goto(origin + "/_/#/collections?collection=ledger_accounts&record=" + nativeRecord.id, { waitUntil: "networkidle" });
+        await page.goto(origin + "/_/#/collections?collection=accounts&record=" + nativeRecord.id, { waitUntil: "networkidle" });
         await page.locator('textarea[name="balance"]').waitFor();
     };
     const saveEditor = async () => {
@@ -162,34 +165,34 @@ try {
     await page.locator('textarea[name="balance"]').fill("90");
     ensure((await saveEditor()).status() === 200);
     await page.locator('textarea[name="balance"]').waitFor({ state: "detached" });
-    ensure((await accounting("/balance", { account_id: fakeAccount })).body.available === "90");
+    ensure((await accounting("/balance", { account_id: accountID })).body.available === "90");
     stage = "native_ui_trusted_active_hold_balance_edit";
-    const reservation = await accounting("/reservations", { account_id: fakeAccount, maximum: "20", timeout_seconds: 600 }, { "Idempotency-Key": "v1." + Date.now() + "." + "1".repeat(32) });
+    const reservation = await accounting("/reservations", { account_id: accountID, maximum: "20", timeout_seconds: 600 }, { "Idempotency-Key": "v1." + Date.now() + "." + "1".repeat(32) });
     ensure(reservation.status === 200);
     await openEditor();
     await page.locator('textarea[name="balance"]').fill("80");
     ensure((await saveEditor()).status() === 200);
     await page.locator('textarea[name="balance"]').waitFor({ state: "detached" });
-    ensure((await accounting("/balance", { account_id: fakeAccount })).body.available === "60");
+    ensure((await accounting("/balance", { account_id: accountID })).body.available === "60");
     stage = "native_ui_stock_enabled_edit_and_stale_balance";
     await openEditor();
     await page.locator('input[name="enabled"]').uncheck();
     ensure((await saveEditor()).status() === 200);
     await page.locator('textarea[name="balance"]').waitFor({ state: "detached" });
     await openEditor(); // stock absolute editor intentionally permits stale overwrite
-    ensure((await accounting("/credits", { account_id: fakeAccount, amount: "5" }, { "Idempotency-Key": "v1." + Date.now() + "." + "2".repeat(32) })).status === 200);
+    ensure((await accounting("/credits", { account_id: accountID, amount: "5" }, { "Idempotency-Key": "v1." + Date.now() + "." + "2".repeat(32) })).status === 200);
     ensure((await accounting("/reservations/settle", { reservation_id: reservation.body.reservation.reservation_id, charged_amount: "10" })).status === 200);
     await page.locator('input[name="enabled"]').check();
     const enabledResponse = await saveEditor();
     ensure(enabledResponse.status() === 200);
     const enabledRequest = enabledResponse.request().postDataJSON();
-    ensure(Object.hasOwn(enabledRequest, "balance") && Object.hasOwn(enabledRequest, "account_id"));
-    const snapshot = await accounting("/balance", { account_id: fakeAccount });
+    ensure(Object.hasOwn(enabledRequest, "balance") && !Object.hasOwn(enabledRequest, "account_id"));
+    const snapshot = await accounting("/balance", { account_id: accountID });
     ensure(snapshot.body.account_balance[0].balance === "80" && snapshot.body.available === "80" && snapshot.body.pending_reservations.length === 0);
     stage = "native_ui_token_key_separation";
     const token = await page.evaluate(() => app.pb.authStore.token);
-    ensure((await fetch(origin + "/balance", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token }, body: JSON.stringify({ account_id: fakeAccount }) })).status === 401);
-    const byID = await page.evaluate(async id => app.pb.collection("ledgeraccounts1").getOne(id), nativeRecord.id);
+    ensure((await fetch(origin + "/balance", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token }, body: JSON.stringify({ account_id: accountID }) })).status === 401);
+    const byID = await page.evaluate(async id => app.pb.collection("ledgeraccounts2").getOne(id), nativeRecord.id);
     ensure(byID.balance === "80");
     stage = "native_ui_refresh_storage_csp";
     const native = await page.evaluate(async () => {
@@ -262,7 +265,7 @@ try {
     process.stdout.write('{"status":"operator_browser_pass","scope":"compiled_main_isolated_synthetic_chromium"}\n');
 } catch {
     if (diagnosticPage) {
-        try { uiState = await diagnosticPage.evaluate(() => ({ ready: !!window.app?.store?._ready, collections: !!window.app?.store?.collections?.length, active_account: window.app?.store?.activeCollection?.name === "ledger_accounts", active_id: !!window.app?.store?.activeCollection?.id, button_hidden_ancestor: !!document.querySelector(".new-record-btn")?.closest("[hidden]"), hidden_primary_buttons: !!document.querySelector(".page-header-primary-btns")?.hasAttribute("hidden"), hidden_page: !!document.querySelector(".new-record-btn")?.closest(".page[hidden]"), hidden_app: !!document.querySelector(".app")?.hasAttribute("hidden"), body_hidden: getComputedStyle(document.body).display === "none", new_buttons: document.querySelectorAll(".new-record-btn").length, button_visible: !!document.querySelector(".new-record-btn")?.offsetParent, button_enabled: !document.querySelector(".new-record-btn")?.disabled, button_unobstructed: (() => { const button = document.querySelector(".new-record-btn"); if (!button) return false; const r = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })(), loading: !!window.app?.store?.isLoadingCollections, csp: window.syntheticCSPFailures })); } catch { /* closed diagnostic unavailable */ }
+        try { uiState = await diagnosticPage.evaluate(() => ({ ready: !!window.app?.store?._ready, collections: !!window.app?.store?.collections?.length, active_account: window.app?.store?.activeCollection?.name === "accounts", active_id: !!window.app?.store?.activeCollection?.id, button_hidden_ancestor: !!document.querySelector(".new-record-btn")?.closest("[hidden]"), hidden_primary_buttons: !!document.querySelector(".page-header-primary-btns")?.hasAttribute("hidden"), hidden_page: !!document.querySelector(".new-record-btn")?.closest(".page[hidden]"), hidden_app: !!document.querySelector(".app")?.hasAttribute("hidden"), body_hidden: getComputedStyle(document.body).display === "none", new_buttons: document.querySelectorAll(".new-record-btn").length, button_visible: !!document.querySelector(".new-record-btn")?.offsetParent, button_enabled: !document.querySelector(".new-record-btn")?.disabled, button_unobstructed: (() => { const button = document.querySelector(".new-record-btn"); if (!button) return false; const r = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })(), loading: !!window.app?.store?.isLoadingCollections, csp: window.syntheticCSPFailures })); } catch { /* closed diagnostic unavailable */ }
     }
     process.stderr.write(JSON.stringify({ code: "OPERATOR_BROWSER_TEST_UNAVAILABLE", stage, constraint: "synthetic_browser_assertion_or_tool_boundary", native_read_failures: nativeReadFailures, ui_state: uiState, next_step: "Inspect locally; no raw errors captured or acceptance claimed." }) + "\n");
     process.exitCode = 1;

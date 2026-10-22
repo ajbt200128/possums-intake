@@ -39,7 +39,9 @@ func TestNativeSDKBodyPanicAndDiagnosticDeliveryPanicBothObserved(t *testing.T) 
 	req.Body = panicBody{&read}
 	req.ContentLength = -1
 	abortNative(t, h, &diagnosticHeaderPanic{http.Header{}, &read}, req)
-	o.want(t, failuretype.NativeWriteUnknown, failuretype.ResponseDeliveryUnknown)
+	// The same body fault is now observed by the pre-form key adapter, before
+	// the SDK financial write stage; the independent delivery fault stays owned.
+	o.want(t, failuretype.NativeAuthUnknown, failuretype.ResponseDeliveryUnknown)
 	if !s.Ready() {
 		t.Fatal("presentation faults changed readiness")
 	}

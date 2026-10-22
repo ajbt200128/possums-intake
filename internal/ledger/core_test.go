@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,8 +62,12 @@ func advance(t *testing.T, s *Service, now int64) {
 func key(at int64, nonce int) string { return fmt.Sprintf("v1.%013d.%032x", at, nonce) }
 func fund(t *testing.T, s *Service, id string, amount Money, now int64) {
 	t.Helper()
-	a, e := s.Provision(background, id)
-	must(t, a, e)
+	if _, err := s.app.FindRecordById(AccountCollectionID, id); errors.Is(err, sql.ErrNoRows) {
+		a, e := fixtureAccount(s, background, id)
+		must(t, a, e)
+	} else if err != nil {
+		t.Fatal("fixture account lookup unavailable")
+	}
 	c, e := s.Credit(background, CreditInput{id, amount, key(now, 1)})
 	must(t, c, e)
 }
@@ -111,20 +116,23 @@ func TestMoneyAndKeyBoundaries(t *testing.T) {
 		}
 	}
 	for _, id := range []string{"opaque Unicode 🐾", "a\x00b", "control\nidentity", "\t", strings.Repeat("a", 128)} {
-		if !validAccount(id) {
-			t.Fatal("gateway-compatible opaque account rejected")
+		if validAccount(id) {
+			t.Fatal("non-SDK account identity accepted")
 		}
+	}
+	if !validAccount("aaaaaaaaaaaaaaa") {
+		t.Fatal("SDK account identity rejected")
 	}
 }
 func TestFullUint64OverflowAndRollback(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "18446744073709551615", now)
-	c, e := s.Credit(background, CreditInput{"a", "1", key(now, 2)})
+	fund(t, s, "aaaaaaaaaaaaaaa", "18446744073709551615", now)
+	c, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "1", key(now, 2)})
 	codeIs(t, e, CodeOverflow)
 	if c != (Credit{}) {
 		t.Fatal("failure returned a receipt")
 	}
-	if b := balance(t, s, "a"); b.Available != "18446744073709551615" {
+	if b := balance(t, s, "aaaaaaaaaaaaaaa"); b.Available != "18446744073709551615" {
 		t.Fatal("overflow changed balance")
 	}
 	var count int
@@ -133,42 +141,42 @@ func TestFullUint64OverflowAndRollback(t *testing.T) {
 	}, true); err != nil || count != 0 {
 		t.Fatal("overflow persisted marker")
 	}
-	r := reserve(t, s, ReserveInput{"a", "18446744073709551615", 600, key(now, 3)})
-	if b := balance(t, s, "a"); b.Available != "0" || b.AccountBalance.Balance != "18446744073709551615" {
+	r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "18446744073709551615", 600, key(now, 3)})
+	if b := balance(t, s, "aaaaaaaaaaaaaaa"); b.Available != "0" || b.AccountBalance.Balance != "18446744073709551615" {
 		t.Fatal("hold incorrectly debited total")
 	}
 	out, e := s.Settle(background, SettleInput{r.ReservationID, "18446744073709551615"})
 	must(t, out, e)
-	if balance(t, s, "a").AccountBalance.Balance != "0" {
+	if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "0" {
 		t.Fatal("full uint64 settlement incorrect")
 	}
 	// The failed credit identity has no marker and can succeed after capacity frees.
-	c, e = s.Credit(background, CreditInput{"a", "1", key(now, 2)})
+	c, e = s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "1", key(now, 2)})
 	if must(t, c, e).BalanceAfter != "1" {
 		t.Fatal("rolled-back credit cannot retry")
 	}
 }
 func TestIdempotencyOriginalResultsAndInputConflict(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
-	a, e := s.Provision(background, "b")
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	a, e := fixtureAccount(s, background, "bbbbbbbbbbbbbbb")
 	must(t, a, e)
-	first, e := s.Credit(background, CreditInput{"a", "10", key(now, 2)})
+	first, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "10", key(now, 2)})
 	must(t, first, e)
-	later, e := s.Credit(background, CreditInput{"a", "20", key(now, 3)})
+	later, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "20", key(now, 3)})
 	must(t, later, e)
-	repeat, e := s.Credit(background, CreditInput{"a", "10", key(now, 2)})
+	repeat, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "10", key(now, 2)})
 	must(t, repeat, e)
 	if repeat != first || repeat.BalanceAfter != "110" {
 		t.Fatal("credit retry returned later balance")
 	}
-	for _, in := range []CreditInput{{"a", "11", key(now, 2)}, {"b", "10", key(now, 2)}} {
+	for _, in := range []CreditInput{{"aaaaaaaaaaaaaaa", "11", key(now, 2)}, {"bbbbbbbbbbbbbbb", "10", key(now, 2)}} {
 		_, e := s.Credit(background, in)
 		codeIs(t, e, CodeConflict)
 	}
-	in := ReserveInput{"a", "50", 600, key(now, 2)} // same key, distinct operation scope
+	in := ReserveInput{"aaaaaaaaaaaaaaa", "50", 600, key(now, 2)} // same key, distinct operation scope
 	r := reserve(t, s, in)
-	for _, bad := range []ReserveInput{{"a", "51", 600, in.IdempotencyKey}, {"a", "50", 601, in.IdempotencyKey}, {"b", "50", 600, in.IdempotencyKey}} {
+	for _, bad := range []ReserveInput{{"aaaaaaaaaaaaaaa", "51", 600, in.IdempotencyKey}, {"aaaaaaaaaaaaaaa", "50", 601, in.IdempotencyKey}, {"bbbbbbbbbbbbbbb", "50", 600, in.IdempotencyKey}} {
 		_, e := s.Reserve(background, bad)
 		codeIs(t, e, CodeConflict)
 	}
@@ -176,7 +184,7 @@ func TestIdempotencyOriginalResultsAndInputConflict(t *testing.T) {
 	if retry := reserve(t, s, in); !reflect.DeepEqual(retry, r) {
 		t.Fatal("reserve retry moved expiry or identity")
 	}
-	if b := balance(t, s, "a"); b.Available != "80" {
+	if b := balance(t, s, "aaaaaaaaaaaaaaa"); b.Available != "80" {
 		t.Fatal("duplicate effected money")
 	}
 	refund, e := s.Refund(background, r.ReservationID)
@@ -185,14 +193,14 @@ func TestIdempotencyOriginalResultsAndInputConflict(t *testing.T) {
 	if !reflect.DeepEqual(refund, retry) || retry.State != Refunded {
 		t.Fatal("terminal retry recreated a hold")
 	}
-	provision, e := s.Provision(background, "a")
-	if must(t, provision, e).Balance != "130" {
-		t.Fatal("provision reset funded account")
+	snapshot, e := s.Balance(background, "aaaaaaaaaaaaaaa")
+	if must(t, snapshot, e).AccountBalance.Balance != "130" {
+		t.Fatal("account read changed funded balance")
 	}
 }
 func TestLastCreditAndDuplicateRaces(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	var wg sync.WaitGroup
 	results := make(chan error, 24)
 	rows := make(chan Reservation, 24)
@@ -200,7 +208,7 @@ func TestLastCreditAndDuplicateRaces(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			r, e := s.Reserve(background, ReserveInput{"a", "100", 600, key(now, i+2)})
+			r, e := s.Reserve(background, ReserveInput{"aaaaaaaaaaaaaaa", "100", 600, key(now, i+2)})
 			rows <- r
 			results <- e
 		}(i)
@@ -227,7 +235,7 @@ func TestLastCreditAndDuplicateRaces(t *testing.T) {
 	}
 	out, e := s.Refund(background, winner.ReservationID)
 	must(t, out, e)
-	duplicate := ReserveInput{"a", "100", 600, key(now, 100)}
+	duplicate := ReserveInput{"aaaaaaaaaaaaaaa", "100", 600, key(now, 100)}
 	rows = make(chan Reservation, 24)
 	results = make(chan error, 24)
 	for i := 0; i < 24; i++ {
@@ -251,7 +259,7 @@ func TestLastCreditAndDuplicateRaces(t *testing.T) {
 			t.Fatal("duplicate created distinct identities")
 		}
 	}
-	if len(balance(t, s, "a").PendingReservations) != 1 {
+	if len(balance(t, s, "aaaaaaaaaaaaaaa").PendingReservations) != 1 {
 		t.Fatal("duplicate created multiple holds")
 	}
 	// Concurrent exact credit retries also add once and return one original result.
@@ -261,7 +269,7 @@ func TestLastCreditAndDuplicateRaces(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, e := s.Credit(background, CreditInput{"a", "1", key(now, 101)})
+			c, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "1", key(now, 101)})
 			creditRows <- c
 			results <- e
 		}()
@@ -279,24 +287,24 @@ func TestLastCreditAndDuplicateRaces(t *testing.T) {
 			t.Fatal("duplicate credit applied again")
 		}
 	}
-	if balance(t, s, "a").AccountBalance.Balance != "101" {
+	if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "101" {
 		t.Fatal("credit race total incorrect")
 	}
 }
 func TestTerminalRacesDisabledAndExactExpiry(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
-	r := reserve(t, s, ReserveInput{"a", "50", 600, key(now, 2)})
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "50", 600, key(now, 2)})
 	if err := s.run(background, func(tx *transaction) error {
-		return tx.exec("UPDATE ledger_accounts SET enabled=0 WHERE account_id='a'", nil)
+		return tx.exec("UPDATE accounts SET enabled=0 WHERE id='aaaaaaaaaaaaaaa'", nil)
 	}, true); err != nil {
 		t.Fatal("disable failed")
 	}
-	_, e := s.Reserve(background, ReserveInput{"a", "1", 600, key(now, 3)})
+	_, e := s.Reserve(background, ReserveInput{"aaaaaaaaaaaaaaa", "1", 600, key(now, 3)})
 	codeIs(t, e, CodeDisabled)
-	a, e := s.Provision(background, "a")
-	if must(t, a, e).Enabled {
-		t.Fatal("provision reenabled account")
+	a, e := s.Balance(background, "aaaaaaaaaaaaaaa")
+	if must(t, a, e).AccountBalance.Enabled {
+		t.Fatal("account read reenabled account")
 	}
 	var wg sync.WaitGroup
 	rows := make(chan Reservation, 20)
@@ -334,16 +342,16 @@ func TestTerminalRacesDisabledAndExactExpiry(t *testing.T) {
 		}
 	}
 	charge, _ := terminal.ChargedAmount.units()
-	if balance(t, s, "a").AccountBalance.Balance != money(100-charge) {
+	if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != money(100-charge) {
 		t.Fatal("more than one terminal debit")
 	}
 	// Re-enable only in synthetic fixture, then test expiry precedence.
 	if e := s.run(background, func(tx *transaction) error {
-		return tx.exec("UPDATE ledger_accounts SET enabled=1 WHERE account_id='a'", nil)
+		return tx.exec("UPDATE accounts SET enabled=1 WHERE id='aaaaaaaaaaaaaaa'", nil)
 	}, true); e != nil {
 		t.Fatal("fixture enable failed")
 	}
-	due := reserve(t, s, ReserveInput{"a", "20", 1, key(now, 4)})
+	due := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "20", 1, key(now, 4)})
 	advance(t, s, int64(due.ExpiresAt)-1)
 	before, e := s.Lookup(background, due.ReservationID)
 	if must(t, before, e).State != Active {
@@ -359,30 +367,30 @@ func TestTerminalRacesDisabledAndExactExpiry(t *testing.T) {
 	if !reflect.DeepEqual(must(t, refund, e), expired) {
 		t.Fatal("refund changed expired outcome")
 	}
-	b := balance(t, s, "a")
+	b := balance(t, s, "aaaaaaaaaaaaaaa")
 	if len(b.PendingReservations) != 0 || b.Available != b.AccountBalance.Balance {
 		t.Fatal("expiry retained capacity")
 	}
 }
 func TestSnapshotCompleteSortedScopedAndExpiry(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
-	a, e := s.Provision(background, "b")
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	a, e := fixtureAccount(s, background, "bbbbbbbbbbbbbbb")
 	must(t, a, e)
-	c, e := s.Credit(background, CreditInput{"b", "5", key(now, 999)})
+	c, e := s.Credit(background, CreditInput{"bbbbbbbbbbbbbbb", "5", key(now, 999)})
 	must(t, c, e)
 	for i := 0; i < 40; i++ {
-		reserve(t, s, ReserveInput{"a", "1", 600, key(now, i+2)})
+		reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "1", 600, key(now, i+2)})
 	}
-	other := reserve(t, s, ReserveInput{"b", "5", 600, key(now, 1000)})
-	due := reserve(t, s, ReserveInput{"a", "10", 1, key(now, 1001)})
-	b := balance(t, s, "a")
+	other := reserve(t, s, ReserveInput{"bbbbbbbbbbbbbbb", "5", 600, key(now, 1000)})
+	due := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "10", 1, key(now, 1001)})
+	b := balance(t, s, "aaaaaaaaaaaaaaa")
 	if len(b.PendingReservations) != 41 || b.Available != "50" || b.AccountBalance.Balance != "100" {
 		t.Fatal("incomplete snapshot")
 	}
 	ids := make([]string, 0)
 	for _, row := range b.PendingReservations {
-		if row.AccountID != "a" || row.ReservationID == other.ReservationID {
+		if row.AccountID != "aaaaaaaaaaaaaaa" || row.ReservationID == other.ReservationID {
 			t.Fatal("cross-account snapshot")
 		}
 		ids = append(ids, row.ReservationID)
@@ -391,7 +399,7 @@ func TestSnapshotCompleteSortedScopedAndExpiry(t *testing.T) {
 		t.Fatal("unsorted snapshot")
 	}
 	advance(t, s, int64(due.ExpiresAt))
-	b = balance(t, s, "a")
+	b = balance(t, s, "aaaaaaaaaaaaaaa")
 	if len(b.PendingReservations) != 40 || b.Available != "60" {
 		t.Fatal("snapshot did not atomically expire hold")
 	}
@@ -410,11 +418,11 @@ func TestSnapshotCompleteSortedScopedAndExpiry(t *testing.T) {
 }
 func TestKeyPruningRetentionRollbackClockAndRestart(t *testing.T) {
 	s, dir, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	future := now + FutureSkewMS
-	in := ReserveInput{"a", "10", 1, key(future, 2)}
+	in := ReserveInput{"aaaaaaaaaaaaaaa", "10", 1, key(future, 2)}
 	r := reserve(t, s, in)
-	c, e := s.Credit(background, CreditInput{"a", "5", key(future, 3)})
+	c, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "5", key(future, 3)})
 	must(t, c, e)
 	advance(t, s, int64(r.ExpiresAt)+10000) // cleanup delayed; terminal time remains deadline
 	out, e := s.Cleanup(background, false)
@@ -436,7 +444,7 @@ func TestKeyPruningRetentionRollbackClockAndRestart(t *testing.T) {
 	if retry.State != Expired {
 		t.Fatal("expired-key retained retry denied or recreated")
 	}
-	again, e := s.Credit(background, CreditInput{"a", "5", key(future, 3)})
+	again, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "5", key(future, 3)})
 	if must(t, again, e) != c {
 		t.Fatal("expired key did not recover original credit")
 	}
@@ -447,11 +455,11 @@ func TestKeyPruningRetentionRollbackClockAndRestart(t *testing.T) {
 	}
 	_, e = s.Reserve(background, in)
 	codeIs(t, e, CodeKeyWindow)
-	_, e = s.Credit(background, CreditInput{"a", "5", key(future, 3)})
+	_, e = s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "5", key(future, 3)})
 	codeIs(t, e, CodeKeyWindow)
 	_, e = s.Lookup(background, r.ReservationID)
 	codeIs(t, e, CodeEvidence)
-	before := balance(t, s, "a").AccountBalance.Balance
+	before := balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance
 	if e := s.Close(); e != nil {
 		t.Fatal("close failed")
 	}
@@ -462,9 +470,9 @@ func TestKeyPruningRetentionRollbackClockAndRestart(t *testing.T) {
 	// Reopening uses max(wall, durable watermark), never resetting it.
 	_, e = reopened.Reserve(background, in)
 	codeIs(t, e, CodeKeyWindow)
-	_, e = reopened.Credit(background, CreditInput{"a", "5", key(future, 3)})
+	_, e = reopened.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "5", key(future, 3)})
 	codeIs(t, e, CodeKeyWindow)
-	if balance(t, reopened, "a").AccountBalance.Balance != before {
+	if balance(t, reopened, "aaaaaaaaaaaaaaa").AccountBalance.Balance != before {
 		t.Fatal("restart or clock rollback replayed money")
 	}
 	var high int64
@@ -476,22 +484,22 @@ func TestKeyPruningRetentionRollbackClockAndRestart(t *testing.T) {
 }
 func TestNewKeyAdmissionBoundariesAndFailedReserveRetry(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	for i, c := range []struct {
 		at int64
 		ok bool
 	}{{now - KeyWindowMS, false}, {now - KeyWindowMS + 1, true}, {now + 60000, true}, {now + 60001, false}} {
-		r, e := s.Reserve(background, ReserveInput{"a", "1", 1, key(c.at, i+2)})
+		r, e := s.Reserve(background, ReserveInput{"aaaaaaaaaaaaaaa", "1", 1, key(c.at, i+2)})
 		if c.ok {
 			must(t, r, e)
 		} else {
 			codeIs(t, e, CodeKeyWindow)
 		}
 	}
-	attempt := ReserveInput{"a", "101", 600, key(now, 20)}
+	attempt := ReserveInput{"aaaaaaaaaaaaaaa", "101", 600, key(now, 20)}
 	_, e := s.Reserve(background, attempt)
 	codeIs(t, e, CodeInsufficient)
-	c, e := s.Credit(background, CreditInput{"a", "10", key(now, 21)})
+	c, e := s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "10", key(now, 21)})
 	must(t, c, e)
 	r := reserve(t, s, attempt)
 	if r.Maximum != "101" {
@@ -505,8 +513,8 @@ func TestNewKeyAdmissionBoundariesAndFailedReserveRetry(t *testing.T) {
 }
 func TestBackdatedActiveRetryAfterKeyValidityEnds(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
-	in := ReserveInput{"a", "10", 600, key(now-KeyWindowMS+1, 2)}
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	in := ReserveInput{"aaaaaaaaaaaaaaa", "10", 600, key(now-KeyWindowMS+1, 2)}
 	original := reserve(t, s, in)
 	advance(t, s, now+2)
 	if retry := reserve(t, s, in); !reflect.DeepEqual(original, retry) {
@@ -525,14 +533,14 @@ func TestBackdatedActiveRetryAfterKeyValidityEnds(t *testing.T) {
 
 func TestSnapshotRacingSettlementNeverReturnsMixedState(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
-	r := reserve(t, s, ReserveInput{"a", "50", 600, key(now, 2)})
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "50", 600, key(now, 2)})
 	var wg sync.WaitGroup
 	snapshots := make(chan BalanceSnapshot, 20)
 	errors := make(chan error, 21)
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); b, e := s.Balance(background, "a"); snapshots <- b; errors <- e }()
+		go func() { defer wg.Done(); b, e := s.Balance(background, "aaaaaaaaaaaaaaa"); snapshots <- b; errors <- e }()
 	}
 	wg.Add(1)
 	go func() { defer wg.Done(); _, e := s.Settle(background, SettleInput{r.ReservationID, "17"}); errors <- e }()
@@ -562,20 +570,20 @@ func TestSnapshotRacingSettlementNeverReturnsMixedState(t *testing.T) {
 
 func TestUnknownAndInvalidInputs(t *testing.T) {
 	s, _, now := testService(t)
-	_, e := s.Balance(background, "absent")
+	_, e := s.Balance(background, "absent000000000")
 	codeIs(t, e, CodeAccount)
 	_, e = s.Lookup(background, strings.Repeat("a", 32))
 	codeIs(t, e, CodeEvidence)
 	_, e = s.Settle(background, SettleInput{strings.Repeat("a", 32), "0"})
 	codeIs(t, e, CodeEvidence)
-	_, e = s.Credit(background, CreditInput{"absent", "1", key(now, 2)})
+	_, e = s.Credit(background, CreditInput{"absent000000000", "1", key(now, 2)})
 	codeIs(t, e, CodeAccount)
 	for _, timeout := range []int64{0, 1801, -1} {
-		_, e = s.Reserve(background, ReserveInput{"a", "1", timeout, key(now, 3)})
+		_, e = s.Reserve(background, ReserveInput{"aaaaaaaaaaaaaaa", "1", timeout, key(now, 3)})
 		codeIs(t, e, CodeInput)
 	}
 	for _, amount := range []Money{"0", "01", "18446744073709551616"} {
-		_, e = s.Credit(background, CreditInput{"a", amount, key(now, 4)})
+		_, e = s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", amount, key(now, 4)})
 		codeIs(t, e, CodeInput)
 	}
 	if Failure(errors.New("SYNTHETIC_SECRET_PAYLOAD")).Code != CodeCommit {

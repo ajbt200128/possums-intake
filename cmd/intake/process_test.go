@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"possums-intake/internal/ledger"
+	"possums-intake/internal/testfixture"
 )
 
 const syntheticAdminKey = "SYNTHETIC_ADMIN_KEY_ONLY_32_BYTES_LONG"
@@ -138,6 +140,19 @@ func initProcessState(t *testing.T) string {
 	return dir
 }
 
+func seedProcessAccount(t *testing.T, dir, id string) {
+	t.Helper()
+	s, err := ledger.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal("synthetic stopped fixture open unavailable")
+	}
+	_, createErr := testfixture.Create(context.Background(), s, id)
+	closeErr := s.Close()
+	if createErr != nil || closeErr != nil {
+		t.Fatal("synthetic supported auth fixture unavailable")
+	}
+}
+
 func rpc(t *testing.T, p *process, path, body, key, identity string) (int, map[string]json.RawMessage) {
 	t.Helper()
 	status, fields, err := requestRPC(p, path, body, key, identity)
@@ -212,9 +227,10 @@ func processKey(n int) string { return fmt.Sprintf("v1.%013d.%032x", time.Now().
 
 func TestProcessAuthNativeRoutesPrivacyAndRestart(t *testing.T) {
 	dir := initProcessState(t)
+	seedProcessAccount(t, dir, "synthetic00000a")
 	address := syntheticAddress(t)
 	p := startProcess(t, dir, address)
-	for _, path := range []string{"/accounts/provision", "/credits", "/reservations", "/reservations/settle", "/reservations/refund", "/reservations/lookup", "/balance"} {
+	for _, path := range []string{"/credits", "/reservations", "/reservations/settle", "/reservations/refund", "/reservations/lookup", "/balance"} {
 		for _, key := range []string{"", "SYNTHETIC_HOSTILE_PRIVATE_VALUE"} {
 			status, fields := rpc(t, p, path, `{"SYNTHETIC_HOSTILE_PRIVATE_VALUE":true}`, key, "")
 			if status != 401 {
@@ -258,27 +274,27 @@ func TestProcessAuthNativeRoutesPrivacyAndRestart(t *testing.T) {
 	if status != 400 {
 		t.Fatal("hostile invalid body accepted")
 	}
-	successRPC(t, p, "/accounts/provision", `{"account_id":"synthetic-a","future":{"ignored":true}}`, "")
+	successRPC(t, p, "/balance", `{"account_id":"synthetic00000a","future":{"ignored":true}}`, "")
 	creditKey := processKey(1)
-	successRPC(t, p, "/credits", `{"account_id":"synthetic-a","amount":"100"}`, creditKey)
+	successRPC(t, p, "/credits", `{"account_id":"synthetic00000a","amount":"100"}`, creditKey)
 	reserveKey := processKey(2)
-	row := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic-a","maximum":"30","timeout_seconds":600}`, reserveKey))
+	row := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic00000a","maximum":"30","timeout_seconds":600}`, reserveKey))
 	successRPC(t, p, "/reservations/settle", `{"reservation_id":"`+row.ID+`","charged_amount":"17"}`, "")
 	activeKey := processKey(3)
-	active := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic-a","maximum":"20","timeout_seconds":600}`, activeKey))
-	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic-a"}`, "")) != "83" {
+	active := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic00000a","maximum":"20","timeout_seconds":600}`, activeKey))
+	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")) != "83" {
 		t.Fatal("settlement total incorrect")
 	}
 	stopProcess(t, p)
 	inspectPrivateState(t, dir)
 	p = startProcess(t, dir, address)
 	// Same original state; credit retry does not grant startup/duplicate money.
-	successRPC(t, p, "/credits", `{"account_id":"synthetic-a","amount":"100"}`, creditKey)
-	got := successRPC(t, p, "/balance", `{"account_id":"synthetic-a"}`, "")
+	successRPC(t, p, "/credits", `{"account_id":"synthetic00000a","amount":"100"}`, creditKey)
+	got := successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")
 	if accountTotal(t, got) != "83" || string(got["available"]) != `"63"` {
 		t.Fatal("restart changed acknowledged money")
 	}
-	retry := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic-a","maximum":"20","timeout_seconds":600}`, activeKey))
+	retry := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic00000a","maximum":"20","timeout_seconds":600}`, activeKey))
 	if retry != active {
 		t.Fatal("restart or retry changed immutable reservation")
 	}
@@ -313,7 +329,7 @@ func inspectPrivateState(t *testing.T, dir string) {
 				if err != nil && !os.IsNotExist(err) {
 					t.Fatal("auxiliary byte inspection failed")
 				}
-				for _, private := range []string{syntheticAdminKey, "SYNTHETIC_HOSTILE_PRIVATE_VALUE", "synthetic-a"} {
+				for _, private := range []string{syntheticAdminKey, "SYNTHETIC_HOSTILE_PRIVATE_VALUE", "synthetic00000a"} {
 					if bytes.Contains(data, []byte(private)) {
 						t.Fatal("private value retained in framework auxiliary storage")
 					}
@@ -325,10 +341,11 @@ func inspectPrivateState(t *testing.T, dir string) {
 
 func TestProcessLocksLostResponseRacesAndExpiry(t *testing.T) {
 	dir := initProcessState(t)
+	seedProcessAccount(t, dir, "synthetic00000a")
 	address := syntheticAddress(t)
 	p := startProcess(t, dir, address)
-	successRPC(t, p, "/accounts/provision", `{"account_id":"synthetic-a"}`, "")
-	successRPC(t, p, "/credits", `{"account_id":"synthetic-a","amount":"100"}`, processKey(1))
+	successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")
+	successRPC(t, p, "/credits", `{"account_id":"synthetic00000a","amount":"100"}`, processKey(1))
 	// Raw synthetic lock connection, not a second PocketBase service/authority.
 	db, err := sql.Open("sqlite", filepath.Join(dir, "data.db")+"?mode=rw&_pragma=busy_timeout(250)")
 	if err != nil {
@@ -344,22 +361,22 @@ func TestProcessLocksLostResponseRacesAndExpiry(t *testing.T) {
 		t.Fatal("lock acquisition failed")
 	}
 	lockedKey := processKey(2)
-	status, fields := rpc(t, p, "/credits", `{"account_id":"synthetic-a","amount":"5"}`, syntheticAdminKey, lockedKey)
+	status, fields := rpc(t, p, "/credits", `{"account_id":"synthetic00000a","amount":"5"}`, syntheticAdminKey, lockedKey)
 	if status != 503 || string(fields["outcome"]) != `"no_effect"` {
 		t.Fatal("lock failure invented outcome")
 	}
 	if tx.Rollback() != nil {
 		t.Fatal("lock release failed")
 	}
-	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic-a"}`, "")) != "100" {
+	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")) != "100" {
 		t.Fatal("locked rejection committed later")
 	}
-	successRPC(t, p, "/credits", `{"account_id":"synthetic-a","amount":"5"}`, lockedKey)
+	successRPC(t, p, "/credits", `{"account_id":"synthetic00000a","amount":"5"}`, lockedKey)
 
 	// Stop reading after the first response byte: no complete receipt reaches
 	// this caller. The unchanged identity resolves it without another credit.
 	lostKey := processKey(3)
-	body := `{"account_id":"synthetic-a","amount":"5"}`
+	body := `{"account_id":"synthetic00000a","amount":"5"}`
 	conn, err := net.DialTimeout("tcp", address, time.Second)
 	if err != nil {
 		t.Fatal("response-loss fixture connection failed")
@@ -372,7 +389,7 @@ func TestProcessLocksLostResponseRacesAndExpiry(t *testing.T) {
 		t.Fatal("response-loss fixture failed to observe delivery start")
 	}
 	successRPC(t, p, "/credits", body, lostKey)
-	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic-a"}`, "")) != "110" {
+	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")) != "110" {
 		t.Fatal("lost-response retry duplicated credit")
 	}
 
@@ -387,7 +404,7 @@ func TestProcessLocksLostResponseRacesAndExpiry(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			status, fields, err := requestRPC(p, "/reservations", `{"account_id":"synthetic-a","maximum":"100","timeout_seconds":600}`, syntheticAdminKey, processKey(n+10))
+			status, fields, err := requestRPC(p, "/reservations", `{"account_id":"synthetic00000a","maximum":"100","timeout_seconds":600}`, syntheticAdminKey, processKey(n+10))
 			responses <- response{status, fields, err}
 		}(n)
 	}
@@ -442,16 +459,16 @@ func TestProcessLocksLostResponseRacesAndExpiry(t *testing.T) {
 	if terminal.State == "settled" {
 		want = "93"
 	}
-	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic-a"}`, "")) != want {
+	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")) != want {
 		t.Fatal("terminal race inconsistent money")
 	}
-	expiring := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic-a","maximum":"1","timeout_seconds":1}`, processKey(30)))
+	expiring := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic00000a","maximum":"1","timeout_seconds":1}`, processKey(30)))
 	time.Sleep(1100 * time.Millisecond)
 	status, fields = rpc(t, p, "/reservations/settle", `{"reservation_id":"`+expiring.ID+`","charged_amount":"1"}`, syntheticAdminKey, "")
 	if status != 409 || readReservation(t, fields).State != "expired" {
 		t.Fatal("late settlement charged expired hold")
 	}
-	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic-a"}`, "")) != want {
+	if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")) != want {
 		t.Fatal("expiry debited balance")
 	}
 	stopProcess(t, p)

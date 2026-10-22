@@ -92,7 +92,7 @@ func TestNativeCustomerKeyPreFormQualification(t *testing.T) {
 	for _, size := range []int{32, 53, 54, 72, 96} {
 		key := base64.RawURLEncoding.EncodeToString(make([]byte, size))
 		lookup, secret := syntheticMaterial(key)
-		response := f.request(t, "POST", path, map[string]any{"password": key, "passwordConfirm": key, "account_id": "synthetic-account"})
+		response := f.request(t, "POST", path, map[string]any{"password": key, "passwordConfirm": key})
 		if response.Code != 200 {
 			t.Fatalf("native key create refused: status=%d", response.Code)
 		}
@@ -106,7 +106,7 @@ func TestNativeCustomerKeyPreFormQualification(t *testing.T) {
 			t.Fatal("native credential response invalid")
 		}
 		r, err := f.app.FindRecordById(siteauth.CustomerCollection, saved.ID)
-		if err != nil || r.GetString("key_lookup") != lookup || !r.ValidatePassword(secret) || r.ValidatePassword(key) || r.GetString("password") != "" || r.GetString("account_id") != "synthetic-account" || r.Email() != "" {
+		if err != nil || r.GetString("key_lookup") != lookup || !r.ValidatePassword(secret) || r.ValidatePassword(key) || r.GetString("password") != "" || r.Collection().Fields.GetByName("account_id") != nil || r.GetString("balance") != "0" || !r.GetBool("enabled") || r.Email() != "" {
 			t.Fatal("native verifier-only storage mismatch")
 		}
 		adapter, err := siteauth.New(f.app, siteauth.CustomerCollection)
@@ -126,7 +126,7 @@ func TestNativeCustomerKeyPreFormQualification(t *testing.T) {
 		}
 	}
 	for _, confirm := range []any{nil, "", base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)), "not-a-key", map[string]any{"hostile": "SYNTHETIC_INPUT_SENTINEL"}} {
-		body := map[string]any{"password": strings.Repeat("A", 43), "account_id": "synthetic-account"}
+		body := map[string]any{"password": strings.Repeat("A", 43)}
 		if confirm != nil {
 			body["passwordConfirm"] = confirm
 		}
@@ -138,7 +138,7 @@ func TestNativeCustomerKeyPreFormQualification(t *testing.T) {
 			t.Fatal("native refusal disclosed input")
 		}
 		var count int
-		if f.app.DB().NewQuery("SELECT count(*) FROM customer_keys").Row(&count) != nil || count != 0 {
+		if f.app.DB().NewQuery("SELECT count(*) FROM accounts").Row(&count) != nil || count != 0 {
 			t.Fatal("invalid confirmation saved a credential")
 		}
 	}
@@ -153,7 +153,7 @@ func TestNativeCustomerKeyPreFormQualification(t *testing.T) {
 		t.Fatal("stock body limit bypassed")
 	}
 	f.admin = ""
-	guest := f.request(t, "POST", path, map[string]any{"password": "not-a-key", "passwordConfirm": "not-a-key", "account_id": "synthetic-account"})
+	guest := f.request(t, "POST", path, map[string]any{"password": "not-a-key", "passwordConfirm": "not-a-key"})
 	if guest.Code != 403 || strings.Contains(guest.Body.String(), "SITE_KEY_INPUT") {
 		t.Fatal("stock create authority replaced by key middleware")
 	}
@@ -163,18 +163,18 @@ func TestNativeCustomerKeyPreFormQualification(t *testing.T) {
 	}
 }
 
-func TestNativeCustomerKeyUpdateAndExactBinding(t *testing.T) {
+func TestNativeCustomerKeyUpdateAndSoleRecordIdentity(t *testing.T) {
 	f := newKeyFixture(t)
 	path := "/api/collections/" + siteauth.CustomerCollectionID + "/records"
 	key := strings.Repeat("A", 43)
 	lookup, secret := syntheticMaterial(key)
-	response := f.request(t, "POST", path, map[string]any{"password": key, "passwordConfirm": key, "account_id": " \t\n\x00synthetic-账户 "})
+	response := f.request(t, "POST", path, map[string]any{"password": key, "passwordConfirm": key})
 	if response.Code != 200 {
 		t.Fatalf("exact binding refused: status=%d", response.Code)
 	}
 	record, err := f.app.FindFirstRecordByData(siteauth.CustomerCollection, "key_lookup", lookup)
-	if err != nil || record.GetString("account_id") != " \t\n\x00synthetic-账户 " {
-		t.Fatal("binding bytes changed")
+	if err != nil || len(record.Id) != 15 || record.Collection().Fields.GetByName("account_id") != nil {
+		t.Fatal("sole SDK record identity unavailable")
 	}
 	adapter, err := siteauth.New(f.app, siteauth.CustomerCollection)
 	if err != nil {

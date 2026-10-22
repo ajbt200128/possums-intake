@@ -1,5 +1,7 @@
 # Customer key authentication and account data — joint draft
 
+**Subsequent schema decision:** the operator selected and locally implemented [one Accounts auth collection](merged-account-schema.md), using its generated record ID for both authentication and ledger ownership. Earlier separate-auth/binding/migration proposals below are historical; no migration or compatibility bridge is required. Raw-key adaptation and local-only/privacy gates remain applicable.
+
 **Status: local synthetic customer-auth/account-data implementation approved.**
 The reusable ELPS boundary and focused live publication slice have local evidence
 (section 5). The operator subsequently approved the

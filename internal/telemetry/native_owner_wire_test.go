@@ -25,6 +25,7 @@ import (
 	"possums-intake/internal/ledger"
 	"possums-intake/internal/operator"
 	"possums-intake/internal/telemetry"
+	"possums-intake/internal/testfixture"
 )
 
 type ownerCollectExporter struct {
@@ -61,6 +62,9 @@ func TestSelectedActualReportInvalidityWithholdsOnlyErrorFamily(t *testing.T) {
 		t.Fatal("actual service unavailable")
 	}
 	defer s.Close()
+	if _, err := testfixture.Create(ctx, s, "synthetic000000"); err != nil {
+		t.Fatal("synthetic auth fixture unavailable")
+	}
 	now := time.Unix(1_800_000_000, 0).UTC()
 	start := now
 	e := &ownerCollectExporter{batches: make(chan metricdata.ResourceMetrics, 2)}
@@ -70,7 +74,7 @@ func TestSelectedActualReportInvalidityWithholdsOnlyErrorFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal("HTTP fixture unavailable")
 	}
-	req := httptest.NewRequest("POST", "/accounts/provision", strings.NewReader(`{"account_id":"synthetic"}`))
+	req := httptest.NewRequest("POST", "/balance", strings.NewReader(`{"account_id":"synthetic000000"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.Repeat("s", 32))
 	out := httptest.NewRecorder()
@@ -181,6 +185,10 @@ func TestSelectedActualOwnersSupportedTLSWireAndOutageNoReplay(t *testing.T) {
 					return
 				}
 				defer s.Close()
+				if _, err := testfixture.Create(context.Background(), s, "synthetic000000"); err != nil {
+					t.Error("synthetic auth fixture unavailable")
+					return
+				}
 				app, err := s.OperatorAppObserved(r)
 				if err != nil {
 					t.Error("native app unavailable")
@@ -218,13 +226,13 @@ func TestSelectedActualOwnersSupportedTLSWireAndOutageNoReplay(t *testing.T) {
 					}
 					return resp.StatusCode, raw
 				}
-				if status, _ := send("POST", "/accounts/provision", `{"account_id":"`+sentinel+`"}`, "Bearer "+key); status != 200 {
+				if status, _ := send("POST", "/balance", `{"account_id":"synthetic000000"}`, "Bearer "+key); status != 200 {
 					t.Error("custom success unavailable")
 				}
 				send("POST", "/balance", `{"account_id":"`+sentinel+`"}`, "Bearer "+sentinel)
 				send("GET", "/api/settings", "", "")
 				send("GET", "/api/backups", "", "")
-				send("POST", "/api/collections/ledger_accounts/records", `{"balance":1}`, "")
+				send("POST", "/api/collections/accounts/records", `{"balance":1}`, "")
 				loginBody := `{"identity":"fixture@example.invalid","password":"SYNTHETIC_NATIVE_PASSWORD_123"}`
 				status, raw := send("POST", "/api/collections/_superusers/auth-with-password", loginBody, "")
 				var auth struct{ Token string }
@@ -232,11 +240,11 @@ func TestSelectedActualOwnersSupportedTLSWireAndOutageNoReplay(t *testing.T) {
 					t.Error("actual native login unavailable")
 					return
 				}
-				nativeBody := `{"account_id":"fake-native","balance":"10","enabled":true}`
-				if status, _ := send("POST", "/api/collections/ledger_accounts/records", nativeBody, auth.Token); status != 200 {
+				nativeBody := `{"balance":"10","enabled":true,"password":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","passwordConfirm":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`
+				if status, _ := send("POST", "/api/collections/accounts/records", nativeBody, auth.Token); status != 200 {
 					t.Error("actual native create unavailable")
 				}
-				if status, _ := send("POST", "/api/collections/ledger_accounts/records", nativeBody, auth.Token); status != 400 {
+				if status, _ := send("POST", "/api/collections/accounts/records", nativeBody, auth.Token); status != 400 {
 					t.Error("native refusal unavailable")
 				}
 				id := app.OnRecordAuthWithPasswordRequest().BindFunc(func(*core.RecordAuthWithPasswordRequestEvent) error { return errors.New(sentinel) })

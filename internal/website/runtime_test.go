@@ -102,7 +102,7 @@ func TestBundleRefusals(t *testing.T) {
 }
 
 func TestIntakeReservedRoutes(t *testing.T) {
-	for _, path := range []string{"/api", "/api/foo", "/apifoo", "/_", "/_site", "/_/x", "/healthz", "/healthz/sub", "/accounts/provision", "/accounts/provision/sub", "/credits", "/credits/sub", "/reservations", "/reservations/sub", "/balance", "/balance/sub", "/attestation", "/attestation/sub"} {
+	for _, path := range []string{"/api", "/api/foo", "/apifoo", "/_", "/_site", "/_/x", "/healthz", "/healthz/sub", "/accounts/provision", "/accounts/provision/sub", "/credits", "/credits/sub", "/reservations", "/reservations/sub", "/balance", "/balance/sub", "/attestation", "/attestation/sub", "/topup", "/topup/start", "/topup/status", "/topup/return", "/payments", "/payments/stripe/webhook"} {
 		b := Fixture()
 		b["routes.el"] = strings.ReplaceAll(b["routes.el"], `"/home"`, `"`+path+`"`)
 		if !reserved(path) {

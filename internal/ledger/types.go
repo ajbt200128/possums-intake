@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"time"
-	"unicode/utf8"
 )
 
 const (
@@ -131,7 +130,6 @@ type CleanupResult struct {
 // expired-settlement diagnostic. Renew may return a committed snapshot AND a
 // known refusal; transaction completion failures return no usable receipt.
 type Accounting interface {
-	Provision(context.Context, string) (Account, error)
 	Credit(context.Context, CreditInput) (Credit, error)
 	Reserve(context.Context, ReserveInput) (Reservation, error)
 	Renew(context.Context, RenewInput) (Renewal, error)
@@ -164,7 +162,7 @@ func validNewKey(issued, now int64) error {
 	return nil
 }
 func validAccount(id string) bool {
-	return len(id) >= 1 && len(id) <= 128 && utf8.ValidString(id)
+	return nativeIDPattern.MatchString(id)
 }
 func retention(issued, terminal int64) Millis {
 	return Millis(max(issued+KeyWindowMS, terminal+KeyWindowMS))

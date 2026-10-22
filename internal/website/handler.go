@@ -29,6 +29,7 @@ type Config struct {
 	Lifetime, IdleTimeout time.Duration
 	ConcurrentRequests    int
 	FailureObserver       failureowner.Observer
+	Payments              TopupActions  // optional synthetic-only host capability
 	Balances              BalanceReader // optional; never supplied by Lisp/browser input
 	TLSOffloaded          bool          // owner guarantees an HTTPS-only ingress; never inferred from client headers
 }
@@ -40,6 +41,7 @@ type Host struct {
 	previousCSS  string
 	auth         customerAuth
 	balances     BalanceReader
+	payments     TopupActions
 	fallback     http.Handler
 	sessions     *scs.SessionManager
 	store        *memstore.MemStore
@@ -74,7 +76,7 @@ func newHost(r *Revision, auth customerAuth, fallback http.Handler, c Config, cl
 	}
 	store := memstore.NewWithCleanupInterval(cleanup)
 	sessions := &scs.SessionManager{Store: store, Codec: scs.GobCodec{}, Lifetime: c.Lifetime, IdleTimeout: c.IdleTimeout, Cookie: scs.SessionCookie{Name: "__Host-possums", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode, Persist: false}}
-	h := &Host{revision: r, auth: auth, balances: c.Balances, fallback: fallback, sessions: sessions, store: store, slots: make(chan struct{}, c.ConcurrentRequests), observer: c.FailureObserver, tlsOffloaded: c.TLSOffloaded}
+	h := &Host{revision: r, auth: auth, balances: c.Balances, payments: c.Payments, fallback: fallback, sessions: sessions, store: store, slots: make(chan struct{}, c.ConcurrentRequests), observer: c.FailureObserver, tlsOffloaded: c.TLSOffloaded}
 	sessions.ErrorFunc = h.sessionError
 	csrf := nosurf.New(http.HandlerFunc(h.route))
 	csrf.SetIsTLSFunc(func(r *http.Request) bool { return h.tlsOffloaded || r.TLS != nil })
@@ -97,7 +99,7 @@ func customerHeaders(w http.ResponseWriter) {
 }
 func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Native/accounting failures retain their existing independent owners.
-	if reserved(r.URL.Path) && !strings.HasPrefix(r.URL.Path, "/_site/") {
+	if reserved(r.URL.Path) && !topupPath(r.URL.Path) && !strings.HasPrefix(r.URL.Path, "/_site/") {
 		h.fallback.ServeHTTP(w, r)
 		return
 	}
@@ -176,6 +178,10 @@ func (h *Host) route(w http.ResponseWriter, r *http.Request) {
 	if method == "HEAD" {
 		method = "GET"
 	}
+	if topupPath(r.URL.Path) {
+		pathExists = true
+		route, found = fixedTopupRoute(r.URL.Path, method)
+	}
 	for _, candidate := range requestRevision(r).Routes {
 		if candidate.Path == r.URL.Path {
 			pathExists = true
@@ -236,6 +242,10 @@ func (h *Host) route(w http.ResponseWriter, r *http.Request) {
 		h.redirect(w, r, loginRouteFor(requestRevision(r)).Path)
 		return
 	}
+	if topupPath(r.URL.Path) {
+		h.topup(w, r)
+		return
+	}
 	if method == "GET" {
 		h.page(w, r, route, 200, "")
 		return
@@ -275,7 +285,11 @@ func (h *Host) route(w http.ResponseWriter, r *http.Request) {
 				status = 403
 			}
 			page, _ := requestRevision(r).Named(route.Error)
-			h.page(w, r, page, status, diagnosticText(h.report(r, d)))
+			notice := diagnosticText(h.report(r, d))
+			if d.Code == "SITE_AUTH_REFUSED" {
+				notice = "Invalid credentials. Please try again."
+			}
+			h.page(w, r, page, status, notice)
 			return
 		}
 		setOutcome(r, "sdk_auth_completed_website_session_unconfirmed")
@@ -407,10 +421,13 @@ func (h *Host) page(w http.ResponseWriter, r *http.Request, route Route, status 
 	}
 	page, err := requestRevision(r).PageWithView(r.Context(), route.Entry, view)
 	if err != nil {
+		if view != nil && renderHTTPFault(err).Code == "SITE_PAGE_TEXT_LIMIT" {
+			err = accountViewLimit()
+		}
 		h.renderFailure(w, r, err)
 		return
 	}
-	body, err := requestRevision(r).Render(page, nosurf.Token(r), notice)
+	body, err := requestRevision(r).render(page, nosurf.Token(r), notice, hostBindings{paymentsEnabled: h.payments != nil})
 	if err != nil {
 		h.renderFailure(w, r, err)
 		return

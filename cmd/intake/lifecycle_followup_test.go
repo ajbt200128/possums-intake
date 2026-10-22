@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"possums-intake/internal/testfixture"
 	"strings"
 	"testing"
 	"time"
@@ -290,10 +291,10 @@ func TestCoordinatorNormalCancellationRealCleanupExcludedAndJoined(t *testing.T)
 		t.Fatal("service fixture unavailable")
 	}
 	defer s.Close()
-	if _, err := s.Provision(context.Background(), "synthetic"); err != nil {
+	if _, err := testfixture.Create(context.Background(), s, "synthetic000000"); err != nil {
 		t.Fatal("account fixture unavailable")
 	}
-	before, err := s.Balance(context.Background(), "synthetic")
+	before, err := s.Balance(context.Background(), "synthetic000000")
 	if err != nil {
 		t.Fatal("balance fixture unavailable")
 	}
@@ -327,7 +328,7 @@ func TestCoordinatorNormalCancellationRealCleanupExcludedAndJoined(t *testing.T)
 	}
 	<-m.joined
 	o.want(t)
-	after, err := s.Balance(context.Background(), "synthetic")
+	after, err := s.Balance(context.Background(), "synthetic000000")
 	if err != nil || before.AccountBalance != after.AccountBalance || before.Available != after.Available || !s.Ready() {
 		t.Fatal("normal cancellation changed money/readiness")
 	}

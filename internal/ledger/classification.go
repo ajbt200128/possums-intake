@@ -26,7 +26,7 @@ func defaultFailureKind(code Code) failuretype.Type {
 	switch code {
 	case CodeInput:
 		return failuretype.RequestInvalid
-	case CodeNativeHold, CodeExpired, CodeRenewalClosed, CodeRenewalNoProgress:
+	case CodeNativeHold, CodeExpired, CodeRenewalClosed, CodeRenewalNoProgress, CodePaymentDisabled, CodePaymentExpired, CodePaymentConflict:
 		return failuretype.PolicyRefused
 	case CodeKey, CodeKeyWindow, CodeConflict, CodeRenewalPrecondition:
 		return failuretype.IdempotencyRefused
@@ -36,7 +36,7 @@ func defaultFailureKind(code Code) failuretype.Type {
 		return failuretype.AdmissionRefused
 	case CodeOverflow, CodeCharge:
 		return failuretype.AmountRefused
-	case CodeEvidence:
+	case CodeEvidence, CodePaymentMissing:
 		return failuretype.EvidenceUnavailable
 	case CodeWriter:
 		return failuretype.WriterWaitExhausted
@@ -46,7 +46,7 @@ func defaultFailureKind(code Code) failuretype.Type {
 		return failuretype.TransactionWorkUnknown
 	case CodeBegin:
 		return failuretype.TransactionBeginUnknown
-	case CodeRandom:
+	case CodeRandom, CodePaymentRandom:
 		return failuretype.IdentityUnavailable
 	case CodeCorrupt:
 		return failuretype.StateRejected

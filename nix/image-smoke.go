@@ -100,18 +100,25 @@ func database(mode string) error {
 		_, err = db.Exec("DROP INDEX ledger_reservations_expiry")
 	case "migration-rollback":
 		// Inspect after the image's real init exits under a file-size limit.
-		// Bootstrap must have completed, but no v1 DDL may have committed.
+		// Bootstrap must have completed, but no merged financial DDL may have committed.
 		var bootstrap, ledgerObjects int
 		if err := db.QueryRow("SELECT COUNT(*) FROM _migrations").Scan(&bootstrap); err != nil || bootstrap == 0 {
 			return fmt.Errorf("bootstrap evidence missing")
 		}
-		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE name GLOB 'ledger_*'").Scan(&ledgerObjects); err != nil || ledgerObjects != 0 {
+		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE name GLOB 'ledger_*' OR name='accounts'").Scan(&ledgerObjects); err != nil || ledgerObjects != 0 {
 			return fmt.Errorf("partial migration committed")
 		}
 	default:
 		return fmt.Errorf("unsupported fixture")
 	}
 	return err
+}
+
+// Actual stock auth records with explicit valid fixture SDK IDs. No external
+// identity or second credential record exists in these disposable fixtures.
+func imageAccountBody(id, balance, key string) string {
+	body, _ := json.Marshal(map[string]any{"id": id, "balance": balance, "enabled": true, "password": key, "passwordConfirm": key})
+	return string(body)
 }
 
 // Actual stock API fields, not an alternative account writer or schema.
@@ -130,15 +137,15 @@ func operator() error {
 	}
 	token := auth.Token
 	for _, credential := range []string{"", token} {
-		if _, err := request("/balance", `{"account_id":"native-image-fixture"}`, 401, credential); err != nil {
+		if _, err := request("/balance", `{"account_id":"nativeimage0001"}`, 401, credential); err != nil {
 			return err
 		}
 	}
-	path := "/api/collections/ledger_accounts/records"
+	path := "/api/collections/accounts/records"
 	if _, err := request(path, "", 403, key); err != nil {
 		return err
 	}
-	raw, err = request(path, `{"id":"","collectionId":"ledgeraccounts1","collectionName":"ledger_accounts","account_id":"native-image-fixture","balance":"100","enabled":true}`, 200, token)
+	raw, err = request(path, imageAccountBody("nativeimage0001", "100", strings.Repeat("A", 64)), 200, token)
 	if err != nil {
 		return err
 	}
@@ -150,14 +157,14 @@ func operator() error {
 		CollectionID   string `json:"collectionId"`
 		CollectionName string `json:"collectionName"`
 	}
-	if json.Unmarshal(raw, &account) != nil || len(account.ID) != 15 || account.AccountID != "native-image-fixture" || account.Balance != "100" || !account.Enabled || account.CollectionID != "ledgeraccounts1" || account.CollectionName != "ledger_accounts" {
+	if json.Unmarshal(raw, &account) != nil || len(account.ID) != 15 || account.AccountID != "" || account.Balance != "100" || !account.Enabled || account.CollectionID != "ledgeraccounts2" || account.CollectionName != "accounts" {
 		return fmt.Errorf("native account evidence mismatch")
 	}
 	path += "/" + account.ID
 	if _, err := exchange(http.MethodPatch, path, `{"balance":"90"}`, 200, token, 8192); err != nil {
 		return err
 	}
-	if _, err := request("/reservations", `{"account_id":"native-image-fixture","maximum":"20","timeout_seconds":600}`, 200, key); err != nil {
+	if _, err := request("/reservations", `{"account_id":"nativeimage0001","maximum":"20","timeout_seconds":600}`, 200, key); err != nil {
 		return err
 	}
 	// Trusted stock writes bypass the former held-balance guard. This fake
@@ -169,7 +176,7 @@ func operator() error {
 	if _, err := exchange(http.MethodPatch, path, `{"enabled":false}`, 200, token, 8192); err != nil {
 		return err
 	}
-	raw, err = request("/balance", `{"account_id":"native-image-fixture"}`, 200, key)
+	raw, err = request("/balance", `{"account_id":"nativeimage0001"}`, 200, key)
 	var balance struct {
 		Available string `json:"available"`
 		Accounts  []struct {
@@ -229,7 +236,7 @@ func operator() error {
 		paths := []string{assetPath}
 		if name == iconFont {
 			// A locally authored static query must not change SDK asset routing.
-			paths = append(paths, assetPath+"?source=image-fixture")
+			paths = append(paths, assetPath+"?source=imagefixture001")
 		}
 		for _, path := range paths {
 			raw, err := exchange(http.MethodGet, path, "", 200, "", 4<<20)
@@ -279,7 +286,7 @@ func syntheticWildcard() error {
 // account then a successful native create prove the state was not persisted.
 func syntheticFresh() error {
 	key := os.Getenv("LEDGER_ADMIN_KEY")
-	raw, err := request("/balance", `{"account_id":"native-image-fixture"}`, 404, key)
+	raw, err := request("/balance", `{"account_id":"nativeimage0001"}`, 404, key)
 	if err != nil {
 		return err
 	}
@@ -301,7 +308,7 @@ func syntheticFresh() error {
 	if json.Unmarshal(raw, &auth) != nil || auth.Token == "" || auth.Token == key {
 		return fmt.Errorf("synthetic fresh authentication unconfirmed")
 	}
-	_, err = request("/api/collections/ledger_accounts/records", `{"id":"","collectionId":"ledgeraccounts1","collectionName":"ledger_accounts","account_id":"native-image-fixture","balance":"100","enabled":true}`, 200, auth.Token)
+	_, err = request("/api/collections/accounts/records", imageAccountBody("nativeimage0001", "100", strings.Repeat("A", 64)), 200, auth.Token)
 	return err
 }
 
@@ -369,13 +376,21 @@ func run(mode string) error {
 			return fmt.Errorf("not ready")
 		}
 	case "seed":
-		if _, err := request("/accounts/provision", `{"account_id":"image-fixture"}`, 200, key); err != nil {
+		login, _ := json.Marshal(map[string]string{"identity": os.Getenv("LEDGER_OPERATOR_EMAIL"), "password": os.Getenv("LEDGER_OPERATOR_PASSWORD")})
+		raw, err := request("/api/collections/_superusers/auth-with-password", string(login), 200, "")
+		var auth struct {
+			Token string `json:"token"`
+		}
+		if err != nil || json.Unmarshal(raw, &auth) != nil || auth.Token == "" {
+			return fmt.Errorf("synthetic seed authentication unconfirmed")
+		}
+		if _, err := request("/api/collections/accounts/records", imageAccountBody("imagefixture001", "0", strings.Repeat("B", 64)), 200, auth.Token); err != nil {
 			return err
 		}
-		_, err := request("/credits", `{"account_id":"image-fixture","amount":"17"}`, 200, key)
+		_, err = request("/credits", `{"account_id":"imagefixture001","amount":"17"}`, 200, key)
 		return err
 	case "balance":
-		raw, err := request("/balance", `{"account_id":"image-fixture","future":{"nested":[true,null],"ignored":"synthetic-extension-fixture"}}`, 200, key)
+		raw, err := request("/balance", `{"account_id":"imagefixture001","future":{"nested":[true,null],"ignored":"synthetic-extension-fixture"}}`, 200, key)
 		if err != nil {
 			return err
 		}
@@ -394,7 +409,7 @@ func run(mode string) error {
 				return err
 			}
 		}
-		if _, err := request("/balance", `{"account_id":"image-fixture"}`, 401, ""); err != nil {
+		if _, err := request("/balance", `{"account_id":"imagefixture001"}`, 401, ""); err != nil {
 			return err
 		}
 		raw, err := request("/balance", `{"account_id":{"private":"hostile-fixture"},"unknown":"secret-fixture"}`, 400, key)
@@ -545,7 +560,18 @@ func siteSnapshot(c *siteClient, account, other string) error {
 	if parseErr != nil || p.Initial != p.Expires || p.Account != account || p.State != "active" || p.Charged != nil || p.Terminal != nil || p.Retain != nil || p.Timeout != 600 || expires <= time.Now().UnixMilli() || p.ID == "" || p.Key == "" {
 		return &siteProbeFailure{"IMAGE_WEBSITE_PENDING_UNCONFIRMED"}
 	}
-	want := fmt.Sprintf("Account: %s\nBalance (microunits): %s\nAvailable (microunits): %s\nEnabled: %t\nPending holds (amounts in microunits; timestamps in Unix milliseconds):\n- reservation_id=%s idempotency_key=%s account_id=%s maximum=%s timeout_seconds=%d initial_expires_at=%d expires_at=%d state=%s charged_amount=null terminal_at=null retain_until=null\n", strconv.QuoteToASCII(account), a.Balance, snapshot.Available, a.Enabled, strconv.QuoteToASCII(p.ID), strconv.QuoteToASCII(p.Key), strconv.QuoteToASCII(p.Account), p.Maximum, p.Timeout, expires, expires, strconv.QuoteToASCII(p.State))
+	usd := func(value string) string {
+		units, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || strconv.FormatUint(units, 10) != value {
+			return "INVALID_SYNTHETIC_MONEY"
+		}
+		fraction := strings.TrimRight(fmt.Sprintf("%06d", units%1_000_000), "0")
+		for len(fraction) < 2 {
+			fraction += "0"
+		}
+		return "$" + strconv.FormatUint(units/1_000_000, 10) + "." + fraction
+	}
+	want := fmt.Sprintf("Pending holds:\n- Reserved: %s USD; expires: %s\n  Reservation: %s\n  Request key: %s\n  Timeout: %d seconds; state: %s; initial expiry: %s\n  Charged: none; completed: none; retained until: none\n", usd(p.Maximum), expiry.UTC().Format(time.RFC3339Nano), strconv.QuoteToASCII(p.ID), strconv.QuoteToASCII(p.Key), p.Timeout, p.State, expiry.UTC().Format(time.RFC3339Nano))
 	// Account-selector query strings are refused, never used as authority.
 	if _, err := c.do("GET", "/home?account_id="+url.QueryEscape(other), nil, 400, ""); err != nil {
 		return &siteProbeFailure{"IMAGE_WEBSITE_ISOLATION_UNCONFIRMED"}
@@ -557,10 +583,10 @@ func siteSnapshot(c *siteClient, account, other string) error {
 	if err != nil {
 		return &siteProbeFailure{"IMAGE_WEBSITE_ACCOUNT_PAGE_UNCONFIRMED"}
 	}
-	if !strings.Contains(text, want) {
+	if !strings.Contains(text, want) || !strings.Contains(text, "Balance: "+usd(a.Balance)+" USD") || !strings.Contains(text, "Available: "+usd(snapshot.Available)+" USD") {
 		return &siteProbeFailure{"IMAGE_WEBSITE_COMPLETE_TEXT_UNCONFIRMED"}
 	}
-	if strings.Count(text, "reservation_id=") != 1 || strings.Contains(text, other) || bytes.Contains(page, []byte(os.Getenv("LEDGER_ADMIN_KEY"))) {
+	if strings.Count(text, "Reservation: ") != 1 || strings.Contains(text, account) || strings.Contains(text, other) || strings.Contains(text, "Enabled") || bytes.Contains(page, []byte(os.Getenv("LEDGER_ADMIN_KEY"))) {
 		return &siteProbeFailure{"IMAGE_WEBSITE_ISOLATION_UNCONFIRMED"}
 	}
 	return nil
@@ -608,18 +634,13 @@ func websiteSmoke(restarted bool) (result error) {
 	}
 	token := auth.Token
 	stage = "IMAGE_WEBSITE_PROVISION_UNCONFIRMED"
-	accounts := []string{"website-image-one", "website-image-two"}
+	accounts := []string{"websiteimage001", "websiteimage002"}
 	if !restarted {
 		for index, account := range accounts {
-			body, _ := json.Marshal(map[string]any{"account_id": account, "balance": strconv.Itoa(101 + index), "enabled": true})
-			if _, err := request("/api/collections/ledger_accounts/records", string(body), 200, token); err != nil {
+			if _, err := request("/api/collections/accounts/records", imageAccountBody(account, strconv.Itoa(101+index), websiteKey(index)), 200, token); err != nil {
 				return err
 			}
-			body, _ = json.Marshal(map[string]string{"account_id": account, "password": websiteKey(index), "passwordConfirm": websiteKey(index)})
-			if _, err := request("/api/collections/customer_keys/records", string(body), 200, token); err != nil {
-				return err
-			}
-			body, _ = json.Marshal(map[string]any{"account_id": account, "maximum": strconv.Itoa(11 + index), "timeout_seconds": 600})
+			body, _ := json.Marshal(map[string]any{"account_id": account, "maximum": strconv.Itoa(11 + index), "timeout_seconds": 600})
 			if _, err := request("/reservations", string(body), 200, key); err != nil {
 				return err
 			}
@@ -690,7 +711,7 @@ func websiteSmoke(restarted bool) (result error) {
 			return err
 		}
 		for _, credential := range []string{"", client.cookies["__Host-possums"].Value} {
-			if _, err := request("/balance", `{"account_id":"website-image-one"}`, 401, credential); err != nil {
+			if _, err := request("/balance", `{"account_id":"websiteimage001"}`, 401, credential); err != nil {
 				return err
 			}
 		}

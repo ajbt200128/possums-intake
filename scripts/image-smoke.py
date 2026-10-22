@@ -35,7 +35,7 @@ STARTUP_EXPECTED = {
         "next_step": "Preserve existing or partial state; choose a different empty disposable directory."},
     "LEDGER_STARTUP_SCHEMA": {
         "stage": "state_validation", "constraint": "supported_schema_and_metadata", "outcome": "unavailable",
-        "next_step": "Inspect schema privately. No down-migration, empty reset or financial restore is authorized."},
+        "next_step": "This source requires the fresh merged schema v3. Preserve incompatible state and inspect privately; no migration, empty reset or financial restore is authorized."},
     "LEDGER_COMMIT_UNKNOWN": {
         "stage": "init", "constraint": "authoritative_commit_evidence", "outcome": "unknown",
         "next_step": "Initialization incomplete or unconfirmed. Preserve partial state; do not re-run init on it. Inspect privately or select a different empty disposable directory."},
@@ -269,10 +269,12 @@ def qualify(archive, probe):
         try:
             volume = fixture.volume()
             fixture.once(volume, "serve", failure="LEDGER_STARTUP_MISSING_STATE")
-            fixture.once(volume, "init")
+            fixture.once(volume, "init", operator=True)
             fixture.once(volume, "init", failure="LEDGER_INIT_NONEMPTY")
-            server = fixture.start(volume)
+            server = fixture.start(volume, operator=True)
             fixture.exec(server, "seed")
+            fixture.stop(server)
+            server = fixture.start(volume)
             fixture.exec(server, "balance")
             fixture.exec(server, "privacy")
             fixture.stop(server)

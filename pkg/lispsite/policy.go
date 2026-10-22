@@ -13,6 +13,7 @@ type Policy struct {
 	ReservedPaths    []string
 	ReservedPrefixes []string
 	AllowedActions   []Action
+	HostComponents   []string // inert leaf names; interpretation belongs only to the host
 }
 
 // Action associates a host-owned action name with a closed presentation kind:
@@ -23,16 +24,17 @@ type Action struct{ Name, Form string }
 type admission struct {
 	paths, prefixes []string
 	actions         map[string]string
+	hosts           map[string]bool
 }
 
 var policyPath = regexp.MustCompile(`^/(?:[a-z0-9_-]+(?:/[a-z0-9_-]+)*)?$`)
 var actionName = regexp.MustCompile(`^[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)*$`)
 
 func copyPolicy(p Policy) (admission, bool) {
-	if len(p.ReservedPaths) > 32 || len(p.ReservedPrefixes) > 32 || len(p.AllowedActions) > 32 {
+	if len(p.ReservedPaths) > 32 || len(p.ReservedPrefixes) > 32 || len(p.AllowedActions) > 32 || len(p.HostComponents) > 32 {
 		return admission{}, false
 	}
-	a := admission{paths: append([]string(nil), p.ReservedPaths...), prefixes: append([]string(nil), p.ReservedPrefixes...), actions: map[string]string{}}
+	a := admission{paths: append([]string(nil), p.ReservedPaths...), prefixes: append([]string(nil), p.ReservedPrefixes...), actions: map[string]string{}, hosts: map[string]bool{}}
 	for _, paths := range [][]string{a.paths, a.prefixes} {
 		for _, path := range paths {
 			if len(path) > 256 || !policyPath.MatchString(path) {
@@ -45,6 +47,12 @@ func copyPolicy(p Policy) (admission, bool) {
 			return admission{}, false
 		}
 		a.actions[action.Name] = action.Form
+	}
+	for _, name := range p.HostComponents {
+		if !stableName.MatchString(name) || a.hosts[name] {
+			return admission{}, false
+		}
+		a.hosts[name] = true
 	}
 	return a, true
 }

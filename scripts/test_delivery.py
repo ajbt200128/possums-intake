@@ -483,6 +483,33 @@ class DeliveryTests(unittest.TestCase):
             self.assertTrue((a / "source-manifest.json").is_file())
             self.stop("source_snapshot", lambda: source_snapshot.snapshot(root, root / "nested"))
 
+    def test_source_snapshot_includes_only_named_ledger_sql_fixtures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "checkout"
+            root.mkdir()
+            for name in ("flake.nix", "flake.lock", "go.mod", "go.sum"):
+                (root / name).write_text("synthetic public input")
+            ledger = root / "internal/ledger"
+            fixtures = ledger / "testdata"
+            fixtures.mkdir(parents=True)
+            (ledger / "fresh_schema_test.go").write_text("synthetic public test")
+            for name in source_snapshot.LEDGER_FIXTURES:
+                (fixtures / name).write_text("CREATE TABLE synthetic_fixture(id TEXT);")
+            for name in ("private.sql", "private.db", ".env"):
+                (fixtures / name).write_text("private-fixture-sentinel")
+            target = Path(directory) / "snapshot"
+            source_snapshot.snapshot(root, target)
+            files = json.loads((target / "source-manifest.json").read_text())["files"]
+            for name in source_snapshot.LEDGER_FIXTURES:
+                self.assertIn("internal/ledger/testdata/" + name, files)
+            for name in ("private.sql", "private.db", ".env"):
+                self.assertNotIn("internal/ledger/testdata/" + name, files)
+            missing = fixtures / source_snapshot.LEDGER_FIXTURES[0]
+            missing.unlink()
+            self.stop("source_snapshot", lambda: source_snapshot.snapshot(root, Path(directory) / "missing"))
+            missing.symlink_to(fixtures / source_snapshot.LEDGER_FIXTURES[1])
+            self.stop("source_snapshot", lambda: source_snapshot.snapshot(root, Path(directory) / "symlink"))
+
     def website_fixture(self, root):
         """Synthetic website inventory: fixture bytes and a matching manifest."""
         assets, bundle = root / "internal/website/assets", root / "internal/website/bundle"
@@ -696,6 +723,19 @@ class DeliveryTests(unittest.TestCase):
             self.stop("image_migration", smoke.main)
         self.f.data["qualification"]["cases"]["migration_failure_refused"] = "unknown"
         self.stop("qualification", lambda: r.candidate_gate(self.f, self.f.candidate))
+
+    def test_fresh_v3_schema_refusal_uses_exact_current_cli_contract(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
+        view = {"code": "LEDGER_STARTUP_SCHEMA", "stage": "state_validation",
+                "constraint": "supported_schema_and_metadata", "outcome": "unavailable",
+                "next_step": "This source requires the fresh merged schema v3. Preserve incompatible state and inspect privately; no migration, empty reset or financial restore is authorized."}
+        result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
+        with patch.object(smoke, "command", return_value=result):
+            fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA")
+        view["next_step"] = "Inspect schema privately. No down-migration, empty reset or financial restore is authorized."
+        result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
+        with patch.object(smoke, "command", return_value=result):
+            self.stop("image_privacy", lambda: fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA"))
 
     def test_actual_image_negative_requires_exact_closed_diagnostic(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")

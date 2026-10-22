@@ -35,10 +35,6 @@ func (s stubLedger) result(err error) error {
 	return err
 }
 
-func (s stubLedger) Provision(context.Context, string) (ledger.Account, error) {
-	s.maybePanic("provision")
-	return s.account, s.result(nil)
-}
 func (s stubLedger) Credit(context.Context, ledger.CreditInput) (ledger.Credit, error) {
 	s.maybePanic("credit")
 	return s.credit, s.result(nil)
@@ -73,9 +69,6 @@ func (s stubLedger) Cleanup(context.Context, bool) (ledger.CleanupResult, error)
 
 type panicLedger struct{}
 
-func (panicLedger) Provision(context.Context, string) (ledger.Account, error) {
-	panic("SYNTHETIC_PRIVATE_SENTINEL")
-}
 func (panicLedger) Credit(context.Context, ledger.CreditInput) (ledger.Credit, error) {
 	panic("SYNTHETIC_PRIVATE_SENTINEL")
 }
@@ -107,14 +100,13 @@ var routesAndBodies = []struct {
 	path string
 	body string
 }{
-	{"/accounts/provision", `{"account_id":"a"}`},
-	{"/credits", `{"account_id":"a","amount":"1"}`},
-	{"/reservations", `{"account_id":"a","maximum":"1","timeout_seconds":600}`},
+	{"/credits", `{"account_id":"aaaaaaaaaaaaaaa","amount":"1"}`},
+	{"/reservations", `{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":600}`},
 	{"/reservations/renew", `{"reservation_id":"` + strings.Repeat("a", 32) + `","expected_expires_at":"2030-01-01T00:00:00.000Z"}`},
 	{"/reservations/settle", `{"reservation_id":"` + strings.Repeat("a", 32) + `","charged_amount":"0"}`},
 	{"/reservations/refund", `{"reservation_id":"` + strings.Repeat("a", 32) + `"}`},
 	{"/reservations/lookup", `{"reservation_id":"` + strings.Repeat("a", 32) + `"}`},
-	{"/balance", `{"account_id":"a"}`},
+	{"/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`},
 }
 
 func closedDiagnostic(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
@@ -182,9 +174,9 @@ func TestEveryAccountingRouteRequiresTheSharedKey(t *testing.T) {
 func TestUnknownAndNativeRoutesAreClosed(t *testing.T) {
 	handler := newTestHandler(t, panicLedger{}, func() bool { return true })
 	for _, path := range []string{
-		"/", "/api/collections", "/api/collections/ledger_accounts/records",
+		"/", "/api/collections", "/api/collections/accounts/records",
 		"/api/backups", "/api/settings", "/_/", "/api/admins", "/index.html",
-		"/healthz/extra", "/accounts", "/credits/extra",
+		"/healthz/extra", "/accounts", "/accounts/provision", "/credits/extra",
 	} {
 		recorder := request(t, handler, http.MethodGet, path, nil, "")
 		requireStatus(t, recorder, http.StatusNotFound)
@@ -195,7 +187,7 @@ func TestUnknownAndNativeRoutesAreClosed(t *testing.T) {
 	// Wrong method on a real path is also a closed 404, never a framework error.
 	recorder := request(t, handler, http.MethodGet, "/balance", nil, "")
 	requireStatus(t, recorder, http.StatusNotFound)
-	recorder = request(t, handler, http.MethodPut, "/accounts/provision", authHeaders("application/json"), `{"account_id":"a"}`)
+	recorder = request(t, handler, http.MethodPut, "/balance", authHeaders("application/json"), `{"account_id":"aaaaaaaaaaaaaaa"}`)
 	requireStatus(t, recorder, http.StatusNotFound)
 	// healthz never requires the key and never runs accounting.
 	recorder = request(t, handler, http.MethodGet, "/healthz", nil, "")
@@ -213,10 +205,10 @@ func TestRequiredBodyContract(t *testing.T) {
 	}{
 		{"empty", valid, ""},
 		{"array", valid, `[]`},
-		{"scalar", valid, `"a"`},
-		{"trailing", valid, `{"account_id":"a"} {}`},
-		{"trailing token", valid, `{"account_id":"a"} trailing`},
-		{"duplicate key", valid, `{"account_id":"a","account_id":"b"}`},
+		{"scalar", valid, `"aaaaaaaaaaaaaaa"`},
+		{"trailing", valid, `{"account_id":"aaaaaaaaaaaaaaa"} {}`},
+		{"trailing token", valid, `{"account_id":"aaaaaaaaaaaaaaa"} trailing`},
+		{"duplicate key", valid, `{"account_id":"aaaaaaaaaaaaaaa","account_id":"bbbbbbbbbbbbbbb"}`},
 		{"null required", valid, `{"account_id":null}`},
 		{"missing required", valid, `{}`},
 		{"malformed utf8", valid, "{\"account_id\":\"a\xffb\"}"},
@@ -224,7 +216,7 @@ func TestRequiredBodyContract(t *testing.T) {
 		{"number account", valid, `{"account_id":123}`},
 	}
 	for _, test := range cases {
-		recorder := request(t, handler, http.MethodPost, "/accounts/provision", test.headers, test.body)
+		recorder := request(t, handler, http.MethodPost, "/balance", test.headers, test.body)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status = %d body = %s", test.name, recorder.Code, recorder.Body.String())
 		}
@@ -235,17 +227,17 @@ func TestRequiredBodyContract(t *testing.T) {
 
 	// Oversized bodies are rejected, not truncated.
 	big := `{"account_id":"` + strings.Repeat("a", MaxBodyBytes) + `"}`
-	recorder := request(t, handler, http.MethodPost, "/accounts/provision", valid, big)
+	recorder := request(t, handler, http.MethodPost, "/balance", valid, big)
 	requireStatus(t, recorder, http.StatusBadRequest)
 
 	// Compression is never accepted.
 	compressed := authHeaders("application/json")
 	compressed["Content-Encoding"] = "gzip"
-	recorder = request(t, handler, http.MethodPost, "/accounts/provision", compressed, `{"account_id":"a"}`)
+	recorder = request(t, handler, http.MethodPost, "/balance", compressed, `{"account_id":"aaaaaaaaaaaaaaa"}`)
 	requireStatus(t, recorder, http.StatusBadRequest)
 
 	// Query parameters are rejected on every route.
-	recorder = request(t, handler, http.MethodPost, "/balance?account_id=a", valid, `{"account_id":"a"}`)
+	recorder = request(t, handler, http.MethodPost, "/balance?account_id=a", valid, `{"account_id":"aaaaaaaaaaaaaaa"}`)
 	requireStatus(t, recorder, http.StatusBadRequest)
 
 	// Content type must identify JSON; it need not use one textual spelling.
@@ -254,7 +246,7 @@ func TestRequiredBodyContract(t *testing.T) {
 		if contentType == "" {
 			delete(headers, "Content-Type")
 		}
-		recorder = request(t, handler, http.MethodPost, "/accounts/provision", headers, `{"account_id":"a"}`)
+		recorder = request(t, handler, http.MethodPost, "/balance", headers, `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		requireStatus(t, recorder, http.StatusBadRequest)
 	}
 }
@@ -265,13 +257,13 @@ func TestMoneyAndTimeoutWireValidation(t *testing.T) {
 	valid["Idempotency-Key"] = key(9)
 
 	badCredits := []string{
-		`{"account_id":"a","amount":"0"}`,
-		`{"account_id":"a","amount":"00"}`,
-		`{"account_id":"a","amount":"1.0"}`,
-		`{"account_id":"a","amount":"1e2"}`,
-		`{"account_id":"a","amount":"18446744073709551616"}`,
-		`{"account_id":"a","amount":"-1"}`,
-		`{"account_id":"a","amount":5}`,
+		`{"account_id":"aaaaaaaaaaaaaaa","amount":"0"}`,
+		`{"account_id":"aaaaaaaaaaaaaaa","amount":"00"}`,
+		`{"account_id":"aaaaaaaaaaaaaaa","amount":"1.0"}`,
+		`{"account_id":"aaaaaaaaaaaaaaa","amount":"1e2"}`,
+		`{"account_id":"aaaaaaaaaaaaaaa","amount":"18446744073709551616"}`,
+		`{"account_id":"aaaaaaaaaaaaaaa","amount":"-1"}`,
+		`{"account_id":"aaaaaaaaaaaaaaa","amount":5}`,
 	}
 	for _, body := range badCredits {
 		recorder := request(t, handler, http.MethodPost, "/credits", valid, body)
@@ -282,14 +274,14 @@ func TestMoneyAndTimeoutWireValidation(t *testing.T) {
 		body   string
 		reason string
 	}{
-		{`{"account_id":"a","maximum":"0","timeout_seconds":600}`, "zero maximum"},
-		{`{"account_id":"a","maximum":"1","timeout_seconds":0}`, "timeout zero"},
-		{`{"account_id":"a","maximum":"1","timeout_seconds":1801}`, "timeout too large"},
-		{`{"account_id":"a","maximum":"1","timeout_seconds":600.5}`, "fractional timeout"},
-		{`{"account_id":"a","maximum":"1","timeout_seconds":"600"}`, "string timeout"},
-		{`{"account_id":"a","maximum":"1","timeout_seconds":6e2}`, "exponent timeout"},
-		{`{"account_id":"a","maximum":"1","timeout_seconds":null}`, "null timeout"},
-		{`{"account_id":"a","maximum":"1"}`, "missing timeout"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"0","timeout_seconds":600}`, "zero maximum"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":0}`, "timeout zero"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":1801}`, "timeout too large"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":600.5}`, "fractional timeout"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":"600"}`, "string timeout"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":6e2}`, "exponent timeout"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":null}`, "null timeout"},
+		{`{"account_id":"aaaaaaaaaaaaaaa","maximum":"1"}`, "missing timeout"},
 	}
 	for _, test := range badReserves {
 		recorder := request(t, handler, http.MethodPost, "/reservations", valid, test.body)
@@ -300,9 +292,9 @@ func TestMoneyAndTimeoutWireValidation(t *testing.T) {
 
 	// Idempotency-Key is required and singleton on credits and reservations.
 	noKey := authHeaders("application/json")
-	recorder := request(t, handler, http.MethodPost, "/credits", noKey, `{"account_id":"a","amount":"1"}`)
+	recorder := request(t, handler, http.MethodPost, "/credits", noKey, `{"account_id":"aaaaaaaaaaaaaaa","amount":"1"}`)
 	requireStatus(t, recorder, http.StatusBadRequest)
-	recorder = request(t, handler, http.MethodPost, "/reservations", noKey, `{"account_id":"a","maximum":"1","timeout_seconds":600}`)
+	recorder = request(t, handler, http.MethodPost, "/reservations", noKey, `{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":600}`)
 	requireStatus(t, recorder, http.StatusBadRequest)
 	// Settle/refund/lookup do not require the header. Missing evidence is a
 	// ledger decision, not a missing-header rejection.
@@ -337,7 +329,7 @@ func TestLedgerDiagnosticsMapToPinnedStatuses(t *testing.T) {
 	for _, test := range cases {
 		diagnostic := &ledger.Diagnostic{Code: test.code, Stage: "s", Constraint: "c", Outcome: "o", NextStep: "n"}
 		handler := newTestHandler(t, stubLedger{err: diagnostic}, func() bool { return true })
-		recorder := postJSON(t, handler, "/balance", `{"account_id":"a"}`)
+		recorder := postJSON(t, handler, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		if recorder.Code != test.status {
 			t.Fatalf("%s: status = %d, want %d", test.code, recorder.Code, test.status)
 		}
@@ -349,7 +341,7 @@ func TestLedgerDiagnosticsMapToPinnedStatuses(t *testing.T) {
 	}
 	// Unknown/unexpected errors and panics are a safe unknown-outcome 503.
 	handler := newTestHandler(t, stubLedger{err: fmt.Errorf("SYNTHETIC_PRIVATE_SENTINEL raw driver failure")}, func() bool { return true })
-	recorder := postJSON(t, handler, "/balance", `{"account_id":"a"}`)
+	recorder := postJSON(t, handler, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 	requireStatus(t, recorder, http.StatusServiceUnavailable)
 	if body := closedDiagnostic(t, recorder); body["code"] != "LEDGER_HTTP_OUTCOME_UNKNOWN" || body["outcome"] != "unknown" {
 		t.Fatalf("unexpected error body = %v", body)
@@ -373,11 +365,10 @@ var panicRoutes = []struct {
 	path   string
 	body   string
 }{
-	{"provision", "/accounts/provision", `{"account_id":"a"}`},
-	{"credit", "/credits", `{"account_id":"a","amount":"1"}`},
-	{"reserve", "/reservations", `{"account_id":"a","maximum":"1","timeout_seconds":600}`},
+	{"credit", "/credits", `{"account_id":"aaaaaaaaaaaaaaa","amount":"1"}`},
+	{"reserve", "/reservations", `{"account_id":"aaaaaaaaaaaaaaa","maximum":"1","timeout_seconds":600}`},
 	{"settle", "/reservations/settle", `{"reservation_id":"` + strings.Repeat("a", 32) + `","charged_amount":"0"}`},
 	{"refund", "/reservations/refund", `{"reservation_id":"` + strings.Repeat("a", 32) + `"}`},
-	{"balance", "/balance", `{"account_id":"a"}`},
+	{"balance", "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`},
 	{"lookup", "/reservations/lookup", `{"reservation_id":"` + strings.Repeat("a", 32) + `"}`},
 }

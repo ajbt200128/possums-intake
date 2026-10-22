@@ -6,6 +6,14 @@ import "possums-intake/internal/failuretype"
 type Code string
 
 const (
+	CodePaymentDisabled Code = "PAYMENT_SYNTHETIC_NOT_INITIALIZED"
+	CodePaymentMissing  Code = "PAYMENT_REFERENCE_UNAVAILABLE"
+	CodePaymentExpired  Code = "PAYMENT_LINK_EXPIRED"
+	CodePaymentConflict Code = "PAYMENT_EVIDENCE_CONFLICT"
+	CodePaymentRandom   Code = "PAYMENT_IDENTITY_UNAVAILABLE"
+)
+
+const (
 	CodeInput               Code = "LEDGER_INPUT_INVALID"
 	CodeNativeHold          Code = "LEDGER_NATIVE_BALANCE_HELD"
 	CodeKey                 Code = "LEDGER_KEY_INVALID"
@@ -56,6 +64,27 @@ func (d *Diagnostic) Error() string { return string(d.Code) }
 func diagnostic(code Code) *Diagnostic {
 	d := &Diagnostic{Code: code, kind: defaultFailureKind(code), Outcome: "no_effect", NextStep: "Correct the request; retry only the original identity."}
 	switch code {
+	case CodePaymentDisabled:
+		d.Stage = "payment_setup"
+		d.Constraint = "explicit_synthetic_initialization"
+		d.NextStep = "Payment schema is absent. Only an explicitly authorized synthetic setup may initialize it; do not initialize as recovery."
+	case CodePaymentMissing:
+		d.Stage = "payment_lookup"
+		d.Constraint = "retained_original_reference_and_account"
+		d.Outcome = "unavailable"
+		d.NextStep = "No usable original reference is available. This does not establish whether the provider charged; never recreate it to resolve uncertainty."
+	case CodePaymentExpired:
+		d.Stage = "payment_window"
+		d.Constraint = "immutable_original_deadline"
+		d.NextStep = "Automatic funding or Checkout creation is unavailable under this identity. Provider payment outcome is not established; seek separate manual resolution."
+	case CodePaymentConflict:
+		d.Stage = "payment_evidence"
+		d.Constraint = "canonical_original_synthetic_purchase"
+		d.NextStep = "Evidence does not match the original synthetic purchase. Do not rebind objects, replay creation or issue a replacement credit."
+	case CodePaymentRandom:
+		d.Stage = "payment_identity"
+		d.Constraint = "cryptographic_unique_identifier"
+		d.NextStep = "Identity allocation rolled back; cause unknown. Preserve the original form identity and inspect locally."
 	case CodeNativeHold:
 		d.Stage = "native_account_write"
 		d.Constraint = "no_active_holds_for_changed_balance"
@@ -167,7 +196,7 @@ func diagnostic(code Code) *Diagnostic {
 		d.Stage = "state_validation"
 		d.Constraint = "supported_schema_and_metadata"
 		d.Outcome = "unavailable"
-		d.NextStep = "Inspect schema privately. No down-migration, empty reset or financial restore is authorized."
+		d.NextStep = "This source requires the fresh merged schema v3. Preserve incompatible state and inspect privately; no migration, empty reset or financial restore is authorized."
 	case CodePath:
 		d.Stage = "startup"
 		d.Constraint = "explicit_absolute_state_directory"

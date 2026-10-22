@@ -17,9 +17,9 @@ func renewalFixture(t *testing.T) (*ledger.Service, http.Handler, ledger.Reserva
 	t.Helper()
 	s := newTestLedger(t)
 	h := newTestHandler(t, s, s.Ready)
-	provision(t, h, "renewal-account")
-	credit(t, h, "renewal-account", "100", 1)
-	r, err := s.Reserve(testContext, ledger.ReserveInput{AccountID: "renewal-account", Maximum: "40", TimeoutSeconds: 1800, IdempotencyKey: key(2)})
+	createAccountFixture(t, h, "renewalaccount0")
+	credit(t, h, "renewalaccount0", "100", 1)
+	r, err := s.Reserve(testContext, ledger.ReserveInput{AccountID: "renewalaccount0", Maximum: "40", TimeoutSeconds: 1800, IdempotencyKey: key(2)})
 	if err != nil {
 		t.Fatal("synthetic renewal reserve unavailable")
 	}
@@ -80,7 +80,7 @@ func TestRenewalHTTPConditionalCurrentSnapshotAndTerminals(t *testing.T) {
 	out = postJSON(t, h, "/reservations/renew", renewBody(latest, latest.InitialExpiresAt-1))
 	requireStatus(t, out, 400)
 	app, _ := s.CustomerAuthApp()
-	if _, err := app.DB().NewQuery("UPDATE ledger_accounts SET enabled=0").Execute(); err != nil {
+	if _, err := app.DB().NewQuery("UPDATE accounts SET enabled=0").Execute(); err != nil {
 		t.Fatal("synthetic disable unavailable")
 	}
 	out = postJSON(t, h, "/reservations/renew", renewBody(original, original.ExpiresAt))

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"possums-intake/internal/failureowner"
@@ -17,6 +18,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	_ "github.com/pocketbase/pocketbase/migrations"
 	"github.com/pocketbase/pocketbase/tools/hook"
+	"github.com/pocketbase/pocketbase/tools/types"
 	_ "modernc.org/sqlite"
 )
 
@@ -87,7 +89,7 @@ func initialize(ctx context.Context, dir string, operator *OperatorCredentials, 
 	s := newService(app)
 	runCtx, report := WithFailureReport(ctx)
 	err = s.run(runCtx, func(tx *transaction) error {
-		if err := initializeV2(tx); err != nil {
+		if err := initializeSchema(tx); err != nil {
 			return err
 		}
 		if preparedOperator != nil {
@@ -144,11 +146,27 @@ func openObserved(ctx context.Context, dir string, observer failureowner.Observe
 			failureowner.Observe(observer, d.Kind())
 		}
 	}()
-	if err := existingStateDirectory(dir); err != nil {
-		return nil, err
+	if !filepath.IsAbs(dir) {
+		return nil, diagnostic(CodePath)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, lifecycleFailure(err, failuretype.StorageOpenUnknown)
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, diagnostic(CodeMissing)
+	}
+	for _, name := range []string{"data.db", "auxiliary.db"} {
+		info, err = os.Lstat(filepath.Join(dir, name))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, lifecycleFailure(err, failuretype.StorageOpenUnknown)
+		}
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return nil, diagnostic(CodeMissing)
+		}
 	}
 	// Apply the same exact-layout checks before framework bootstrap can touch
-	// incompatible state. Open never takes the explicit legacy upgrade path.
+	// incompatible disposable state. No version-specific legacy or upgrade path.
 	if err := preflightObserved(ctx, dir, observer); err != nil {
 		owned = true
 		return nil, err
@@ -176,29 +194,6 @@ func openObserved(ctx context.Context, dir string, observer failureowner.Observe
 	}
 	accepted = true
 	return s, nil
-}
-
-func existingStateDirectory(dir string) error {
-	if !filepath.IsAbs(dir) {
-		return diagnostic(CodePath)
-	}
-	info, err := os.Lstat(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return lifecycleFailure(err, failuretype.StorageOpenUnknown)
-	}
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return diagnostic(CodeMissing)
-	}
-	for _, name := range []string{"data.db", "auxiliary.db"} {
-		info, err = os.Lstat(filepath.Join(dir, name))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return lifecycleFailure(err, failuretype.StorageOpenUnknown)
-		}
-		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-			return diagnostic(CodeMissing)
-		}
-	}
-	return nil
 }
 
 func connect(path string, create bool) (*dbx.DB, error) {
@@ -303,67 +298,27 @@ func storageApp(dir string, create bool) *core.BaseApp {
 	return app
 }
 
-const schemaV1 = `
+const schemaV3 = `
 CREATE TABLE ledger_meta (
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
- schema_version INTEGER NOT NULL CHECK(schema_version=1),
+ schema_version INTEGER NOT NULL CHECK(schema_version=3),
  clock_high_water_ms INTEGER NOT NULL CHECK(typeof(clock_high_water_ms)='integer' AND clock_high_water_ms>=0 AND clock_high_water_ms<=9999999999999)
 );
-CREATE TABLE ledger_accounts (
- id TEXT PRIMARY KEY NOT NULL CHECK(length(id)=15 AND id NOT GLOB '*[^a-z0-9]*'),
- account_id TEXT NOT NULL CHECK(length(CAST(account_id AS BLOB)) BETWEEN 1 AND 128),
- balance TEXT NOT NULL CHECK(typeof(balance)='text' AND length(balance) BETWEEN 1 AND 20 AND balance NOT GLOB '*[^0-9]*' AND (balance='0' OR substr(balance,1,1) BETWEEN '1' AND '9') AND (length(balance)<20 OR balance<='18446744073709551615')),
- enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
+CREATE TABLE accounts (
+ id TEXT PRIMARY KEY DEFAULT ('r'||lower(hex(randomblob(7)))) NOT NULL CHECK(length(id)=15 AND id NOT GLOB '*[^a-z0-9]*'),
+ password TEXT DEFAULT '' NOT NULL,
+ tokenKey TEXT DEFAULT '' NOT NULL,
+ email TEXT DEFAULT '' NOT NULL,
+ emailVisibility BOOLEAN DEFAULT FALSE NOT NULL,
+ verified BOOLEAN DEFAULT FALSE NOT NULL,
+ key_lookup TEXT DEFAULT '' NOT NULL,
+ balance TEXT DEFAULT '0' NOT NULL CHECK(typeof(balance)='text' AND length(balance) BETWEEN 1 AND 20 AND balance NOT GLOB '*[^0-9]*' AND (balance='0' OR substr(balance,1,1) BETWEEN '1' AND '9') AND (length(balance)<20 OR balance<='18446744073709551615')),
+ enabled INTEGER DEFAULT 1 NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
 );
 CREATE TABLE ledger_reservations (
  reservation_id TEXT PRIMARY KEY NOT NULL CHECK(length(reservation_id)=32 AND reservation_id NOT GLOB '*[^0-9a-f]*'),
  idempotency_key TEXT NOT NULL UNIQUE,
- account_id TEXT NOT NULL REFERENCES ledger_accounts(account_id) ON DELETE RESTRICT,
- maximum TEXT NOT NULL CHECK(typeof(maximum)='text' AND length(maximum) BETWEEN 1 AND 20 AND maximum NOT GLOB '*[^0-9]*' AND substr(maximum,1,1) BETWEEN '1' AND '9'),
- timeout_seconds INTEGER NOT NULL CHECK(typeof(timeout_seconds)='integer' AND timeout_seconds BETWEEN 1 AND 1800),
- expires_at INTEGER NOT NULL CHECK(typeof(expires_at)='integer' AND expires_at>0 AND expires_at<=9999999999999),
- state TEXT NOT NULL CHECK(state IN ('active','settled','refunded','expired')),
- charged_amount TEXT NULL CHECK(charged_amount IS NULL OR (typeof(charged_amount)='text' AND length(charged_amount) BETWEEN 1 AND 20 AND charged_amount NOT GLOB '*[^0-9]*' AND (charged_amount='0' OR substr(charged_amount,1,1) BETWEEN '1' AND '9'))),
- terminal_at INTEGER NULL CHECK(terminal_at IS NULL OR (typeof(terminal_at)='integer' AND terminal_at>0)),
- retain_until INTEGER NULL CHECK(retain_until IS NULL OR (typeof(retain_until)='integer' AND retain_until>terminal_at)),
- CHECK((state='active' AND charged_amount IS NULL AND terminal_at IS NULL AND retain_until IS NULL) OR (state!='active' AND charged_amount IS NOT NULL AND terminal_at IS NOT NULL AND retain_until IS NOT NULL)),
- CHECK(state NOT IN ('refunded','expired') OR charged_amount='0'),
- CHECK(state!='expired' OR terminal_at=expires_at),
- CHECK(state NOT IN ('settled','refunded') OR terminal_at<expires_at)
-);
-CREATE TABLE ledger_credits (
- idempotency_key TEXT PRIMARY KEY NOT NULL,
- account_id TEXT NOT NULL REFERENCES ledger_accounts(account_id) ON DELETE RESTRICT,
- amount TEXT NOT NULL CHECK(typeof(amount)='text' AND length(amount) BETWEEN 1 AND 20 AND amount NOT GLOB '*[^0-9]*' AND substr(amount,1,1) BETWEEN '1' AND '9'),
- balance_after TEXT NOT NULL CHECK(typeof(balance_after)='text' AND length(balance_after) BETWEEN 1 AND 20 AND balance_after NOT GLOB '*[^0-9]*' AND (balance_after='0' OR substr(balance_after,1,1) BETWEEN '1' AND '9')),
- committed_at INTEGER NOT NULL CHECK(typeof(committed_at)='integer' AND committed_at>0),
- retain_until INTEGER NOT NULL CHECK(typeof(retain_until)='integer' AND retain_until>committed_at)
-);
-CREATE UNIQUE INDEX ledger_accounts_account_id ON ledger_accounts (account_id);
-CREATE INDEX ledger_reservations_account_active ON ledger_reservations(account_id,state,expires_at);
-CREATE INDEX ledger_reservations_expiry ON ledger_reservations(state,expires_at);
-CREATE INDEX ledger_reservations_prune ON ledger_reservations(retain_until) WHERE state!='active';
-CREATE INDEX ledger_credits_prune ON ledger_credits(retain_until);
-INSERT INTO ledger_meta(singleton,schema_version,clock_high_water_ms) VALUES(1,1,0);
-`
-
-// schemaV1 above remains the exact supported legacy layout for explicit upgrade.
-const schemaV2 = `
-CREATE TABLE ledger_meta (
- singleton INTEGER PRIMARY KEY CHECK(singleton=1),
- schema_version INTEGER NOT NULL CHECK(schema_version=2),
- clock_high_water_ms INTEGER NOT NULL CHECK(typeof(clock_high_water_ms)='integer' AND clock_high_water_ms>=0 AND clock_high_water_ms<=9999999999999)
-);
-CREATE TABLE ledger_accounts (
- id TEXT PRIMARY KEY NOT NULL CHECK(length(id)=15 AND id NOT GLOB '*[^a-z0-9]*'),
- account_id TEXT NOT NULL CHECK(length(CAST(account_id AS BLOB)) BETWEEN 1 AND 128),
- balance TEXT NOT NULL CHECK(typeof(balance)='text' AND length(balance) BETWEEN 1 AND 20 AND balance NOT GLOB '*[^0-9]*' AND (balance='0' OR substr(balance,1,1) BETWEEN '1' AND '9') AND (length(balance)<20 OR balance<='18446744073709551615')),
- enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
-);
-CREATE TABLE ledger_reservations (
- reservation_id TEXT PRIMARY KEY NOT NULL CHECK(length(reservation_id)=32 AND reservation_id NOT GLOB '*[^0-9a-f]*'),
- idempotency_key TEXT NOT NULL UNIQUE,
- account_id TEXT NOT NULL REFERENCES ledger_accounts(account_id) ON DELETE RESTRICT,
+ account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
  maximum TEXT NOT NULL CHECK(typeof(maximum)='text' AND length(maximum) BETWEEN 1 AND 20 AND maximum NOT GLOB '*[^0-9]*' AND substr(maximum,1,1) BETWEEN '1' AND '9'),
  timeout_seconds INTEGER NOT NULL CHECK(typeof(timeout_seconds)='integer' AND timeout_seconds BETWEEN 1 AND 1800),
  initial_expires_at INTEGER NOT NULL CHECK(typeof(initial_expires_at)='integer' AND initial_expires_at>0 AND initial_expires_at<=9999999999999 AND initial_expires_at<=expires_at),
@@ -379,40 +334,79 @@ CREATE TABLE ledger_reservations (
 );
 CREATE TABLE ledger_credits (
  idempotency_key TEXT PRIMARY KEY NOT NULL,
- account_id TEXT NOT NULL REFERENCES ledger_accounts(account_id) ON DELETE RESTRICT,
+ account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
  amount TEXT NOT NULL CHECK(typeof(amount)='text' AND length(amount) BETWEEN 1 AND 20 AND amount NOT GLOB '*[^0-9]*' AND substr(amount,1,1) BETWEEN '1' AND '9'),
  balance_after TEXT NOT NULL CHECK(typeof(balance_after)='text' AND length(balance_after) BETWEEN 1 AND 20 AND balance_after NOT GLOB '*[^0-9]*' AND (balance_after='0' OR substr(balance_after,1,1) BETWEEN '1' AND '9')),
  committed_at INTEGER NOT NULL CHECK(typeof(committed_at)='integer' AND committed_at>0),
  retain_until INTEGER NOT NULL CHECK(typeof(retain_until)='integer' AND retain_until>committed_at)
 );
-CREATE UNIQUE INDEX ledger_accounts_account_id ON ledger_accounts (account_id);
+CREATE UNIQUE INDEX ` + "`idx_tokenKey_ledgeraccounts2` ON `accounts` (`tokenKey`)" + `;
+CREATE UNIQUE INDEX ` + "`idx_email_ledgeraccounts2` ON `accounts` (`email`) WHERE `email` != ''" + `;
+CREATE UNIQUE INDEX accounts_key_lookup ON accounts (key_lookup);
 CREATE INDEX ledger_reservations_account_active ON ledger_reservations(account_id,state,expires_at);
 CREATE INDEX ledger_reservations_expiry ON ledger_reservations(state,expires_at);
 CREATE INDEX ledger_reservations_prune ON ledger_reservations(retain_until) WHERE state!='active';
 CREATE INDEX ledger_credits_prune ON ledger_credits(retain_until);
-INSERT INTO ledger_meta(singleton,schema_version,clock_high_water_ms) VALUES(1,2,0);
+INSERT INTO ledger_meta(singleton,schema_version,clock_high_water_ms) VALUES(1,3,0);
 `
 
-const AccountCollectionID = "ledgeraccounts1"
-const AccountCollectionName = "ledger_accounts"
-const accountIndex = "CREATE UNIQUE INDEX ledger_accounts_account_id ON ledger_accounts (account_id)"
+const AccountCollectionID = "ledgeraccounts2"
+const AccountCollectionName = "accounts"
+const accountIndex = "CREATE UNIQUE INDEX accounts_key_lookup ON accounts (key_lookup)"
 
 func accountCollection() *core.Collection {
-	c := core.NewBaseCollection(AccountCollectionName, AccountCollectionID)
-	c.Fields.Add(&core.TextField{Name: "account_id", Required: true, Max: 128})
+	c := core.NewAuthCollection(AccountCollectionName, AccountCollectionID)
+	c.AuthAlert.Enabled = false
+	c.PasswordAuth.Enabled = true
+	c.PasswordAuth.IdentityFields = []string{"key_lookup"}
+	c.AuthRule = types.Pointer("")
+	// Native customer tokens last twelve hours; website sessions retain their
+	// independent one-hour absolute limit. Existing metadata is never upserted.
+	c.AuthToken.Duration = 12 * 60 * 60
+	c.Fields.GetByName("email").(*core.EmailField).Required = false
+	c.Fields.Add(&core.TextField{Name: "key_lookup", Hidden: true, Required: true, Min: 67, Max: 67, Pattern: `^v1_[0-9a-f]{64}$`})
 	c.Fields.Add(&core.TextField{Name: "balance", Required: true, Max: 20, Pattern: `^(0|[1-9][0-9]{0,19})$`})
 	c.Fields.Add(&core.BoolField{Name: "enabled"}) // Required would prohibit false.
 	c.Indexes = append(c.Indexes, accountIndex)
 	return c
 }
 
-// initializeV2 registers native accounts and creates current empty-state tables.
-// Existing-state upgrade is a separate explicit operation.
-func initializeV2(tx *transaction) error {
+// AccountCollectionCompatible checks the fixed merged schema without changing
+// SDK auth controls, credentials, financial data or collection metadata.
+func AccountCollectionCompatible(c *core.Collection) bool {
+	match, err := accountCollectionMatches(c)
+	return err == nil && match
+}
+
+func accountCollectionMatches(c *core.Collection) (bool, error) {
+	if c == nil {
+		return false, nil
+	}
+	want := accountCollection()
+	fields, err := json.Marshal(c.Fields)
+	if err != nil {
+		return false, err
+	}
+	expected, err := json.Marshal(want.Fields)
+	if err != nil {
+		return false, err
+	}
+	return string(fields) == string(expected) &&
+		c.Id == want.Id && c.Name == want.Name && c.Type == want.Type && !c.System &&
+		c.ListRule == nil && c.ViewRule == nil && c.CreateRule == nil && c.UpdateRule == nil && c.DeleteRule == nil && c.ManageRule == nil &&
+		slices.Equal(c.Indexes, want.Indexes) && c.PasswordAuth.Enabled &&
+		slices.Equal(c.PasswordAuth.IdentityFields, want.PasswordAuth.IdentityFields) &&
+		c.AuthRule != nil && *c.AuthRule == "" && !c.AuthAlert.Enabled, nil
+}
+
+// initializeSchema registers the supported auth collection and adds financial
+// constraints to its still-empty table, only during explicit fresh initialization.
+// Existing state is never rebuilt, migrated or given replacement credentials.
+func initializeSchema(tx *transaction) error {
 	// Register ONLY through the supported collection save on fresh init. Never
 	// retrofit collection metadata onto an existing financial table.
 	var existing int
-	if err := tx.query("SELECT count(*) FROM sqlite_schema WHERE name='ledger_accounts'", nil).Row(&existing); err != nil {
+	if err := tx.query("SELECT count(*) FROM sqlite_schema WHERE lower(name) IN ('accounts','customer_keys','ledger_accounts')", nil).Row(&existing); err != nil {
 		return err
 	}
 	if existing != 0 {
@@ -422,16 +416,16 @@ func initializeV2(tx *transaction) error {
 		return err
 	}
 	var rows int
-	if err := tx.query("SELECT count(*) FROM ledger_accounts", nil).Row(&rows); err != nil {
+	if err := tx.query("SELECT count(*) FROM accounts", nil).Row(&rows); err != nil {
 		return err
 	}
 	if rows != 0 {
 		return diagnostic(CodeSchema)
 	}
-	if err := tx.exec("DROP TABLE ledger_accounts", nil); err != nil {
+	if err := tx.exec("DROP TABLE accounts", nil); err != nil {
 		return err
 	}
-	return tx.exec(schemaV2, nil)
+	return tx.exec(schemaV3, nil)
 }
 
 func validateAccountCollection(tx *transaction) error {
@@ -448,20 +442,15 @@ func validateAccountCollection(tx *transaction) error {
 	if err != nil {
 		return readFailure(err)
 	}
-	want := accountCollection()
-	fields, e1 := json.Marshal(c.Fields)
-	if e1 != nil {
-		return readFailure(e1)
+	match, err := accountCollectionMatches(c)
+	if err != nil {
+		return readFailure(err)
 	}
-	expected, e2 := json.Marshal(want.Fields)
-	if e2 != nil {
-		return readFailure(e2)
-	}
-	if string(fields) != string(expected) || c.Id != want.Id || c.Name != want.Name || c.Type != want.Type || c.System || c.ListRule != nil || c.ViewRule != nil || c.CreateRule != nil || c.UpdateRule != nil || c.DeleteRule != nil || len(c.Indexes) != 1 || c.Indexes[0] != accountIndex {
+	if !match {
 		return diagnostic(CodeSchema)
 	}
 	var count int
-	if err := tx.query("SELECT count(*) FROM _collections WHERE name LIKE 'ledger_%'", nil).Row(&count); err != nil {
+	if err := tx.query("SELECT count(*) FROM _collections WHERE lower(name) GLOB 'ledger_*' OR lower(name) IN ('accounts','customer_keys')", nil).Row(&count); err != nil {
 		return readFailure(err)
 	}
 	if count != 1 {
@@ -471,16 +460,6 @@ func validateAccountCollection(tx *transaction) error {
 }
 
 func validateDDL(query func(string, dbx.Params) *dbx.Query) error {
-	return validateVersionDDL(query, 2)
-}
-
-func validateVersionDDL(query func(string, dbx.Params) *dbx.Query, version int) error {
-	schema := schemaV2
-	if version == 1 {
-		schema = schemaV1
-	} else if version != 2 {
-		return diagnostic(CodeSchema)
-	}
 	readFailure := func(err error) *Diagnostic {
 		// Preflight has no transaction outcome. Retain only numeric cause
 		// metadata; the transaction owner reconstructs its observed outcome.
@@ -489,13 +468,13 @@ func validateVersionDDL(query func(string, dbx.Params) *dbx.Query, version int) 
 		return d
 	}
 	var objects int
-	if err := query("SELECT count(*) FROM sqlite_schema WHERE (name LIKE 'ledger_%' OR tbl_name LIKE 'ledger_%') AND sql IS NOT NULL", nil).Row(&objects); err != nil {
+	if err := query("SELECT count(*) FROM sqlite_schema WHERE (lower(name) GLOB 'ledger_*' OR lower(tbl_name) GLOB 'ledger_*' OR lower(name) IN ('accounts','customer_keys') OR lower(tbl_name) IN ('accounts','customer_keys')) AND sql IS NOT NULL", nil).Row(&objects); err != nil {
 		return readFailure(err)
 	}
-	if objects != 9 {
+	if objects != 11 {
 		return diagnostic(CodeSchema)
 	}
-	for _, statement := range strings.Split(schema, ";") {
+	for _, statement := range strings.Split(schemaV3, ";") {
 		statement = strings.TrimSpace(statement)
 		if !strings.HasPrefix(statement, "CREATE ") {
 			continue
@@ -506,7 +485,7 @@ func validateVersionDDL(query func(string, dbx.Params) *dbx.Query, version int) 
 			name = parts[3]
 		}
 		var stored string
-		err := query("SELECT sql FROM sqlite_schema WHERE name={:name}", dbx.Params{"name": name}).Row(&stored)
+		err := query("SELECT sql FROM sqlite_schema WHERE name={:name}", dbx.Params{"name": strings.Trim(name, "`")}).Row(&stored)
 		if err == sql.ErrNoRows {
 			return diagnostic(CodeSchema)
 		}
@@ -517,6 +496,12 @@ func validateVersionDDL(query func(string, dbx.Params) *dbx.Query, version int) 
 			return diagnostic(CodeSchema)
 		}
 	}
+	if _, err := validatePaymentDDL(query); err != nil {
+		if d, ok := err.(*Diagnostic); ok {
+			return d
+		}
+		return readFailure(err)
+	}
 	return nil
 }
 
@@ -524,11 +509,7 @@ func preflightLayout(ctx context.Context, dir string) error {
 	return preflightObserved(ctx, dir, nil)
 }
 
-func preflightObserved(ctx context.Context, dir string, observer failureowner.Observer) error {
-	return preflightVersionObserved(ctx, dir, observer, false)
-}
-
-func preflightVersionObserved(ctx context.Context, dir string, observer failureowner.Observer, allowLegacy bool) (result error) {
+func preflightObserved(ctx context.Context, dir string, observer failureowner.Observer) (result error) {
 	owned := false
 	defer func() {
 		if recover() != nil {
@@ -559,112 +540,124 @@ func preflightVersionObserved(ctx context.Context, dir string, observer failureo
 	query := func(statement string, params dbx.Params) *dbx.Query {
 		return db.NewQuery(statement).Bind(params).WithContext(work)
 	}
-	version := 2
-	if allowLegacy {
-		var stored string
-		if err := query("SELECT sql FROM sqlite_schema WHERE name='ledger_meta'", nil).Row(&stored); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return diagnostic(CodeSchema)
-			}
-			return CanonicalFailure(err, failuretype.StorageValidationUnknown)
-		}
-		if stored == strings.TrimSpace(strings.Split(schemaV1, ";")[0]) {
-			version = 1
-		}
+	if err := validateDDL(query); err != nil {
+		return err
 	}
-	return validateVersionDDL(query, version)
-}
-
-// validate never upgrades legacy state. Upgrade alone requests v1 validation.
-func (s *Service) validate(ctx context.Context) error {
-	return s.run(ctx, func(tx *transaction) error {
-		return validateState(tx, 2, true)
-	}, false)
-}
-
-func validateState(tx *transaction, version int, advanceClock bool) error {
-	tx.legacy = version == 1
-	readFailure := func(err error) *Diagnostic {
-		d := diagnostic(CodeStorage)
-		d.kind = FailureKind(err, failuretype.StorageValidationUnknown)
-		return d
-	}
-	for _, p := range []struct {
-		name     string
-		expected any
-	}{
-		{"journal_mode", "wal"}, {"synchronous", int64(2)}, {"foreign_keys", int64(1)},
-		{"busy_timeout", int64(BusyWaitMS)}, {"temp_store", int64(2)},
-	} {
-		var got any
-		if err := tx.query("PRAGMA "+p.name, nil).Row(&got); err != nil {
-			return readFailure(err)
-		}
-		if got != p.expected {
+	// Decode through the SDK model's supported dbx PostScan before bootstrap
+	// can save settings or touch incompatible collection metadata.
+	var collection core.Collection
+	if err := query("SELECT * FROM _collections WHERE id={:id}", dbx.Params{"id": AccountCollectionID}).One(&collection); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return diagnostic(CodeSchema)
 		}
-	}
-	var violations []struct {
-		Table  string        `db:"table"`
-		RowID  sql.NullInt64 `db:"rowid"`
-		Parent string        `db:"parent"`
-		FKID   int           `db:"fkid"`
-	}
-	if err := tx.query("PRAGMA foreign_key_check", nil).All(&violations); err != nil {
-		return readFailure(err)
-	}
-	if len(violations) > 0 {
-		return diagnostic(CodeCorrupt)
-	}
-	var integrity string
-	if err := tx.query("PRAGMA quick_check", nil).Row(&integrity); err != nil {
-		return readFailure(err)
-	}
-	if integrity != "ok" {
-		return diagnostic(CodeCorrupt)
-	}
-	// Schema version alone cannot certify missing constraints or indexes.
-	// Compare our nine versioned DDL statements, not framework schema.
-	if err := validateVersionDDL(tx.query, version); err != nil {
 		return err
 	}
-	if err := validateAccountCollection(tx); err != nil {
+	match, err := accountCollectionMatches(&collection)
+	if err != nil {
 		return err
 	}
-	if err := tx.readClock(version, advanceClock); err != nil {
-		return CanonicalFailure(err, failuretype.StorageValidationUnknown)
+	if !match {
+		return diagnostic(CodeSchema)
 	}
-	var accounts []Account
-	if err := tx.query("SELECT account_id,balance,enabled FROM ledger_accounts ORDER BY account_id", nil).All(&accounts); err != nil {
-		return readFailure(err)
+	var collections int
+	if err := query("SELECT count(*) FROM _collections WHERE lower(name) GLOB 'ledger_*' OR lower(name) IN ('accounts','customer_keys')", nil).Row(&collections); err != nil {
+		return err
 	}
-	for _, a := range accounts {
-		if err := validateAccount(a); err != nil {
-			return err
-		}
-		if _, _, err := tx.active(a, false); err != nil {
-			return CanonicalFailure(err, failuretype.StorageValidationUnknown)
-		}
-	}
-	var reservations []Reservation
-	if err := tx.query("SELECT "+tx.reservationColumns()+" FROM ledger_reservations", nil).All(&reservations); err != nil {
-		return readFailure(err)
-	}
-	for _, r := range reservations {
-		if err := validateReservation(r); err != nil {
-			return err
-		}
-	}
-	var credits []Credit
-	if err := tx.query("SELECT "+creditColumns+" FROM ledger_credits", nil).All(&credits); err != nil {
-		return readFailure(err)
-	}
-	for _, c := range credits {
-		if err := validateCredit(c); err != nil {
-			return err
-		}
+	if collections != 1 {
+		return diagnostic(CodeSchema)
 	}
 	return nil
+}
+
+// validate uses the same scoped transaction as ordinary accounting. No silent
+// migrations of unknown state. Only the fresh merged version 3 is accepted.
+func (s *Service) validate(ctx context.Context) error {
+	return s.run(ctx, func(tx *transaction) error {
+		readFailure := func(err error) *Diagnostic {
+			d := diagnostic(CodeStorage)
+			d.kind = FailureKind(err, failuretype.StorageValidationUnknown)
+			return d
+		}
+		for _, p := range []struct {
+			name     string
+			expected any
+		}{
+			{"journal_mode", "wal"}, {"synchronous", int64(2)}, {"foreign_keys", int64(1)},
+			{"busy_timeout", int64(BusyWaitMS)}, {"temp_store", int64(2)},
+		} {
+			var got any
+			if err := tx.query("PRAGMA "+p.name, nil).Row(&got); err != nil {
+				return readFailure(err)
+			}
+			if got != p.expected {
+				return diagnostic(CodeSchema)
+			}
+		}
+		var violations []struct {
+			Table  string        `db:"table"`
+			RowID  sql.NullInt64 `db:"rowid"`
+			Parent string        `db:"parent"`
+			FKID   int           `db:"fkid"`
+		}
+		if err := tx.query("PRAGMA foreign_key_check", nil).All(&violations); err != nil {
+			return readFailure(err)
+		}
+		if len(violations) > 0 {
+			return diagnostic(CodeCorrupt)
+		}
+		var integrity string
+		if err := tx.query("PRAGMA quick_check", nil).Row(&integrity); err != nil {
+			return readFailure(err)
+		}
+		if integrity != "ok" {
+			return diagnostic(CodeCorrupt)
+		}
+		// Schema version alone cannot certify missing constraints or indexes.
+		// Compare the versioned financial/auth DDL, including SDK auth indexes.
+		if err := validateDDL(tx.query); err != nil {
+			return err
+		}
+		if err := validateAccountCollection(tx); err != nil {
+			return err
+		}
+		if err := tx.clock(); err != nil {
+			return CanonicalFailure(err, failuretype.StorageValidationUnknown)
+		}
+		var accounts []Account
+		if err := tx.query("SELECT id AS account_id,balance,enabled FROM accounts ORDER BY id", nil).All(&accounts); err != nil {
+			return readFailure(err)
+		}
+		for _, a := range accounts {
+			if err := validateAccount(a); err != nil {
+				return err
+			}
+			if _, _, err := tx.active(a, false); err != nil {
+				return CanonicalFailure(err, failuretype.StorageValidationUnknown)
+			}
+		}
+		var reservations []Reservation
+		if err := tx.query("SELECT "+reservationColumns+" FROM ledger_reservations", nil).All(&reservations); err != nil {
+			return readFailure(err)
+		}
+		for _, r := range reservations {
+			if err := validateReservation(r); err != nil {
+				return err
+			}
+		}
+		var credits []Credit
+		if err := tx.query("SELECT "+creditColumns+" FROM ledger_credits", nil).All(&credits); err != nil {
+			return readFailure(err)
+		}
+		for _, c := range credits {
+			if err := validateCredit(c); err != nil {
+				return err
+			}
+		}
+		if err := tx.validatePaymentRows(); err != nil {
+			return CanonicalFailure(err, failuretype.StorageValidationUnknown)
+		}
+		return nil
+	}, false)
 }
 
 // Close waits for the actual in-flight transaction to finish, including commit.

@@ -88,7 +88,7 @@ func validationDatabase(t *testing.T) *dbx.DB {
 		t.Fatal("synthetic database connector unavailable")
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.NewQuery(schemaV2).Execute(); err != nil {
+	if _, err := db.NewQuery(schemaV3).Execute(); err != nil {
 		t.Fatal("synthetic exact DDL unavailable")
 	}
 	return db
@@ -135,7 +135,7 @@ func TestValidationDDLReadFaultsAndRequiredAbsence(t *testing.T) {
 		t.Fatal("synthetic absence database unavailable")
 	}
 	defer missing.Close()
-	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} {
+	for _, name := range []string{"aaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbb", "c", "d", "e", "f", "g", "h", "i"} {
 		if _, err := missing.NewQuery("CREATE TABLE ledger_" + name + " (value TEXT)").Execute(); err != nil {
 			t.Fatal("synthetic absence fixture unavailable")
 		}
@@ -200,8 +200,8 @@ func TestValidationCollectionFaultsAndMarshalFailure(t *testing.T) {
 
 func TestValidationSuccessfulCollectionMismatchAndAbsence(t *testing.T) {
 	for _, statement := range []string{
-		"UPDATE _collections SET fields='[]' WHERE id='ledgeraccounts1'",
-		"DELETE FROM _collections WHERE id='ledgeraccounts1'",
+		"UPDATE _collections SET fields='[]' WHERE id='ledgeraccounts2'",
+		"DELETE FROM _collections WHERE id='ledgeraccounts2'",
 	} {
 		t.Run(statement, func(t *testing.T) {
 			s, _, _ := testService(t)
@@ -226,7 +226,7 @@ func TestValidationSuccessfulCollectionMismatchAndAbsence(t *testing.T) {
 func TestValidationMalformedStoredMetadataIsReadFailureNotMismatch(t *testing.T) {
 	s, _, _ := testService(t)
 	if err := s.run(background, func(tx *transaction) error {
-		return tx.exec("UPDATE _collections SET fields='SYNTHETIC_PRIVATE_INVALID_JSON' WHERE id='ledgeraccounts1'", nil)
+		return tx.exec("UPDATE _collections SET fields='SYNTHETIC_PRIVATE_INVALID_JSON' WHERE id='ledgeraccounts2'", nil)
 	}, false); err != nil {
 		t.Fatal("synthetic stored decoding fixture unavailable")
 	}
@@ -256,7 +256,7 @@ func TestValidationDDLActualSQLiteBusy(t *testing.T) {
 	}
 	defer db.Close()
 	db.DB().SetMaxOpenConns(1)
-	if _, err := db.NewQuery(schemaV2).Execute(); err != nil {
+	if _, err := db.NewQuery(schemaV3).Execute(); err != nil {
 		t.Fatal("synthetic lock schema unavailable")
 	}
 	if _, err := db.NewQuery("BEGIN EXCLUSIVE").Execute(); err != nil {
@@ -306,7 +306,7 @@ func TestValidationOpenPhysicalReadFaultExposesNoService(t *testing.T) {
 
 func TestValidationReadsPreserveObservedRollbackAndNumericMetadata(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "synthetic", "10", now)
+	fund(t, s, "synthetic000000", "10", now)
 	base := s.app
 	defer func() { s.app = base }()
 	cancelled, cancel := context.WithCancel(background)
@@ -316,11 +316,11 @@ func TestValidationReadsPreserveObservedRollbackAndNumericMetadata(t *testing.T)
 	for _, target := range []string{
 		"PRAGMA journal_mode", "PRAGMA synchronous", "PRAGMA foreign_keys", "PRAGMA busy_timeout", "PRAGMA temp_store",
 		"PRAGMA foreign_key_check", "PRAGMA quick_check",
-		"SELECT count(*) FROM sqlite_schema WHERE (name LIKE 'ledger_%' OR tbl_name LIKE 'ledger_%') AND sql IS NOT NULL", "SELECT sql FROM sqlite_schema WHERE name={:name}",
-		"SELECT count(*) FROM _collections WHERE name LIKE 'ledger_%'", "SELECT count(*) FROM ledger_meta",
+		"SELECT count(*) FROM sqlite_schema WHERE (lower(name) GLOB 'ledger_*' OR lower(tbl_name) GLOB 'ledger_*' OR lower(name) IN ('accounts','customer_keys') OR lower(tbl_name) IN ('accounts','customer_keys')) AND sql IS NOT NULL", "SELECT sql FROM sqlite_schema WHERE name={:name}",
+		"SELECT count(*) FROM _collections WHERE lower(name) GLOB 'ledger_*' OR lower(name) IN ('accounts','customer_keys')", "SELECT count(*) FROM ledger_meta",
 		"SELECT schema_version,clock_high_water_ms FROM ledger_meta WHERE singleton=1",
 		"SELECT CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER)",
-		"SELECT account_id,balance,enabled FROM ledger_accounts ORDER BY account_id",
+		"SELECT id AS account_id,balance,enabled FROM accounts ORDER BY id",
 		"SELECT " + reservationColumns + " FROM ledger_reservations WHERE account_id={:id} AND state='active' ORDER BY reservation_id",
 		"SELECT " + reservationColumns + " FROM ledger_reservations",
 		"SELECT " + creditColumns + " FROM ledger_credits",
@@ -329,7 +329,7 @@ func TestValidationReadsPreserveObservedRollbackAndNumericMetadata(t *testing.T)
 			name string
 			ctx  context.Context
 			kind failuretype.Type
-		}{{"cancelled", cancelled, failuretype.Cancelled}, {"deadline", deadline, failuretype.DeadlineExceeded}, {"sqlite_query", nil, failuretype.StorageValidationUnknown}} {
+		}{{"cancelled000000", cancelled, failuretype.Cancelled}, {"deadline", deadline, failuretype.DeadlineExceeded}, {"sqlite_query", nil, failuretype.StorageValidationUnknown}} {
 			t.Run(target+"/"+tc.name, func(t *testing.T) {
 				hit := false
 				s.app = &validationReadApp{App: base, queryHook: func(statement string, q *dbx.Query) *dbx.Query {

@@ -1,5 +1,7 @@
 # Customer auth local work — scoped evidence
 
+**Historical evidence:** the split credential/account layout and earlier technical display described below were subsequently superseded by the [merged-account source packet](merged-account-schema.md) and [concise payment/account UI](stripe-topup-ui.md). These earlier passes remain evidence only for their exercised revisions; they are not current schema instructions or new image/deployment evidence.
+
 ## Authorization and current limits
 
 The operator explicitly approved [the local contract](customer-auth-local-contract.md)

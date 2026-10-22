@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,9 @@ func fixture(t *testing.T) (*ledger.Service, core.App, http.Handler) {
 }
 func request(t *testing.T, h http.Handler, method, path, body, token string) *httptest.ResponseRecorder {
 	t.Helper()
+	if method == "POST" && path == accountRecords {
+		body = nativeAccountBody(t, body)
+	}
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", hostile)
@@ -68,6 +72,28 @@ func request(t *testing.T, h http.Handler, method, path, body, token string) *ht
 	h.ServeHTTP(rec, req)
 	return rec
 }
+
+// Native financial fixtures now create supported auth records. These public
+// synthetic credentials are test-only; customer form validation is qualified
+// separately with unmodified native requests in siteauth.
+func nativeAccountBody(t *testing.T, body string) string {
+	t.Helper()
+	var fields map[string]any
+	if json.Unmarshal([]byte(body), &fields) != nil {
+		return body
+	}
+	if _, exists := fields["password"]; !exists {
+		digest := sha256.Sum256([]byte("public-native-test-fixture/" + body))
+		key := base64.RawURLEncoding.EncodeToString(digest[:])
+		fields["password"], fields["passwordConfirm"] = key, key
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal("synthetic native body unavailable")
+	}
+	return string(encoded)
+}
+
 func login(t *testing.T, h http.Handler) string {
 	t.Helper()
 	rec := request(t, h, "POST", authPrefix+"auth-with-password", `{"identity":"`+testEmail+`","password":"`+testPassword+`"}`, "")
@@ -149,8 +175,12 @@ func TestNativeSDKAuthenticationAndAccountingSeparation(t *testing.T) {
 		t.Fatal("stock refresh failed")
 	}
 	expectClosed(t, request(t, h, "POST", authPrefix+"auth-refresh", `{}`, testKey), 401, "native_auth_refresh")
-	for _, path := range []string{"/accounts/provision", "/balance"} {
-		body := `{"account_id":"synthetic-browser-account"}`
+	id := createNative(t, h, token)
+	if request(t, h, "POST", "/accounts/provision", `{}`, "Bearer "+testKey).Code != 404 {
+		t.Fatal("retired provisioning route admitted")
+	}
+	for _, path := range []string{"/balance"} {
+		body := `{"account_id":"` + id + `"}`
 		if request(t, h, "POST", path, body, "Bearer "+token).Code != 401 {
 			t.Fatal("native token gained custom authority")
 		}
@@ -158,8 +188,8 @@ func TestNativeSDKAuthenticationAndAccountingSeparation(t *testing.T) {
 			t.Fatal("custom key authority changed")
 		}
 	}
-	if snapshot, err := s.Balance(context.Background(), "synthetic-browser-account"); err != nil || snapshot.Available != "0" {
-		t.Fatal("account not zero balance")
+	if snapshot, err := s.Balance(context.Background(), id); err != nil || snapshot.Available != "18446744073709551615" {
+		t.Fatal("native account balance changed")
 	}
 	var count int
 	if app.DB().NewQuery("SELECT count(*) FROM _authOrigins").Row(&count) != nil || count != 0 || app.AuxDB().NewQuery("SELECT count(*) FROM _logs").Row(&count) != nil || count != 0 {
@@ -171,7 +201,7 @@ func TestNativeStockAdminSchemaUsersSettingsFilesBatchAndBackups(t *testing.T) {
 	_, app, h := fixture(t)
 	token := login(t, h)
 	// PocketBase already creates users. Exercise it and separately create a new
-	// collection through stock HTTP, rather than hiding all but ledger_accounts.
+	// collection through stock HTTP, rather than hiding all but accounts.
 	if request(t, h, "POST", "/api/collections", `{"name":"synthetic_notes","type":"base"}`, token).Code != 200 {
 		t.Fatal("native schema create refused")
 	}

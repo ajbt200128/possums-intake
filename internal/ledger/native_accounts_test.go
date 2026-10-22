@@ -15,30 +15,25 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
+	"possums-intake/internal/failureowner"
 	"possums-intake/internal/failuretype"
+	"possums-intake/internal/testfixture"
 )
 
 func nativeCreate(t *testing.T, s *Service, account, amount string) string {
 	t.Helper()
-	raw, err := s.NativeAccountCreate(background, NativeAccountCreate{account, Money(amount), true})
-	if err != nil {
-		t.Fatal("synthetic native create unavailable")
+	record, err := testfixture.CreateRecord(background, s.app, account, amount, true)
+	if err != nil || record.Id != account || record.GetString("balance") != amount {
+		t.Fatal("synthetic supported auth account create unavailable")
 	}
-	var record struct {
-		ID      string `json:"id"`
-		Balance string `json:"balance"`
-	}
-	if json.Unmarshal(raw, &record) != nil || !nativeIDPattern.MatchString(record.ID) || record.Balance != amount {
-		t.Fatal("native record JSON differs")
-	}
-	return record.ID
+	return record.Id
 }
 func pointer[T any](v T) *T { return &v }
 
 func TestNativeAccountCanonicalMoneyIdentityHoldsAndExpiry(t *testing.T) {
 	s, _, now := testService(t)
-	id := nativeCreate(t, s, "native", "18446744073709551615")
-	_, err := s.Credit(background, CreditInput{"native", "1", key(now, 80)})
+	id := nativeCreate(t, s, "native000000000", "18446744073709551615")
+	_, err := s.Credit(background, CreditInput{"native000000000", "1", key(now, 80)})
 	codeIs(t, err, CodeOverflow)
 	for _, value := range []Money{"01", "-1", "18446744073709551616", "1.0", ""} {
 		raw, err := s.NativeAccountUpdate(background, id, NativeAccountPatch{Balance: &value})
@@ -47,7 +42,7 @@ func TestNativeAccountCanonicalMoneyIdentityHoldsAndExpiry(t *testing.T) {
 			t.Fatal("invalid edit returned receipt")
 		}
 	}
-	for _, patch := range []NativeAccountPatch{{ID: pointer("aaaaaaaaaaaaaaa")}, {AccountID: pointer("different")}} {
+	for _, patch := range []NativeAccountPatch{{ID: pointer("aaaaaaaaaaaaaaa")}} {
 		_, err := s.NativeAccountUpdate(background, id, patch)
 		codeIs(t, err, CodeInput)
 	}
@@ -56,26 +51,21 @@ func TestNativeAccountCanonicalMoneyIdentityHoldsAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal("record unavailable")
 	}
-	record.Set("account_id", "different")
-	if err := s.app.Save(record); err == nil {
-		t.Fatal("native validation allowed identity change")
-	}
-	record, err = s.app.FindRecordById(AccountCollectionID, id)
-	if err != nil {
-		t.Fatal("record unavailable")
+	if record.Collection().Fields.GetByName("account_id") != nil {
+		t.Fatal("second account identity field survived")
 	}
 	record.Id = "aaaaaaaaaaaaaaa"
 	if err := s.app.Save(record); err == nil {
 		t.Fatal("native validation allowed internal identity change")
 	}
-	r := reserve(t, s, ReserveInput{"native", "10", 1, key(now, 81)})
+	r := reserve(t, s, ReserveInput{"native000000000", "10", 1, key(now, 81)})
 	_, err = s.NativeAccountUpdate(background, id, NativeAccountPatch{Balance: pointer(Money("20"))})
 	codeIs(t, err, CodeNativeHold)
 	raw, err := s.NativeAccountUpdate(background, id, NativeAccountPatch{Enabled: pointer(false)})
 	if err != nil || raw == nil {
 		t.Fatal("enabled edit blocked by active hold")
 	}
-	if balance(t, s, "native").AccountBalance.Enabled {
+	if balance(t, s, "native000000000").AccountBalance.Enabled {
 		t.Fatal("disabled edit not saved")
 	}
 	// Repeating a current total is permitted, but hold consistency still checked.
@@ -89,7 +79,7 @@ func TestNativeAccountCanonicalMoneyIdentityHoldsAndExpiry(t *testing.T) {
 		t.Fatal("expired hold did not release native balance edit")
 	}
 	row, err := s.Lookup(background, r.ReservationID)
-	if err != nil || row.State != Expired || balance(t, s, "native").Available != "2" {
+	if err != nil || row.State != Expired || balance(t, s, "native000000000").Available != "2" {
 		t.Fatal("native expiry inconsistent")
 	}
 }
@@ -98,10 +88,10 @@ func TestNativeAccountWritesSerializeWithFinancialOperations(t *testing.T) {
 	for _, op := range []string{"reserve", "credit", "settle"} {
 		t.Run(op, func(t *testing.T) {
 			s, _, now := testService(t)
-			id := nativeCreate(t, s, "race", "100")
+			id := nativeCreate(t, s, "race00000000000", "100")
 			var r Reservation
 			if op == "settle" {
-				r = reserve(t, s, ReserveInput{"race", "20", 600, key(now, 30)})
+				r = reserve(t, s, ReserveInput{"race00000000000", "20", 600, key(now, 30)})
 			}
 			var wg sync.WaitGroup
 			wg.Add(2)
@@ -116,9 +106,9 @@ func TestNativeAccountWritesSerializeWithFinancialOperations(t *testing.T) {
 				var err error
 				switch op {
 				case "reserve":
-					_, err = s.Reserve(background, ReserveInput{"race", "20", 600, key(now, 31)})
+					_, err = s.Reserve(background, ReserveInput{"race00000000000", "20", 600, key(now, 31)})
 				case "credit":
-					_, err = s.Credit(background, CreditInput{"race", "5", key(now, 32)})
+					_, err = s.Credit(background, CreditInput{"race00000000000", "5", key(now, 32)})
 				case "settle":
 					_, err = s.Settle(background, SettleInput{r.ReservationID, "10"})
 				}
@@ -131,7 +121,7 @@ func TestNativeAccountWritesSerializeWithFinancialOperations(t *testing.T) {
 					t.Fatal("serialized native race failed")
 				}
 			}
-			snapshot := balance(t, s, "race")
+			snapshot := balance(t, s, "race00000000000")
 			want := Money("100")
 			if op == "credit" {
 				want = "105"
@@ -146,7 +136,7 @@ func TestNativeAccountWritesSerializeWithFinancialOperations(t *testing.T) {
 	}
 	// A simultaneous reserve/absolute reduction cannot produce an underfunded hold.
 	s, _, now := testService(t)
-	id := nativeCreate(t, s, "absolute", "100")
+	id := nativeCreate(t, s, "absolute0000000", "100")
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -155,30 +145,33 @@ func TestNativeAccountWritesSerializeWithFinancialOperations(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = s.Reserve(background, ReserveInput{"absolute", "20", 600, key(now, 40)})
+		_, _ = s.Reserve(background, ReserveInput{"absolute0000000", "20", 600, key(now, 40)})
 	}()
 	wg.Wait()
-	snapshot := balance(t, s, "absolute")
+	snapshot := balance(t, s, "absolute0000000")
 	if !(snapshot.AccountBalance.Balance == "5" && snapshot.Available == "5" || snapshot.AccountBalance.Balance == "100" && snapshot.Available == "80") {
 		t.Fatal("absolute-edit reserve race violated accounting")
 	}
-	// Concurrent native/custom create share one unique external identity.
+	// Concurrent supported SDK creates cannot duplicate the sole record identity.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = s.NativeAccountCreate(background, NativeAccountCreate{"same", "0", true})
+		_, _ = testfixture.CreateRecord(background, s.app, "same00000000000", "0", true)
 	}()
-	go func() { defer wg.Done(); _, _ = s.Provision(background, "same") }()
+	go func() {
+		defer wg.Done()
+		_, _ = testfixture.CreateRecord(background, s.app, "same00000000000", "0", true)
+	}()
 	wg.Wait()
 	var count int
-	if err := s.app.DB().NewQuery("SELECT count(*) FROM ledger_accounts WHERE account_id='same'").Row(&count); err != nil || count != 1 {
+	if err := s.app.DB().NewQuery("SELECT count(*) FROM accounts WHERE id='same00000000000'").Row(&count); err != nil || count != 1 {
 		t.Fatal("create race duplicated account")
 	}
 }
 
 func TestNativeWriterCancellationRollbackEncodingAndCommitEvidence(t *testing.T) {
 	s, _, _ := testService(t)
-	id := nativeCreate(t, s, "fault", "10")
+	id := nativeCreate(t, s, "fault0000000000", "10")
 	s.gate <- struct{}{}
 	ctx, cancel := context.WithTimeout(background, 20*time.Millisecond)
 	raw, err := s.NativeAccountUpdate(ctx, id, NativeAccountPatch{Balance: pointer(Money("11"))})
@@ -191,18 +184,18 @@ func TestNativeWriterCancellationRollbackEncodingAndCommitEvidence(t *testing.T)
 	hook := s.app.OnRecordValidate(AccountCollectionName).BindFunc(func(e *core.RecordEvent) error { return errors.New("SYNTHETIC_HOSTILE_RECORD_ERROR") })
 	raw, err = s.NativeAccountUpdate(background, id, NativeAccountPatch{Balance: pointer(Money("11"))})
 	codeIs(t, err, CodeStorage)
-	if raw != nil || balance(t, s, "fault").Available != "10" {
+	if raw != nil || balance(t, s, "fault0000000000").Available != "10" {
 		t.Fatal("failed save effect escaped rollback")
 	}
 	s.app.OnRecordValidate().Unbind(hook)
 	// Actual pre-commit RecordJSON marshal failure, not a test-only encoder.
-	hook = s.app.OnRecordCreateExecute(AccountCollectionName).BindFunc(func(e *core.RecordEvent) error {
+	hook = s.app.OnRecordUpdateExecute(AccountCollectionName).BindFunc(func(e *core.RecordEvent) error {
 		err := e.Next()
 		e.Record.WithCustomData(true)
 		e.Record.Set("synthetic_unencodable", make(chan int))
 		return err
 	})
-	raw, err = s.NativeAccountCreate(background, NativeAccountCreate{"encode-fail", "10", true})
+	raw, err = s.NativeAccountUpdate(background, id, NativeAccountPatch{Balance: pointer(Money("11"))})
 	codeIs(t, err, CodeStorage)
 	if Failure(err).Kind() != failuretype.ResponseEncodingUnknown || Failure(err).Outcome != "no_effect" {
 		t.Fatal("actual native encoding failure lost classification or observed rollback")
@@ -210,9 +203,10 @@ func TestNativeWriterCancellationRollbackEncodingAndCommitEvidence(t *testing.T)
 	if raw != nil {
 		t.Fatal("encoding failure returned native receipt")
 	}
-	s.app.OnRecordCreateExecute().Unbind(hook)
-	_, err = s.Balance(background, "encode-fail")
-	codeIs(t, err, CodeAccount)
+	s.app.OnRecordUpdateExecute().Unbind(hook)
+	if balance(t, s, id).Available != "10" {
+		t.Fatal("encoding failure committed a balance edit")
+	}
 	original := s.app
 	s.app = lostCompletionApp{original}
 	raw, err = s.NativeAccountUpdate(background, id, NativeAccountPatch{Balance: pointer(Money("12"))})
@@ -221,7 +215,7 @@ func TestNativeWriterCancellationRollbackEncodingAndCommitEvidence(t *testing.T)
 		t.Fatal("unknown commit emitted requested native result")
 	}
 	s.app = original
-	if balance(t, s, "fault").Available != "12" {
+	if balance(t, s, "fault0000000000").Available != "12" {
 		t.Fatal("missing evidence fixture failed")
 	}
 	s.app = afterCommitFailure{original}
@@ -240,7 +234,7 @@ func TestNativeWriterCancellationRollbackEncodingAndCommitEvidence(t *testing.T)
 	raw, err = s.NativeAccountUpdate(ctx, id, NativeAccountPatch{Balance: pointer(Money("13"))})
 	codeIs(t, err, CodeWork)
 	s.app.OnRecordValidate().Unbind(hook)
-	if raw != nil || balance(t, s, "fault").Available != "12" {
+	if raw != nil || balance(t, s, "fault0000000000").Available != "12" {
 		t.Fatal("cancelled native work did not roll back")
 	}
 }
@@ -295,13 +289,13 @@ func TestNativeLookupPreservesFailureAndTransactionDeadline(t *testing.T) {
 	}{
 		{"missing", sql.ErrNoRows, CodeAccount, true},
 		{"unknown", errors.New("SYNTHETIC_HOSTILE_LOOKUP_ERROR"), CodeStorage, true},
-		{"cancelled", context.Canceled, CodeWork, true},
+		{"cancelled000000", context.Canceled, CodeWork, true},
 		{"deadline", context.DeadlineExceeded, CodeWork, true},
 		{"fatal_storage", corrupt, CodeStorage, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s, _, _ := testService(t)
-			id := nativeCreate(t, s, "lookup-fault", "10")
+			id := nativeCreate(t, s, "lookupfault0000", "10")
 			original := s.app
 			bound := false
 			s.app = nativeLookupFailureApp{original, test.failure, &bound}
@@ -334,10 +328,16 @@ func (a afterNativeCommitPanic) RunInTransaction(fn func(core.App) error) error 
 
 func TestInitialSchemaDDLMetadataDriftAndOldLayoutRefusal(t *testing.T) {
 	for _, statement := range []string{
-		"DROP INDEX ledger_accounts_account_id",
-		"CREATE INDEX unwanted_account_index ON ledger_accounts(enabled)",
-		"UPDATE _collections SET fields=json_set(fields,'$[2].max',21) WHERE name='ledger_accounts'",
-		"UPDATE _collections SET listRule='' WHERE name='ledger_accounts'",
+		"DROP INDEX accounts_key_lookup",
+		"CREATE INDEX unwanted_account_index ON accounts(enabled)",
+		"UPDATE _collections SET fields=json_set(fields,'$[7].max',21) WHERE name='accounts'",
+		"UPDATE _collections SET listRule='' WHERE name='accounts'",
+		"UPDATE _collections SET name='AcCoUnTs' WHERE name='accounts'",
+		"UPDATE _collections SET name='CUSTOMER_KEYS' WHERE name='users'",
+		"CREATE TABLE customer_keys (id TEXT)",
+		"CREATE TABLE CUSTOMER_KEYS (id TEXT)",
+		"CREATE TABLE LEDGER_ACCOUNTS (id TEXT)",
+		"DROP TABLE ledger_meta; CREATE TABLE ledger_meta (singleton INTEGER PRIMARY KEY, schema_version INTEGER, clock_high_water_ms INTEGER); INSERT INTO ledger_meta VALUES(1,1,0)",
 	} {
 		t.Run(statement, func(t *testing.T) {
 			s, dir, _ := testService(t)
@@ -347,24 +347,42 @@ func TestInitialSchemaDDLMetadataDriftAndOldLayoutRefusal(t *testing.T) {
 			if s.Close() != nil {
 				t.Fatal("close fixture failed")
 			}
-			reopened, err := Open(background, dir)
+			before := map[string][32]byte{}
+			for _, name := range []string{"data.db", "auxiliary.db"} {
+				contents, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil {
+					t.Fatal("synthetic drift read unavailable")
+				}
+				before[name] = sha256.Sum256(contents)
+			}
+			reopened, err := openObserved(background, dir, nil, func(string, bool, failureowner.Observer) (*core.BaseApp, error) {
+				t.Fatal("incompatible state reached mutating SDK bootstrap")
+				return nil, nil
+			})
 			if reopened != nil {
 				reopened.Close()
+				t.Fatal("incompatible state accepted")
 			}
 			codeIs(t, err, CodeSchema)
+			for name, want := range before {
+				contents, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil || sha256.Sum256(contents) != want {
+					t.Fatal("schema refusal changed stored bytes")
+				}
+			}
 		})
 	}
 	// Earlier disposable ordinary-SQL account layouts used the same unreleased
 	// schema number. Exact DDL/metadata checks must reject them, not upgrade them.
 	s, dir, _ := testService(t)
 	if err := s.run(background, func(tx *transaction) error {
-		return tx.exec(`DROP TABLE ledger_accounts;
+		return tx.exec(`DROP TABLE accounts;
 CREATE TABLE ledger_accounts (
  account_id TEXT PRIMARY KEY NOT NULL CHECK(length(CAST(account_id AS BLOB)) BETWEEN 1 AND 128),
  balance TEXT NOT NULL CHECK(typeof(balance)='text' AND length(balance) BETWEEN 1 AND 20 AND balance NOT GLOB '*[^0-9]*' AND (balance='0' OR substr(balance,1,1) BETWEEN '1' AND '9')),
  enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
 );
-DELETE FROM _collections WHERE name='ledger_accounts';
+DELETE FROM _collections WHERE name='accounts';
 INSERT INTO ledger_accounts(account_id,balance,enabled) VALUES('old-disposable','17',1);`, nil)
 	}, false); err != nil {
 		t.Fatal("old disposable layout fixture failed")
@@ -399,10 +417,10 @@ INSERT INTO ledger_accounts(account_id,balance,enabled) VALUES('old-disposable',
 	}
 	defer db.Close()
 	for _, query := range []string{
-		"INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('bad','bad','0',1)",
-		"INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('aaaaaaaaaaaaaaa','a','18446744073709551616',1)",
-		"INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('aaaaaaaaaaaaaaa','a','01',1)",
-		"INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('aaaaaaaaaaaaaaa','a','0',2)",
+		"INSERT INTO accounts(id,balance,enabled) VALUES('bad','0',1)",
+		"INSERT INTO accounts(id,balance,enabled) VALUES('aaaaaaaaaaaaaaa','18446744073709551616',1)",
+		"INSERT INTO accounts(id,balance,enabled) VALUES('aaaaaaaaaaaaaaa','01',1)",
+		"INSERT INTO accounts(id,balance,enabled) VALUES('aaaaaaaaaaaaaaa','0',2)",
 	} {
 		if _, err := db.NewQuery(query).Execute(); err == nil {
 			t.Fatal("versioned DDL constraint missing")

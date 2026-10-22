@@ -6,8 +6,7 @@
 import { createRequire } from 'node:module';
 
 const corePath = process.env.PLAYWRIGHT_CORE_PATH || '/Users/mb5/projects/possums/node_modules/playwright-core';
-const collection = 'customer_keys';
-const account = 'synthetic-browser-account';
+const collection = 'accounts';
 const admin = { identity: 'key-fixture@example.invalid', password: 'synthetic-native-key-password' };
 // Deterministic public synthetic material; never a real gateway key.
 const key = 'A'.repeat(128);
@@ -118,7 +117,8 @@ try {
     const openEditor = async () => {
         await page.locator('.new-record-btn').click();
         await modal.locator('input[name="password"]').waitFor();
-        await modal.locator('textarea[name="account_id"]').fill(account);
+        ensure(await modal.locator('[name="account_id"]').count() === 0);
+        await modal.locator('input[name="enabled"]').check();
     };
     const submit = async (timeout = 15000) => {
         const pending = page.waitForResponse((response) => {
@@ -141,8 +141,7 @@ try {
         refusing = false;
         ensure(await modal.isVisible());
     };
-    const savedAccountRows = () => page.evaluate((expected) => [...document.querySelectorAll('.records-table tbody .col-field-name-account_id')]
-        .filter((cell) => (cell.textContent || '').includes(expected)).length, account);
+    const savedAccountRows = () => page.locator('.records-table tbody .col-field-name-id').count();
 
     stage = 'stock_login';
     await page.goto(origin + '/_/', { waitUntil: 'networkidle' });
@@ -169,15 +168,16 @@ try {
     const body = await created.text();
     ensure(!body.includes(key) && !body.includes(otherKey) && !body.includes(thirdKey));
     const decoded = decode(body);
-    ensure(decoded && /^[a-z0-9]{15}$/.test(decoded.value.id) && decoded.value.account_id === account);
+    ensure(decoded && /^[a-z0-9]{15}$/.test(decoded.value.id) && !('account_id' in decoded.value)
+        && decoded.value.balance === '0' && decoded.value.enabled === true);
 
     stage = 'create_listed';
     await page.waitForFunction((expected) => {
-        for (const cell of document.querySelectorAll('.records-table tbody .col-field-name-account_id')) {
+        for (const cell of document.querySelectorAll('.records-table tbody .col-field-name-id')) {
             if ((cell.textContent || '').includes(expected)) return true;
         }
         return false;
-    }, account);
+    }, decoded.value.id);
 
     stage = 'mismatch_fill';
     await openEditor();

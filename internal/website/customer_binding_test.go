@@ -1,71 +1,41 @@
 package website
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"strings"
 	"testing"
-
-	"github.com/pocketbase/pocketbase/core"
-	"possums-intake/internal/siteauth"
 )
 
-func TestCustomerSessionCannotSilentlySwitchBinding(t *testing.T) {
-	b := newBrowser(t)
-	if siteauth.InitializeCustomerAuth(b.app) != nil {
-		t.Fatal("SITE_TEST_CUSTOMER_SCHEMA")
+func TestCustomerSessionUsesCurrentSDKTokenAndSoleAccountID(t *testing.T) {
+	f := newAccountFixture(t)
+	if accountLogin(t, f.browser, keyHTTPA) != 303 {
+		t.Fatal("SITE_TEST_CUSTOMER_LOGIN")
 	}
-	c, err := b.app.FindCollectionByNameOrId(siteauth.CustomerCollection)
-	if err != nil {
-		t.Fatal("SITE_TEST_CUSTOMER_COLLECTION")
-	}
-	key := strings.Repeat("A", 128)
-	lookup := sha256.Sum256([]byte("possums-intake/customer-key/lookup/v1\x00" + key))
-	password := sha256.Sum256([]byte("possums-intake/customer-key/password/v1\x00" + key))
-	r := core.NewRecord(c)
-	r.Set("key_lookup", "v1_"+hex.EncodeToString(lookup[:]))
-	r.Set("account_id", "synthetic-account-a")
-	r.SetPassword(base64.RawURLEncoding.EncodeToString(password[:]))
-	if b.app.Save(r) != nil {
-		t.Fatal("SITE_TEST_CUSTOMER_CREDENTIAL")
-	}
-	adapter, err := siteauth.NewCustomer(b.app)
-	if err != nil {
-		t.Fatal("SITE_TEST_CUSTOMER_ADAPTER")
-	}
-	b.host.auth = adapter
-	login := func() {
-		form := b.form(t, "/login")
-		form.Set("key", key)
-		response, body := b.request(t, "POST", "/login", form, b.server.URL)
-		if response.StatusCode != 303 || strings.Contains(body, key) {
-			t.Fatal("SITE_TEST_CUSTOMER_LOGIN")
-		}
-	}
-	login()
-	response, _ := b.request(t, "GET", "/home", nil, "")
+	response, _ := f.request(t, "GET", "/home", nil, "")
 	if response.StatusCode != 200 {
 		t.Fatal("SITE_TEST_CUSTOMER_HOME")
 	}
-	r.Set("account_id", "synthetic-account-b")
-	if b.app.Save(r) != nil {
-		t.Fatal("SITE_TEST_CUSTOMER_REBIND")
+	r, err := f.sdk.FindRecordById(f.credential.Collection(), f.credential.Id)
+	if err != nil || r.Collection().Fields.GetByName("account_id") != nil {
+		t.Fatal("SITE_TEST_SOLE_IDENTITY")
 	}
-	response, _ = b.request(t, "GET", "/home", nil, "")
-	if response.StatusCode != 303 || response.Header.Get("Location") != "/login" {
-		t.Fatal("SITE_TEST_STALE_BINDING_NOT_LOGGED_OUT")
+	// Trusted native token invalidation cannot silently preserve an old session.
+	r.RefreshTokenKey()
+	if f.sdk.Save(r) != nil {
+		t.Fatal("SITE_TEST_CUSTOMER_TOKEN_INVALIDATION")
 	}
-	login()
-	response, _ = b.request(t, "GET", "/home", nil, "")
-	if response.StatusCode != 200 {
-		t.Fatal("SITE_TEST_FRESH_BINDING_LOGIN")
+	before := f.counter.calls.Load()
+	response, body := f.request(t, "GET", "/home", nil, "")
+	if response.StatusCode != 303 || response.Header.Get("Location") != "/login" || f.counter.calls.Load() != before || strings.Contains(body, keyHTTPA) {
+		t.Fatal("SITE_TEST_STALE_TOKEN_NOT_LOGGED_OUT")
+	}
+	if accountLogin(t, f.browser, keyHTTPA) != 303 {
+		t.Fatal("SITE_TEST_FRESH_SDK_LOGIN")
 	}
 	// No browser-provided account field is accepted, even with the correct key.
-	form := b.form(t, "/login")
-	form.Set("key", key)
-	form.Set("account_id", "synthetic-account-a")
-	response, _ = b.request(t, "POST", "/login", form, b.server.URL)
+	form := f.form(t, "/login")
+	form.Set("key", keyHTTPA)
+	form.Set("account_id", accountHTTPB)
+	response, _ = f.request(t, "POST", "/login", form, f.server.URL)
 	if response.StatusCode != 400 {
 		t.Fatal("SITE_TEST_BROWSER_ACCOUNT_SELECTOR_ACCEPTED")
 	}

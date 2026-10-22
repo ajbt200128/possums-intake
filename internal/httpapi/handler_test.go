@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"possums-intake/internal/ledger"
+	"possums-intake/internal/testfixture"
 )
 
 // testKey is a raw 32-byte runtime admin key. It must never appear in a response.
@@ -113,9 +114,16 @@ func mapKeys(value map[string]any) []string {
 	return keys
 }
 
-func provision(t *testing.T, handler http.Handler, accountID string) map[string]any {
+func createAccountFixture(t *testing.T, h http.Handler, accountID string) map[string]any {
 	t.Helper()
-	recorder := postJSON(t, handler, "/accounts/provision", fmt.Sprintf(`{"account_id":%q}`, accountID))
+	service, ok := h.(*handler).accounting.(*ledger.Service)
+	if !ok {
+		t.Fatal("synthetic SDK fixture requires actual service")
+	}
+	if _, err := testfixture.Create(testContext, service, accountID); err != nil {
+		t.Fatal("synthetic SDK account creation unavailable")
+	}
+	recorder := postJSON(t, h, "/balance", fmt.Sprintf(`{"account_id":%q}`, accountID))
 	requireStatus(t, recorder, http.StatusOK)
 	return decodeMap(t, recorder)
 }
@@ -132,7 +140,7 @@ func credit(t *testing.T, handler http.Handler, accountID, amount string, nonce 
 func TestProvisionCreditBalanceAndAccountScoping(t *testing.T) {
 	handler := newTestHandler(t, newTestLedger(t), func() bool { return true })
 
-	account := provision(t, handler, "account-a")
+	account := createAccountFixture(t, handler, "accountaaaaaaa0")
 	accounts := account["account_balance"].([]any)
 	if len(accounts) != 1 {
 		t.Fatalf("account_balance must be a list of exactly one account, got %v", account["account_balance"])
@@ -142,7 +150,7 @@ func TestProvisionCreditBalanceAndAccountScoping(t *testing.T) {
 		t.Fatalf("provisioned account = %v", accounts[0])
 	}
 
-	credited := credit(t, handler, "account-a", "500", 1)
+	credited := credit(t, handler, "accountaaaaaaa0", "500", 1)
 	creditRow := credited["credit"].(map[string]any)
 	exactKeys(t, creditRow, "idempotency_key", "account_id", "amount", "balance_after", "committed_at", "retain_until")
 	if creditRow["amount"] != "500" || creditRow["balance_after"] != "500" {
@@ -152,7 +160,7 @@ func TestProvisionCreditBalanceAndAccountScoping(t *testing.T) {
 		t.Fatalf("committed_at must be a fixed UTC string: %v", creditRow["committed_at"])
 	}
 
-	balance := postJSON(t, handler, "/balance", `{"account_id":"account-a"}`)
+	balance := postJSON(t, handler, "/balance", `{"account_id":"accountaaaaaaa0"}`)
 	requireStatus(t, balance, http.StatusOK)
 	snapshot := decodeMap(t, balance)
 	exactKeys(t, snapshot, "account_balance", "pending_reservations", "available")
@@ -168,7 +176,7 @@ func TestProvisionCreditBalanceAndAccountScoping(t *testing.T) {
 	}
 
 	// Unknown account is scoped, never a global list or another account's data.
-	unknown := postJSON(t, handler, "/balance", `{"account_id":"account-b"}`)
+	unknown := postJSON(t, handler, "/balance", `{"account_id":"accountbbbbbbb0"}`)
 	requireStatus(t, unknown, http.StatusNotFound)
 	if code := decodeMap(t, unknown)["code"]; code != string(ledger.CodeAccount) {
 		t.Fatalf("unknown account code = %v", code)
@@ -177,12 +185,12 @@ func TestProvisionCreditBalanceAndAccountScoping(t *testing.T) {
 
 func TestReserveLookupSettleRefundAndPendingRows(t *testing.T) {
 	handler := newTestHandler(t, newTestLedger(t), func() bool { return true })
-	provision(t, handler, "account-a")
-	credit(t, handler, "account-a", "1000", 1)
+	createAccountFixture(t, handler, "accountaaaaaaa0")
+	credit(t, handler, "accountaaaaaaa0", "1000", 1)
 
 	headers := authHeaders("application/json")
 	headers["Idempotency-Key"] = key(2)
-	reserved := request(t, handler, http.MethodPost, "/reservations", headers, `{"account_id":"account-a","maximum":"400","timeout_seconds":600}`)
+	reserved := request(t, handler, http.MethodPost, "/reservations", headers, `{"account_id":"accountaaaaaaa0","maximum":"400","timeout_seconds":600}`)
 	requireStatus(t, reserved, http.StatusOK)
 	reservation := decodeMap(t, reserved)["reservation"].(map[string]any)
 	exactKeys(t, reservation, "reservation_id", "idempotency_key", "account_id", "maximum", "timeout_seconds", "initial_expires_at", "expires_at", "state", "charged_amount", "terminal_at", "retain_until")
@@ -195,7 +203,7 @@ func TestReserveLookupSettleRefundAndPendingRows(t *testing.T) {
 	reservationID := reservation["reservation_id"].(string)
 
 	// Balance lists the complete active row while available excludes the hold.
-	balance := decodeMap(t, postJSON(t, handler, "/balance", `{"account_id":"account-a"}`))
+	balance := decodeMap(t, postJSON(t, handler, "/balance", `{"account_id":"accountaaaaaaa0"}`))
 	pending := balance["pending_reservations"].([]any)
 	if len(pending) != 1 || pending[0].(map[string]any)["reservation_id"] != reservationID {
 		t.Fatalf("pending rows = %v", pending)
@@ -223,7 +231,7 @@ func TestReserveLookupSettleRefundAndPendingRows(t *testing.T) {
 	if refunded["reservation"].(map[string]any)["state"] != "settled" {
 		t.Fatalf("conflicting refund changed outcome: %v", refunded)
 	}
-	balance = decodeMap(t, postJSON(t, handler, "/balance", `{"account_id":"account-a"}`))
+	balance = decodeMap(t, postJSON(t, handler, "/balance", `{"account_id":"accountaaaaaaa0"}`))
 	if balance["available"] != "750" {
 		t.Fatalf("available after settle = %v", balance["available"])
 	}
@@ -231,12 +239,12 @@ func TestReserveLookupSettleRefundAndPendingRows(t *testing.T) {
 
 func TestExpiredSettlementPreservesAuthoritativeRow(t *testing.T) {
 	handler := newTestHandler(t, newTestLedger(t), func() bool { return true })
-	provision(t, handler, "account-a")
-	credit(t, handler, "account-a", "1000", 1)
+	createAccountFixture(t, handler, "accountaaaaaaa0")
+	credit(t, handler, "accountaaaaaaa0", "1000", 1)
 
 	headers := authHeaders("application/json")
 	headers["Idempotency-Key"] = key(2)
-	reserved := request(t, handler, http.MethodPost, "/reservations", headers, `{"account_id":"account-a","maximum":"400","timeout_seconds":1}`)
+	reserved := request(t, handler, http.MethodPost, "/reservations", headers, `{"account_id":"accountaaaaaaa0","maximum":"400","timeout_seconds":1}`)
 	requireStatus(t, reserved, http.StatusOK)
 	reservationID := decodeMap(t, reserved)["reservation"].(map[string]any)["reservation_id"].(string)
 
@@ -256,7 +264,7 @@ func TestExpiredSettlementPreservesAuthoritativeRow(t *testing.T) {
 		t.Fatalf("expired row = %v", row)
 	}
 	// The hold was released, not charged.
-	balance := decodeMap(t, postJSON(t, handler, "/balance", `{"account_id":"account-a"}`))
+	balance := decodeMap(t, postJSON(t, handler, "/balance", `{"account_id":"accountaaaaaaa0"}`))
 	if balance["available"] != "1000" {
 		t.Fatalf("available after expiry = %v", balance["available"])
 	}
@@ -264,11 +272,11 @@ func TestExpiredSettlementPreservesAuthoritativeRow(t *testing.T) {
 
 func TestResponsesNeverEchoTheRuntimeKey(t *testing.T) {
 	handler := newTestHandler(t, newTestLedger(t), func() bool { return true })
-	provision(t, handler, "account-a")
-	credit(t, handler, "account-a", "10", 1)
+	createAccountFixture(t, handler, "accountaaaaaaa0")
+	credit(t, handler, "accountaaaaaaa0", "10", 1)
 	successes := []*httptest.ResponseRecorder{
-		postJSON(t, handler, "/balance", `{"account_id":"account-a"}`),
-		postJSON(t, handler, "/accounts/provision", `{"account_id":"account-a"}`),
+		postJSON(t, handler, "/balance", `{"account_id":"accountaaaaaaa0"}`),
+		postJSON(t, handler, "/balance", `{"account_id":"accountaaaaaaa0"}`),
 		postJSON(t, handler, "/reservations/lookup", `{"reservation_id":"`+strings.Repeat("a", 32)+`"}`),
 		request(t, handler, http.MethodGet, "/healthz", nil, ""),
 	}

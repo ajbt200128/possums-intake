@@ -76,13 +76,13 @@ func TestHTTPActualCompletionHooksKnownCommitAndPrimaryOnce(t *testing.T) {
 	} {
 		t.Run("completion", func(t *testing.T) {
 			s := newTestLedger(t)
-			provision(t, newTestHandler(t, s, nil), "a")
+			createAccountFixture(t, newTestHandler(t, s, nil), "aaaaaaaaaaaaaaa")
 			injectHTTPCompletionApp(t, s, fixture.hooks, fixture.panicAfter)
 			spy := &failureSpy{}
 			h := observedHandler(t, s, spy)
 			var want []failuretype.Type
 			if fixture.primary {
-				out := postJSON(t, h, "/balance", `{"account_id":"missing"}`)
+				out := postJSON(t, h, "/balance", `{"account_id":"missing00000000"}`)
 				if fixture.panicAfter {
 					requireStatus(t, out, 503)
 				} else {
@@ -91,10 +91,12 @@ func TestHTTPActualCompletionHooksKnownCommitAndPrimaryOnce(t *testing.T) {
 				closedDiagnostic(t, out)
 				want = append(want, failuretype.AccountMissing)
 			} else {
-				out := postJSON(t, h, "/accounts/provision", `{"account_id":"committed"}`)
+				headers := authHeaders("application/json")
+				headers["Idempotency-Key"] = key(1)
+				out := request(t, h, "POST", "/credits", headers, `{"account_id":"aaaaaaaaaaaaaaa","amount":"1"}`)
 				requireStatus(t, out, 200)
-				row := decodeMap(t, out)["account_balance"].([]any)[0].(map[string]any)
-				if row["account_id"] != "committed" || !s.Ready() {
+				row := decodeMap(t, out)["credit"].(map[string]any)
+				if row["account_id"] != "aaaaaaaaaaaaaaa" || row["balance_after"] != "1" || !s.Ready() {
 					t.Fatal("known commit erased by hook fault")
 				}
 			}
@@ -122,7 +124,7 @@ func TestHTTPActualReportMaximumSlotsAndOverflow(t *testing.T) {
 				h.balance(w, r)
 				writeJSON(w, 200, syntheticMarshaler{})
 			}
-			h.ServeHTTP(&failedWriter{header: http.Header{}, mode: "short"}, failureRequest("/balance", `{"account_id":"missing"}`))
+			h.ServeHTTP(&failedWriter{header: http.Header{}, mode: "short"}, failureRequest("/balance", `{"account_id":"missing00000000"}`))
 			if hooks == 2 {
 				expectFailures(t, spy, failuretype.ResponseEncodingUnknown, failuretype.AccountMissing, failuretype.TransactionAfterCompletionUnknown, failuretype.TransactionAfterCompletionUnknown, failuretype.ResponseDeliveryUnknown)
 			} else if len(spy.kinds) != 0 || spy.invalidFailures != 1 || spy.invalidRequests != 0 {

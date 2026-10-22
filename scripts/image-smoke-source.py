@@ -22,6 +22,7 @@ WEBSITE_DOCUMENTS = {"bundle": ("init.el", "options.el", "pages.el", "routes.el"
 # Provenance kept in the snapshot (not compiled): the manifest the font/license
 # bytes are verified against, and the human-readable license notice.
 WEBSITE_PROVENANCE = ("manifest.json", "NOTICE.md")
+LEDGER_FIXTURES = ("split_schema_v1.sql", "split_schema_v2.sql")
 
 
 def regular(root, path):
@@ -74,6 +75,11 @@ def inputs(root):
             r.require(not path.is_symlink(), "source_snapshot")
             if path.is_file() and path.suffix in extensions:
                 files.append(path)
+    if (root / "internal/ledger/fresh_schema_test.go").is_file():
+        for name in LEDGER_FIXTURES:
+            fixture = root / "internal/ledger/testdata" / name
+            regular(root, fixture)
+            files.append(fixture)
     lispsite = root / "pkg/lispsite"
     if lispsite.exists():
         for name in WEBSITE_DOCUMENTS["bundle"]:

@@ -18,6 +18,7 @@ import (
 	"possums-intake/internal/ledger"
 	"possums-intake/internal/operator"
 	"possums-intake/internal/siteauth"
+	"possums-intake/internal/testfixture"
 )
 
 func accountingRuntimeKey(n int) string {
@@ -33,8 +34,8 @@ func TestWebsiteDefaultExplicitSetupPreservesFinancialStateAndServeNeverSeeds(t 
 	if err != nil {
 		t.Fatal("SITE_RUNTIME_TEST_OPEN")
 	}
-	account := "SYNTHETIC_WEBSITE_SETUP_ACCOUNT"
-	if _, err := s.Provision(ctx, account); err != nil {
+	account := "websitesetup000"
+	if _, err := testfixture.Create(ctx, s, account); err != nil {
 		t.Fatal("SITE_RUNTIME_TEST_ACCOUNT")
 	}
 	if _, err := s.Credit(ctx, ledger.CreditInput{AccountID: account, Amount: "100", IdempotencyKey: accountingRuntimeKey(1)}); err != nil {
@@ -53,7 +54,7 @@ func TestWebsiteDefaultExplicitSetupPreservesFinancialStateAndServeNeverSeeds(t 
 	}
 	defer held.Close()
 	out, stderr, success := runCLI(t, "serve", "--state", dir, "--listen", held.Addr().String())
-	checkFailure(t, out, stderr, success, "SITE_AUTH_UNAVAILABLE")
+	checkFailure(t, out, stderr, success, codeBind)
 	for i := 0; i < 2; i++ {
 		out, stderr, success = runCLI(t, "website-init", "--state", dir)
 		if !success || stderr != "" || out != "{\"status\":\"website_initialized\"}\n" {
@@ -77,7 +78,11 @@ func TestWebsiteDefaultExplicitSetupPreservesFinancialStateAndServeNeverSeeds(t 
 	}
 	for _, name := range []string{siteauth.CustomerCollection, "_superusers"} {
 		n, err := app.CountRecords(name)
-		if err != nil || n != 0 {
+		want := int64(0)
+		if name == siteauth.CustomerCollection {
+			want = 1
+		}
+		if err != nil || n != want {
 			t.Fatal("SITE_RUNTIME_SEEDED_CREDENTIALS")
 		}
 	}

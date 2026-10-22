@@ -20,12 +20,12 @@ import threading
 import time
 from datetime import datetime
 
-ACCOUNT = "synthetic-smoke-a"
-OTHER_ACCOUNT = "synthetic-smoke-b"
+ACCOUNT = ""
+OTHER_ACCOUNT = ""
 RPC_SECONDS = 5
 SHUTDOWN_SECONDS = 8
 OUTPUT_LIMIT = 64 * 1024
-ROUTES = ("/accounts/provision", "/credits", "/reservations",
+ROUTES = ("/credits", "/reservations",
           "/reservations/renew", "/reservations/settle", "/reservations/refund",
           "/reservations/lookup", "/balance")
 RESERVATION_FIELDS = {"reservation_id", "idempotency_key", "account_id", "maximum",
@@ -165,6 +165,7 @@ class Service:
     def __init__(self, binary: str, state: str):
         self.binary, self.state = binary, state
         self.key = secrets.token_urlsafe(48)
+        self.accounts = []
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             self.port = listener.getsockname()[1]
@@ -172,14 +173,33 @@ class Service:
         self.output = None
 
     def env(self) -> dict[str, str]:
-        return {**clean_env(), "LEDGER_ADMIN_KEY": self.key}
+        return {**clean_env(), "LEDGER_ADMIN_KEY": self.key,
+                "LEDGER_OPERATOR_EMAIL": "smoke@example.invalid",
+                "LEDGER_OPERATOR_PASSWORD": "synthetic-smoke-operator-password"}
 
     def init(self):
-        rc, out, err = run_bounded([self.binary, "init", "--state", self.state],
+        rc, out, err = run_bounded([self.binary, "init", "--operator", "--state", self.state],
                                   self.env(), "init", 30)
         expect(rc == 0, "init", "successful_explicit_init")
         expect(out == b'{"status":"initialized_empty"}\n' and not err,
                "init", "fixed_init_output")
+        # Explicit isolated fixture setup, not ordinary serve or login seeding.
+        self.start(operator=True)
+        status, payload = run_curl(self.port, None, "POST",
+            "/api/collections/_superusers/auth-with-password",
+            {"identity": "smoke@example.invalid", "password": "synthetic-smoke-operator-password"}, None, "native_login")
+        expect(status == 200, "native_login", "supported_sdk_auth")
+        token = decode(payload, "native_login").get("token")
+        expect(isinstance(token, str) and bool(token), "native_login", "sdk_token")
+        for key in ("A" * 64, "B" * 64):
+            status, payload = run_curl(self.port, token, "POST", "/api/collections/accounts/records",
+                {"password": key, "passwordConfirm": key, "enabled": True}, None, "native_create")
+            record = decode(payload, "native_create")
+            expect(status == 200 and re.fullmatch(r"[a-z0-9]{15}", record.get("id", "")) is not None
+                   and "account_id" not in record and record.get("balance") == "0",
+                   "native_create", "same_auth_wallet_record")
+            self.accounts.append(record["id"])
+        self.stop()
 
     def request(self, path: str, body: dict | None = None, *, stage: str,
                 status: int = 200, idem: str | None = None, auth: str = "correct") -> dict:
@@ -191,9 +211,9 @@ class Service:
         expect(observed == status, stage, "expected_http_status")
         return decode(payload, stage)
 
-    def start(self):
+    def start(self, *, operator=False):
         self.proc = subprocess.Popen([self.binary, "serve", "--state", self.state,
-                                      "--listen", f"127.0.0.1:{self.port}"],
+                                      "--listen", f"127.0.0.1:{self.port}"] + (["--operator"] if operator else []),
                                      env=self.env(), stdin=subprocess.DEVNULL,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.output = PipeCapture(self.proc.stdout)
@@ -281,6 +301,8 @@ def reservation(row, stage: str):
 
 
 def run_cases(s: Service):
+    global ACCOUNT, OTHER_ACCOUNT
+    ACCOUNT, OTHER_ACCOUNT = s.accounts
     rpc = s.request
     expect(rpc("/healthz", stage="health", auth="missing") == {"status": "ok"},
            "health", "fixed_public_health")
@@ -291,7 +313,7 @@ def run_cases(s: Service):
                    doc["code"] == "LEDGER_HTTP_UNAUTHORIZED", "auth", "closed_unauthorized")
 
     for account_id in (ACCOUNT, OTHER_ACCOUNT):
-        doc = rpc("/accounts/provision", {"account_id": account_id}, stage="provision")
+        doc = rpc("/balance", {"account_id": account_id}, stage="created_balance")
         account(doc.get("account_balance"), account_id, "0", "provision")
     credit_input = {"account_id": ACCOUNT, "amount": "1000"}
     credit_key = new_key()
@@ -306,7 +328,7 @@ def run_cases(s: Service):
            "credit", "duplicate_original_result")
     doc = rpc("/credits", {**credit_input, "amount": "2000"}, stage="credit", idem=credit_key, status=409)
     expect(doc.get("code") == "LEDGER_KEY_CONFLICT", "credit", "altered_input_conflict")
-    account(rpc("/accounts/provision", {"account_id": ACCOUNT}, stage="provision").get("account_balance"),
+    account(rpc("/balance", {"account_id": ACCOUNT}, stage="balance").get("account_balance"),
             ACCOUNT, "1000", "provision")
 
     def reserve(maximum: str, timeout: int = 600, stage: str = "reserve"):
@@ -390,13 +412,12 @@ def run_cases(s: Service):
     expect(rpc("/reservations/lookup", {"reservation_id": expiring["reservation_id"]}, stage="lookup")["reservation"] == expired,
            "lookup", "retained_expiry")
     balance("750", [], "expiry")
-    # Ordinary serve now owns the public website root; it is not a native route.
-    # Keep the accounting/native denial assertions without claiming root is absent.
+    # Ordinary serve owns the website root; it is not a native route.
     for method, body, expected in (("GET", None, 200), ("POST", {}, 415)):
         status, payload = run_curl(s.port, None, method, "/", body, None, "website")
         expect(status == expected and s.key.encode() not in payload,
                "website", "public_root_and_no_accounting_key")
-    for path in ("/_/", "/api/collections", "/api/settings", "/api/backups",
+    for path in ("/accounts/provision", "/_/", "/api/collections", "/api/settings", "/api/backups",
                  "/api/files", "/api/realtime", "/api/collections/_superusers/auth-with-password"):
         for body in (None, {}):
             doc = rpc(path, body, stage="routes", status=404, auth="missing")

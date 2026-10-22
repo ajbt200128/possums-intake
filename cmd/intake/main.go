@@ -29,8 +29,14 @@ func executeContext(ctx context.Context, args []string) error {
 }
 
 func executeObserved(ctx context.Context, args []string, observer failureowner.Observer) error {
-	if len(args) > 0 && args[0] == "ledger-upgrade" {
-		return executeLedgerUpgrade(ctx, args[1:], observer)
+	if len(args) > 0 && args[0] == "stripe-sandbox-dev" {
+		return executeStripeSandboxDev(ctx, args[1:], observer)
+	}
+	if len(args) > 0 && args[0] == "synthetic-payments-init" {
+		return executeSyntheticPaymentInit(ctx, args[1:])
+	}
+	if len(args) > 0 && args[0] == "stripe-sandbox-local" {
+		return executeStripeSandboxLocal(ctx, args[1:], observer)
 	}
 	if len(args) > 0 && args[0] == "website-local" {
 		return executeWebsiteLocal(ctx, args[1:], observer)

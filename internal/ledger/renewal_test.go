@@ -20,8 +20,8 @@ func renew(t *testing.T, s *Service, r Reservation) Renewal {
 
 func TestRenewalCompareExtendAndRefusals(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
-	in := ReserveInput{"a", "60", 600, key(now, 2)}
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	in := ReserveInput{"aaaaaaaaaaaaaaa", "60", 600, key(now, 2)}
 	r := reserve(t, s, in)
 	if r.InitialExpiresAt != r.ExpiresAt {
 		t.Fatal("initial deadline differs from admission")
@@ -63,7 +63,7 @@ func TestRenewalCompareExtendAndRefusals(t *testing.T) {
 	if retry := reserve(t, s, in); !reflect.DeepEqual(retry, want) {
 		t.Fatal("reserve duplicate lost current deadline")
 	}
-	b := balance(t, s, "a")
+	b := balance(t, s, "aaaaaaaaaaaaaaa")
 	if b.Available != "40" || b.AccountBalance.Balance != "100" {
 		t.Fatal("renewal moved funds")
 	}
@@ -75,13 +75,13 @@ func TestRenewalCompareExtendAndRefusals(t *testing.T) {
 
 func TestRenewalDisabledIncludingDuplicateCommitsOtherExpiry(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "100", now)
-	r := reserve(t, s, ReserveInput{"a", "60", 600, key(now, 2)})
-	due := reserve(t, s, ReserveInput{"a", "10", 1, key(now, 3)})
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "60", 600, key(now, 2)})
+	due := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "10", 1, key(now, 3)})
 	advance(t, s, now+500)
 	current := renew(t, s, r).Reservation
 	if err := s.run(background, func(tx *transaction) error {
-		return tx.exec("UPDATE ledger_accounts SET enabled=0 WHERE account_id='a'", nil)
+		return tx.exec("UPDATE accounts SET enabled=0 WHERE id='aaaaaaaaaaaaaaa'", nil)
 	}, false); err != nil {
 		t.Fatal("disable fixture failed")
 	}
@@ -113,8 +113,8 @@ func TestRenewalConcurrentDuplicateAndTerminalRaces(t *testing.T) {
 	for _, operation := range []string{"duplicates", "settle", "refund", "expiry"} {
 		t.Run(operation, func(t *testing.T) {
 			s, _, now := testService(t)
-			fund(t, s, "a", "100", now)
-			r := reserve(t, s, ReserveInput{"a", "60", 600, key(now, 2)})
+			fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+			r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "60", 600, key(now, 2)})
 			if operation == "expiry" {
 				advance(t, s, int64(r.ExpiresAt))
 			} else {
@@ -167,7 +167,7 @@ func TestRenewalConcurrentDuplicateAndTerminalRaces(t *testing.T) {
 			case "expiry":
 				wantState, wantAvailable = Expired, "100"
 			}
-			b := balance(t, s, "a")
+			b := balance(t, s, "aaaaaaaaaaaaaaa")
 			if row.State != wantState || row.InitialExpiresAt != r.InitialExpiresAt || b.AccountBalance.Balance != wantBalance || b.Available != wantAvailable {
 				t.Fatal("race altered immutable state or money")
 			}
@@ -178,8 +178,8 @@ func TestRenewalConcurrentDuplicateAndTerminalRaces(t *testing.T) {
 func TestRenewalLostCompletionAndLostResponse(t *testing.T) {
 	for _, completionLost := range []bool{true, false} {
 		s, _, now := testService(t)
-		fund(t, s, "a", "100", now)
-		r := reserve(t, s, ReserveInput{"a", "60", 600, key(now, 2)})
+		fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+		r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "60", 600, key(now, 2)})
 		advance(t, s, now+1000)
 		base := s.app
 		if completionLost {
@@ -204,7 +204,7 @@ func TestRenewalLostCompletionAndLostResponse(t *testing.T) {
 		s.app = base
 		advance(t, s, now+2000)
 		repeated := renew(t, s, r)
-		if repeated.Reservation.ExpiresAt != r.ExpiresAt+1000 || balance(t, s, "a").Available != "40" {
+		if repeated.Reservation.ExpiresAt != r.ExpiresAt+1000 || balance(t, s, "aaaaaaaaaaaaaaa").Available != "40" {
 			t.Fatal("lost-response duplicate extended again or changed funds")
 		}
 	}
@@ -226,8 +226,8 @@ func TestRenewalSettlementAfterInitialDeadlineAndClassification(t *testing.T) {
 		}
 	}
 	s, dir, now := testService(t)
-	fund(t, s, "a", "100", now)
-	r := reserve(t, s, ReserveInput{"a", "60", 600, key(now, 2)})
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "60", 600, key(now, 2)})
 	advance(t, s, now+300000)
 	current := renew(t, s, r).Reservation
 	advance(t, s, int64(r.InitialExpiresAt)+1)
@@ -243,15 +243,15 @@ func TestRenewalSettlementAfterInitialDeadlineAndClassification(t *testing.T) {
 	must(t, opened, err)
 	defer opened.Close()
 	row, err := opened.Settle(background, SettleInput{r.ReservationID, "60"})
-	if !reflect.DeepEqual(must(t, row, err), settled) || balance(t, opened, "a").AccountBalance.Balance != "77" {
+	if !reflect.DeepEqual(must(t, row, err), settled) || balance(t, opened, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "77" {
 		t.Fatal("renewed settlement lost terminal evidence or charged twice")
 	}
 }
 
 func TestRenewalBeyondKeyWindowRestartExpiryAndPruning(t *testing.T) {
 	s, dir, now := testService(t)
-	fund(t, s, "a", "100", now)
-	in := ReserveInput{"a", "60", 1800, key(now, 2)}
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	in := ReserveInput{"aaaaaaaaaaaaaaa", "60", 1800, key(now, 2)}
 	original := reserve(t, s, in)
 	current := original
 	for i := int64(1); i <= 100; i++ {
@@ -304,7 +304,7 @@ func TestRenewalBeyondKeyWindowRestartExpiryAndPruning(t *testing.T) {
 	codeIs(t, err, CodeEvidence)
 	_, err = reopened.Reserve(background, in)
 	codeIs(t, err, CodeKeyWindow)
-	if balance(t, reopened, "a").Available != "100" {
+	if balance(t, reopened, "aaaaaaaaaaaaaaa").Available != "100" {
 		t.Fatal("expiry/pruning charged funds")
 	}
 }
