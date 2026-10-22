@@ -11,7 +11,7 @@ import (
 
 func TestCustomerKeyProjectionIsClosed(t *testing.T) {
 	for _, code := range []ledger.Code{"SITE_KEY_INPUT", "SITE_KEY_UNAVAILABLE"} {
-		constraint, status := "gateway_key_and_account_format", 400
+		constraint, status := "gateway_key_format", 400
 		if code == "SITE_KEY_UNAVAILABLE" {
 			constraint, status = "preparation_cause_unknown", 503
 		}

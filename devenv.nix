@@ -15,12 +15,15 @@ in
     go
     pkgs.git
     pkgs.curl
+    pkgs.stripe-cli
   ];
 
   # Match the environment contract devenv's Go module would otherwise provide.
   env.GOROOT = "${go}/share/go";
   env.GOPATH = config.env.DEVENV_STATE + "/go";
   env.GOTOOLCHAIN = "local";
+
+  env.STRIPE_CLI_TELEMETRY_OPTOUT = "1";
 
   enterShell = ''
     export PATH="$GOPATH/bin:$PATH"

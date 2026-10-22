@@ -16,10 +16,11 @@ import (
 // PocketBase authority or a production clock override.
 func TestProcessScheduledExpiryPruningAndCachedHealth(t *testing.T) {
 	dir := initProcessState(t)
+	seedProcessAccount(t, dir, "synthetic00000a")
 	p := startProcess(t, dir, syntheticAddress(t))
-	successRPC(t, p, "/accounts/provision", `{"account_id":"synthetic-a"}`, "")
-	successRPC(t, p, "/credits", `{"account_id":"synthetic-a","amount":"2"}`, processKey(1))
-	row := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic-a","maximum":"1","timeout_seconds":1}`, processKey(2)))
+	successRPC(t, p, "/balance", `{"account_id":"synthetic00000a"}`, "")
+	successRPC(t, p, "/credits", `{"account_id":"synthetic00000a","amount":"2"}`, processKey(1))
+	row := readReservation(t, successRPC(t, p, "/reservations", `{"account_id":"synthetic00000a","maximum":"1","timeout_seconds":1}`, processKey(2)))
 	db, err := sql.Open("sqlite", filepath.Join(dir, "data.db")+"?mode=rw&_pragma=busy_timeout(250)")
 	if err != nil {
 		t.Fatal("synthetic state inspector unavailable")

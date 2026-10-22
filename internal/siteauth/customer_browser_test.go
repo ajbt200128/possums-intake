@@ -38,12 +38,12 @@ func TestCustomerNativeEditorBrowser(t *testing.T) {
 	}
 	lookup, secret := syntheticMaterial(strings.Repeat("A", 128))
 	record, err := f.app.FindFirstRecordByData(siteauth.CustomerCollection, "key_lookup", lookup)
-	if err != nil || record.GetString("account_id") != "synthetic-browser-account" || !record.ValidatePassword(secret) || record.GetString("password") != "" {
+	if err != nil || len(record.Id) != 15 || record.Collection().Fields.GetByName("account_id") != nil || record.GetString("balance") != "0" || !record.GetBool("enabled") || !record.ValidatePassword(secret) || record.GetString("password") != "" {
 		t.Fatal("CUSTOMER_NATIVE_BROWSER_STORAGE_MISMATCH")
 	}
 	assertNoKeyBytes(t, f.dir, strings.Repeat("A", 128), secret)
 	var count, logs, origins int
-	if f.app.DB().NewQuery("SELECT count(*) FROM customer_keys").Row(&count) != nil || count != 1 || f.app.AuxDB().NewQuery("SELECT count(*) FROM _logs").Row(&logs) != nil || logs != 0 || f.app.DB().NewQuery("SELECT count(*) FROM _authOrigins").Row(&origins) != nil || origins != 0 {
+	if f.app.DB().NewQuery("SELECT count(*) FROM accounts").Row(&count) != nil || count != 1 || f.app.AuxDB().NewQuery("SELECT count(*) FROM _logs").Row(&logs) != nil || logs != 0 || f.app.DB().NewQuery("SELECT count(*) FROM _authOrigins").Row(&origins) != nil || origins != 0 {
 		t.Fatal("CUSTOMER_NATIVE_BROWSER_PERSISTENCE_MISMATCH")
 	}
 }

@@ -90,7 +90,7 @@ func TestDiagnosticDefaultFailureKinds(t *testing.T) {
 			}
 			// Legacy diagnostics may have no metadata. Only their closed code
 			// can provide a default; other exported fields are irrelevant.
-			legacy := &Diagnostic{Code: tc.code, Stage: "cancelled", Constraint: "sqlite_busy"}
+			legacy := &Diagnostic{Code: tc.code, Stage: "cancelled000000", Constraint: "sqlite_busy"}
 			if FailureKind(classificationWrapper{legacy}, 0) != tc.kind {
 				t.Fatal("wrapped closed-code default was lost")
 			}
@@ -290,7 +290,7 @@ func TestFailureKindActualSQLiteBusyConstraintStorageAndNoRows(t *testing.T) {
 	if err := tx.Rollback(); err != nil {
 		t.Fatal("synthetic lock release failed")
 	}
-	_, err = s.app.DB().NewQuery("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('constraint00000','synthetic','-1',1)").Execute()
+	_, err = s.app.DB().NewQuery("INSERT INTO accounts(id,balance,enabled) VALUES('constraint00000','-1',1)").Execute()
 	assertSQLiteClassification(t, err, sqlite3.SQLITE_CONSTRAINT, failuretype.SQLiteConstraint)
 	var constraint *sqlite.Error
 	if !errors.As(err, &constraint) || constraint.Code() == sqlite3.SQLITE_CONSTRAINT {
@@ -310,7 +310,7 @@ func TestFailureKindActualSQLiteBusyConstraintStorageAndNoRows(t *testing.T) {
 	assertSQLiteClassification(t, err, sqlite3.SQLITE_NOTADB, failuretype.SQLiteStorageFailure)
 
 	var id string
-	err = s.app.DB().NewQuery("SELECT account_id FROM ledger_accounts WHERE account_id='missing'").Row(&id)
+	err = s.app.DB().NewQuery("SELECT id FROM accounts WHERE id='missing'").Row(&id)
 	if !errors.Is(err, sql.ErrNoRows) || FailureKind(err, failuretype.NativeReadUnknown) != failuretype.NativeReadUnknown {
 		t.Fatal("SQL no-rows was given a fabricated account-missing contract")
 	}

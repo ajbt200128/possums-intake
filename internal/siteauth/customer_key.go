@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"unicode/utf8"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -19,8 +18,8 @@ import (
 	"possums-intake/internal/ledger"
 )
 
-const CustomerCollection = "customer_keys"
-const CustomerCollectionID = "customerkeys001"
+const CustomerCollection = ledger.AccountCollectionName
+const CustomerCollectionID = ledger.AccountCollectionID
 
 // keyMaterial is request-private. Neither password nor raw key belongs in a
 // record field other than the SDK password setter's transient input.
@@ -45,9 +44,9 @@ func deriveKey(text string) (keyMaterial, error) {
 }
 
 func keyInputFault() *ledger.Diagnostic {
-	d := refused("SITE_KEY_INPUT", "customer_key_prepare", "gateway_key_and_account_format", failuretype.RequestInvalid)
+	d := refused("SITE_KEY_INPUT", "customer_key_prepare", "gateway_key_format", failuretype.RequestInvalid)
 	d.Outcome = "no_effect"
-	d.NextStep = "Use a privately generated gateway-format key in both password fields and the exact ledger account identity. No credential was saved by this preparation step; do not share input values."
+	d.NextStep = "Use a privately generated gateway-format key in both password fields; the SDK creates the account identity. No credential was saved by this preparation step; do not share input values."
 	return d
 }
 
@@ -93,10 +92,12 @@ func prepareCustomerInput(e *core.RequestEvent) (result error) {
 		}
 		return classified(keyInputUnknown(), err)
 	}
-	if value, supplied := info.Body["account_id"]; supplied {
-		id, ok := value.(string)
-		if !ok || !validBinding(id) {
-			return keyInputFault()
+	if e.Request.Method == http.MethodPost {
+		if _, supplied := info.Body["balance"]; !supplied {
+			info.Body["balance"] = "0"
+		}
+		if _, supplied := info.Body["enabled"]; !supplied {
+			info.Body["enabled"] = true
 		}
 	}
 	value, supplied := info.Body["password"]
@@ -133,8 +134,6 @@ func prepareCustomerInput(e *core.RequestEvent) (result error) {
 	info.Body["key_lookup"] = material.lookup
 	return nil
 }
-
-func validBinding(id string) bool { return len(id) > 0 && len(id) <= 128 && utf8.ValidString(id) }
 
 func keyInputUnknown() *ledger.Diagnostic {
 	d := refused("SITE_KEY_UNAVAILABLE", "customer_key_prepare", "preparation_cause_unknown", failuretype.NativeAuthUnknown)

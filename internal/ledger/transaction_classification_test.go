@@ -125,17 +125,17 @@ func TestTransactionClassifiedWriterRefusals(t *testing.T) {
 	ctx, cancel := context.WithCancel(background)
 	cancel()
 	ctx, report := WithFailureReport(ctx)
-	_, err := s.Provision(ctx, "cancelled-writer")
+	_, err := s.Balance(ctx, "cancelledwriter")
 	kindIs(t, err, CodeWriter, failuretype.Cancelled)
 	takeKinds(t, report, failuretype.Cancelled)
 	ctx, cancel = context.WithTimeout(background, 10*time.Millisecond)
 	defer cancel()
 	ctx, report = WithFailureReport(ctx)
-	_, err = s.Provision(ctx, "deadline-writer")
+	_, err = s.Balance(ctx, "deadlinewriter0")
 	kindIs(t, err, CodeWriter, failuretype.DeadlineExceeded)
 	takeKinds(t, report, failuretype.DeadlineExceeded)
 	ctx, report = WithFailureReport(background)
-	_, err = s.Provision(ctx, "exhausted-writer")
+	_, err = s.Balance(ctx, "exhaustedwriter")
 	kindIs(t, err, CodeWriter, failuretype.WriterWaitExhausted)
 	takeKinds(t, report, failuretype.WriterWaitExhausted)
 	if !s.Ready() {
@@ -148,7 +148,7 @@ func TestTransactionClassifiedKnownContextBudgetCauses(t *testing.T) {
 	ctx, cancel := context.WithCancel(background)
 	ctx, report := WithFailureReport(ctx)
 	err := s.run(ctx, func(tx *transaction) error {
-		if err := tx.exec("INSERT INTO ledger_accounts(id,account_id,balance,enabled) VALUES('reportcancel000','report-cancel','0',1)", nil); err != nil {
+		if err := tx.exec("INSERT INTO accounts(id,balance,enabled) VALUES('reportcancel000','0',1)", nil); err != nil {
 			return err
 		}
 		cancel()
@@ -167,7 +167,7 @@ func TestTransactionClassifiedKnownContextBudgetCauses(t *testing.T) {
 		kindIs(t, err, CodeWork, failuretype.DeadlineExceeded)
 		takeKinds(t, report, failuretype.DeadlineExceeded)
 	}
-	_, err = s.Balance(background, "report-cancel")
+	_, err = s.Balance(background, "reportcancel000")
 	codeIs(t, err, CodeAccount)
 	if !s.Ready() {
 		t.Fatal("observed budget rollback changed readiness")
@@ -248,7 +248,7 @@ func TestTransactionClassifiedBeginWorkAndCompletionUnknowns(t *testing.T) {
 	original := s.app
 	s.app = failedBegin{original, nonComparableCallbackFailure{1}}
 	ctx, report := WithFailureReport(background)
-	_, err := s.Provision(ctx, "not-begun")
+	_, err := s.Balance(ctx, "notbegun0000000")
 	kindIs(t, err, CodeBegin, failuretype.TransactionBeginUnknown)
 	takeKinds(t, report, failuretype.TransactionBeginUnknown)
 	s.app = original
@@ -298,7 +298,7 @@ func TestTransactionReportCoreRefusalCanonicalAndOnceOnly(t *testing.T) {
 		}
 	}
 	ctx, report := WithFailureReport(background)
-	_, err := s.Provision(ctx, "not-ready")
+	_, err := s.Balance(ctx, "notready0000000")
 	kindIs(t, err, CodeClosed, failuretype.NotReady)
 	takeKinds(t, report, failuretype.NotReady)
 }
@@ -334,22 +334,22 @@ func TestTransactionReportPropagationWrappersDoNotRecountPrimary(t *testing.T) {
 func TestTransactionKnownCommitRetainsRowsAndReportsLaterFault(t *testing.T) {
 	for _, panicAfter := range []bool{false, true} {
 		s, _, now := testService(t)
-		fund(t, s, "a", "100", now)
+		fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 		original := s.app
 		s.app = completionFaultApp{App: original, panicAfter: panicAfter}
 		ctx, report := WithFailureReport(background)
-		row, err := s.Credit(ctx, CreditInput{"a", "5", key(now, 2)})
+		row, err := s.Credit(ctx, CreditInput{"aaaaaaaaaaaaaaa", "5", key(now, 2)})
 		if err != nil || row.BalanceAfter != "105" || !s.Ready() {
 			t.Fatal("known commit/result/readiness lost after later fault")
 		}
 		takeKinds(t, report, failuretype.TransactionAfterCompletionUnknown)
 		s.app = original
-		if balance(t, s, "a").AccountBalance.Balance != "105" {
+		if balance(t, s, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "105" {
 			t.Fatal("known committed row absent")
 		}
 		// Same accounting API and classification even without a report owner.
 		s.app = completionFaultApp{App: original, panicAfter: panicAfter}
-		row, err = s.Credit(background, CreditInput{"a", "1", key(now, 3)})
+		row, err = s.Credit(background, CreditInput{"aaaaaaaaaaaaaaa", "1", key(now, 3)})
 		if err != nil || row.BalanceAfter != "106" {
 			t.Fatal("optional report affected accounting")
 		}

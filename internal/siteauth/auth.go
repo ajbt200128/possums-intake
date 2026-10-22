@@ -245,11 +245,8 @@ func (a *Adapter) Validate(ctx context.Context, token string) (principal Princip
 		return Principal{}, interrupted(e, "site_auth_validate")
 	}
 	principal = Principal{RecordID: record.Id, CollectionID: record.Collection().Id}
-	if a.customer {
-		principal.AccountID = record.GetString("account_id")
-		if !validBinding(principal.AccountID) {
-			return Principal{}, refused("SITE_AUTH_INVALID", "site_auth_validate", "current_account_binding", failuretype.AuthenticationRefused)
-		}
+	if a.customer || a.collection == CustomerCollection {
+		principal.AccountID = record.Id
 	}
 	return principal, nil
 }

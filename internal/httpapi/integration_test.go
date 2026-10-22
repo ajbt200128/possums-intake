@@ -57,10 +57,10 @@ func TestInvalidUnicodeAndMissingFieldsNeverDispatch(t *testing.T) {
 		`{"account_id":"\ud800x"}`, `{"account_id":"\ud800\u0061"}`,
 		`{"account_id":"\ud800\ud800"}`, `{"account_id":"\udc00\ud800"}`,
 		`{"account_id":"\ud800\\udc00"}`, `{"account_id":"\ud800\udc00\udc00"}`,
-		`{"account_\ud800id":"a"}`,
+		`{"account_\ud800id":"aaaaaaaaaaaaaaa"}`,
 	}
 	for _, body := range invalid {
-		r := postJSON(t, h, "/accounts/provision", body)
+		r := postJSON(t, h, "/balance", body)
 		requireStatus(t, r, 400)
 		closedDiagnostic(t, r)
 	}
@@ -83,7 +83,7 @@ func TestInvalidUnicodeAndMissingFieldsNeverDispatch(t *testing.T) {
 	}
 }
 
-func TestPairedUnicodePreservesOpaqueAccounts(t *testing.T) {
+func TestPairedUnicodeCannotCreateOrSelectAnSDKAccount(t *testing.T) {
 	h := newTestHandler(t, newTestLedger(t), nil)
 	for _, fixture := range []struct{ body, id string }{
 		{`{"account_id":"\ud83d\udc3e"}`, "🐾"},
@@ -96,11 +96,10 @@ func TestPairedUnicodePreservesOpaqueAccounts(t *testing.T) {
 		{`{"account_id":"control\nidentity"}`, "control\nidentity"},
 		{`{"account_id":"\\t"}`, `\t`},
 	} {
-		r := postJSON(t, h, "/accounts/provision", fixture.body)
-		requireStatus(t, r, 200)
-		row := decodeMap(t, r)["account_balance"].([]any)[0].(map[string]any)
-		if row["account_id"] != fixture.id {
-			t.Fatal("identity normalized")
+		r := postJSON(t, h, "/balance", fixture.body)
+		requireStatus(t, r, 400)
+		if closedDiagnostic(t, r)["code"] != string(ledger.CodeInput) {
+			t.Fatal("non-SDK identity was normalized or admitted")
 		}
 	}
 }
@@ -143,12 +142,12 @@ func TestFinalClassesAndRouteExclusions(t *testing.T) {
 		body       string
 		authorized bool
 	}{
-		{200, stubLedger{}, `{"account_id":"a"}`, true},
+		{200, stubLedger{}, `{"account_id":"aaaaaaaaaaaaaaa"}`, true},
 		{400, stubLedger{}, `{}`, true},
-		{401, stubLedger{}, `{"account_id":"a"}`, false},
-		{409, stubLedger{err: &ledger.Diagnostic{Code: ledger.CodeInsufficient}}, `{"account_id":"a"}`, true},
-		{410, stubLedger{err: &ledger.Diagnostic{Code: ledger.CodeEvidence}}, `{"account_id":"a"}`, true},
-		{503, stubLedger{err: &ledger.Diagnostic{Code: ledger.CodeCommit, Outcome: "unknown"}}, `{"account_id":"a"}`, true},
+		{401, stubLedger{}, `{"account_id":"aaaaaaaaaaaaaaa"}`, false},
+		{409, stubLedger{err: &ledger.Diagnostic{Code: ledger.CodeInsufficient}}, `{"account_id":"aaaaaaaaaaaaaaa"}`, true},
+		{410, stubLedger{err: &ledger.Diagnostic{Code: ledger.CodeEvidence}}, `{"account_id":"aaaaaaaaaaaaaaa"}`, true},
+		{503, stubLedger{err: &ledger.Diagnostic{Code: ledger.CodeCommit, Outcome: "unknown"}}, `{"account_id":"aaaaaaaaaaaaaaa"}`, true},
 	} {
 		spy := &terminalSpy{}
 		h := observedHandler(t, fixture.service, spy)
@@ -173,17 +172,23 @@ func TestFinalClassesAndRouteExclusions(t *testing.T) {
 	}
 	spy := &terminalSpy{}
 	h := observedHandler(t, stubLedger{}, spy)
+	expected := 0
 	for _, route := range routesAndBodies {
-		request(t, h, "POST", route.path, nil, route.body) // each auth failure counts
-	}
-	if len(spy.classes) != 7 {
-		t.Fatal("custom route not observed exactly once")
+		request(t, h, "POST", route.path, nil, route.body)
+		// Renewal remains outside the approved telemetry population, including
+		// its authentication failures; other custom routes count once.
+		if route.path != "/reservations/renew" {
+			expected++
+		}
+		if len(spy.classes) != expected {
+			t.Fatal("custom route observation differs from its approved population")
+		}
 	}
 	for _, path := range []string{"/healthz", "/balance", "/api/collections", "/_", "/unknown"} {
 		request(t, h, "GET", path, nil, "")
 	}
 	request(t, h, "POST", "/api/collections", nil, "")
-	if len(spy.classes) != 7 {
+	if len(spy.classes) != expected {
 		t.Fatal("non-accounting route observed")
 	}
 }
@@ -235,7 +240,7 @@ func TestUnknownDeliveryAndPanicObservations(t *testing.T) {
 		if mode == "unclassified" {
 			h.routes["/balance"] = func(http.ResponseWriter, *http.Request) {}
 		}
-		req := httptest.NewRequest("POST", "/balance", strings.NewReader(`{"account_id":"a"}`))
+		req := httptest.NewRequest("POST", "/balance", strings.NewReader(`{"account_id":"aaaaaaaaaaaaaaa"}`))
 		req.Header.Set("Authorization", "Bearer "+testKey)
 		req.Header.Set("Content-Type", "application/json")
 		if mode == "cancelled" {
@@ -270,9 +275,9 @@ func TestLocalOnceGuardAndObserverFailureIsolation(t *testing.T) {
 	service := newTestLedger(t)
 	spy = &terminalSpy{panicObserve: true, panicInvalidate: true}
 	h := observedHandler(t, service, spy)
-	provision(t, h, "a")
-	credit(t, h, "a", "10", 1)
-	balance := postJSON(t, h, "/balance", `{"account_id":"a"}`)
+	createAccountFixture(t, h, "aaaaaaaaaaaaaaa")
+	credit(t, h, "aaaaaaaaaaaaaaa", "10", 1)
+	balance := postJSON(t, h, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 	requireStatus(t, balance, 200)
 	if decodeMap(t, balance)["available"] != "10" || spy.invalid != 3 {
 		t.Fatal("observer changed money or result")
@@ -281,10 +286,10 @@ func TestLocalOnceGuardAndObserverFailureIsolation(t *testing.T) {
 	t.Setenv("OTEL_SDK_DISABLED", "true")
 	runtime := telemetry.New(context.Background())
 	h = observedHandler(t, service, runtime)
-	credit(t, h, "a", "5", 2)
+	credit(t, h, "aaaaaaaaaaaaaaa", "5", 2)
 	runtime.Shutdown()
-	credit(t, h, "a", "5", 3)
-	balance = postJSON(t, h, "/balance", `{"account_id":"a"}`)
+	credit(t, h, "aaaaaaaaaaaaaaa", "5", 3)
+	balance = postJSON(t, h, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 	if decodeMap(t, balance)["available"] != "20" {
 		t.Fatal("disabled/shutdown telemetry changed accounting")
 	}
@@ -306,9 +311,9 @@ func TestDeliveryLossAndUnknownCommitNeverInventReceipt(t *testing.T) {
 		service := newTestLedger(t)
 		spy := &terminalSpy{}
 		h := observedHandler(t, service, spy)
-		provision(t, h, "a")
+		createAccountFixture(t, h, "aaaaaaaaaaaaaaa")
 		identity := key(1)
-		body := `{"account_id":"a","amount":"10"}`
+		body := `{"account_id":"aaaaaaaaaaaaaaa","amount":"10"}`
 		headers := authHeaders("application/json")
 		headers["Idempotency-Key"] = identity
 		if mode == "unknown_commit" {
@@ -336,9 +341,9 @@ func TestDeliveryLossAndUnknownCommitNeverInventReceipt(t *testing.T) {
 		if original.Body.String() != duplicate.Body.String() {
 			t.Fatal("retry changed original result")
 		}
-		altered := request(t, h, "POST", "/credits", headers, `{"account_id":"a","amount":"11"}`)
+		altered := request(t, h, "POST", "/credits", headers, `{"account_id":"aaaaaaaaaaaaaaa","amount":"11"}`)
 		requireStatus(t, altered, 409)
-		balance := postJSON(t, h, "/balance", `{"account_id":"a"}`)
+		balance := postJSON(t, h, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		if decodeMap(t, balance)["available"] != "10" {
 			t.Fatal("retry/conflict duplicated money")
 		}

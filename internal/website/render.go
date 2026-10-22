@@ -6,14 +6,15 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"strings"
 
 	"possums-intake/internal/failuretype"
 	"possums-intake/internal/ledger"
 )
 
 type renderNode struct {
-	Kind, Text, Target, CSRF, Revision, Notice string
-	Children                                   []renderNode
+	Kind, Text, Target, CSRF, Revision, Notice, Attempt string
+	Children                                            []renderNode
 }
 type documentData struct {
 	Title, CSS string
@@ -26,6 +27,7 @@ var documentTemplate = template.Must(template.New("document").Parse(`<!doctype h
 {{define "node" -}}
 {{- if eq .Kind "main" -}}<main id="main" tabindex="-1">{{range .Children}}{{template "node" .}}{{end}}</main>
 {{- else if eq .Kind "group" -}}{{range .Children}}{{template "node" .}}{{end}}
+{{- else if eq .Kind "details" -}}<details><summary>{{.Text}}</summary>{{range .Children}}{{template "node" .}}{{end}}</details>
 {{- else if eq .Kind "text" -}}{{.Text}}
 {{- else if eq .Kind "h1" -}}<h1>{{.Text}}</h1>
 {{- else if eq .Kind "p" -}}<p>{{.Text}}</p>
@@ -33,6 +35,7 @@ var documentTemplate = template.Must(template.New("document").Parse(`<!doctype h
 {{- else if eq .Kind "link" -}}<a href="{{.Target}}">{{.Text}}</a>
 {{- else if eq .Kind "notice" -}}{{if .Notice}}<span id="form-error" role="alert">{{.Notice}}</span>{{.Text}}{{end}}
 {{- else if eq .Kind "login-form" -}}<form method="post" action="{{.Target}}"{{if .Notice}} aria-describedby="form-error"{{end}}><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}"><label for="key">Key:</label> <input id="key" type="password" name="key" autocomplete="current-password" maxlength="255" size="28" required> <button type="submit">Sign in</button></form>
+{{- else if eq .Kind "topup-form" -}}<form method="post" action="/topup/start"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}"><input type="hidden" name="attempt" value="{{.Attempt}}"><button type="submit" name="denomination" value="usd5">$5.00</button> <button type="submit" name="denomination" value="usd10">$10.00</button> <button type="submit" name="denomination" value="usd25">$25.00</button> <button type="submit" name="denomination" value="usd50">$50.00</button></form>
 {{- else if eq .Kind "post-form" -}}<form method="post" action="{{.Target}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}"><button type="submit">{{.Text}}</button></form>
 {{- end -}}
 {{- end -}}`))
@@ -57,7 +60,26 @@ func (b *documentBuffer) Write(p []byte) (int, error) {
 // Render completes and bounds the document before any response bytes are sent.
 // No template.HTML, raw markup, arbitrary attributes or runtime source enters it.
 func (r *Revision) Render(page Node, csrf, notice string) ([]byte, error) {
-	if r == nil || len(csrf) > 1024 || len(notice) > 1024 || page.Kind != "document" || len(page.Children) != 1 {
+	return r.render(page, csrf, notice, hostBindings{})
+}
+
+// Host bindings contain presentation inputs only. Only the GET /topup handler
+// grants the form binding; a Lisp slot cannot grant a backend capability.
+type hostBindings struct {
+	paymentsEnabled, formEnabled bool
+	attempt                      string
+}
+
+func validAttempt(attempt string) bool {
+	return len(attempt) == 64 && strings.IndexFunc(attempt, func(c rune) bool {
+		return (c < '0' || c > '9') && (c < 'a' || c > 'f')
+	}) == -1
+}
+
+func (r *Revision) render(page Node, csrf, notice string, bindings hostBindings) ([]byte, error) {
+	if r == nil || len(csrf) > 1024 || len(notice) > 1024 || page.Kind != "document" || len(page.Children) != 1 ||
+		(bindings.formEnabled && (!bindings.paymentsEnabled || !validAttempt(bindings.attempt) || !validAttempt(r.Digest) || csrf == "")) ||
+		(!bindings.formEnabled && bindings.attempt != "") {
 		return nil, documentRenderFault()
 	}
 	count, text := 1, len(page.Text)
@@ -74,6 +96,15 @@ func (r *Revision) Render(page Node, csrf, notice string) ([]byte, error) {
 				return renderNode{}, false
 			}
 		case "group":
+		case "details":
+			if len(n.Children) != 1 || n.Target != "" || n.Children[0].Kind == "main" || n.Children[0].Kind == "document" {
+				return renderNode{}, false
+			}
+		case "host":
+			if n.Text != "" || len(n.Children) != 0 {
+				return renderNode{}, false
+			}
+			return r.bindHost(n.Target, csrf, bindings)
 		case "h1", "p", "text", "notice", "tooltip":
 			if len(n.Children) != 0 {
 				return renderNode{}, false
@@ -112,6 +143,39 @@ func (r *Revision) Render(page Node, csrf, notice string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+// bindHost is a closed renderer mapping, not a callback registry or raw HTML.
+func (r *Revision) bindHost(name, csrf string, bindings hostBindings) (renderNode, bool) {
+	switch name {
+	case "topup-form":
+		if bindings.formEnabled {
+			return renderNode{Kind: "topup-form", CSRF: csrf, Revision: r.Digest, Attempt: bindings.attempt}, true
+		}
+		return renderNode{}, true
+	case "topup-link", "topup-status-link":
+		if !bindings.paymentsEnabled {
+			return renderNode{}, true
+		}
+		if name == "topup-link" {
+			return renderNode{Kind: "link", Target: "/topup", Text: "Add credit"}, true
+		}
+		return renderNode{Kind: "link", Target: "/topup/status", Text: "Check payment status"}, true
+	case "account-link":
+		for _, route := range r.Routes {
+			if route.Action != "auth/login" {
+				continue
+			}
+			account, ok := r.Named(route.Success)
+			if !ok || account.Method != "GET" || account.Policy != "session" {
+				return renderNode{}, false
+			}
+			return renderNode{Kind: "link", Target: account.Path, Text: "Account"}, true
+		}
+		return renderNode{}, false
+	default:
+		return renderNode{}, false
+	}
+}
+
 // CSSPath addresses the complete generated bytes, including host scaffold.
 func (r *Revision) CSSPath() string {
 	return cssPath(r.CSS())
@@ -125,6 +189,6 @@ func (r *Revision) CSS() string {
 	return fmt.Sprintf(`@font-face{font-family:Iosevka;src:url('/_site/fonts/iosevka-term-regular.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:Iosevka;src:url('/_site/fonts/iosevka-term-bold.woff2') format('woff2');font-weight:700;font-style:normal;font-display:swap}
 :root{color:%s;background:%s;font-family:Iosevka,monospace;font-size:1rem;line-height:1.5;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0;padding:0;padding-inline-start:1rem;padding-block-start:1rem}main{white-space:pre-wrap;tab-size:8;overflow-wrap:break-word}h1,h2,p,form{display:inline;font:inherit;margin:0;padding:0}h1,h2{font-weight:700}.face-tooltip{font-style:italic;font-synthesis:style}a,button{color:%s}a{text-decoration:underline;text-underline-offset:.2em}label{display:inline}input,button{font:inherit;line-height:1.2;background:transparent;border:1px solid transparent;border-radius:0;margin:0;padding:0;vertical-align:baseline}input{color:inherit;background:color-mix(in srgb,currentColor 10%%,transparent);border-color:transparent}input:focus{border-color:%s;outline:none}input:not([type=hidden]){display:inline-block;width:28ch;max-width:100%%;min-width:0}button{font-weight:700;border-color:currentColor;cursor:pointer}a:hover,button:hover,a:focus-visible,button:focus-visible{color:%s;background:%s}button:hover,button:focus-visible{border-color:transparent}a:focus-visible,button:focus-visible,main:focus-visible{outline:2px solid %s;outline-offset:1px}.skip{position:absolute;left:-10000px}.skip:focus{position:static}#form-error{font-weight:700}@media(forced-colors:active){a,button{color:LinkText}button{border-color:ButtonText}input{color:FieldText;background:Field;border-color:transparent}input:focus{border-color:Highlight;outline:2px solid Highlight;outline-offset:1px}a:hover,button:hover,a:focus-visible,button:focus-visible{color:HighlightText;background:Highlight}:focus-visible{outline-color:Highlight}}
+*{box-sizing:border-box}body{margin:0;padding:0;padding-inline-start:1rem;padding-block-start:1rem}main{white-space:pre-wrap;tab-size:8;overflow-wrap:break-word}h1,h2,p,form{display:inline;font:inherit;margin:0;padding:0}details,summary{font:inherit;margin:0;padding:0}summary{cursor:pointer}h1,h2{font-weight:700}.face-tooltip{font-style:italic;font-synthesis:style}a,button{color:%s}a{text-decoration:underline;text-underline-offset:.2em}label{display:inline}input,button{font:inherit;line-height:1.2;background:transparent;border:1px solid transparent;border-radius:0;margin:0;padding:0;vertical-align:baseline}input{color:inherit;background:color-mix(in srgb,currentColor 10%%,transparent);border-color:transparent}input:focus{border-color:%s;outline:none}input:not([type=hidden]){display:inline-block;width:28ch;max-width:100%%;min-width:0}button{font-weight:700;border-color:currentColor;cursor:pointer}a:hover,button:hover,a:focus-visible,button:focus-visible{color:%s;background:%s}button:hover,button:focus-visible{border-color:transparent}a:focus-visible,button:focus-visible,main:focus-visible{outline:2px solid %s;outline-offset:1px}.skip{position:absolute;left:-10000px}.skip:focus{position:static}#form-error{font-weight:700;color:#b91c1c}@media(forced-colors:active){a,button{color:LinkText}button{border-color:ButtonText}input{color:FieldText;background:Field;border-color:transparent}input:focus{border-color:Highlight;outline:2px solid Highlight;outline-offset:1px}a:hover,button:hover,a:focus-visible,button:focus-visible{color:HighlightText;background:Highlight}:focus-visible{outline-color:Highlight}}
 `, r.Style.Ink, r.Style.Paper, r.Style.Link, r.Style.Border, r.Style.Paper, r.Style.Link, r.Style.Link)
 }

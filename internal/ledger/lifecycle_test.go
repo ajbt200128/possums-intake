@@ -12,7 +12,7 @@ import (
 
 func TestCloseWaitsForCommitAndTriggersCoreTermination(t *testing.T) {
 	s, dir, now := testService(t)
-	fund(t, s, "a", "100", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
 	original := s.app
 	reached, release := make(chan struct{}), make(chan struct{})
 	s.app = stalledCompletion{original, reached, release}
@@ -23,7 +23,7 @@ func TestCloseWaitsForCommitAndTriggersCoreTermination(t *testing.T) {
 	}})
 	defer s.app.OnTerminate().UnbindAll()
 	committed := make(chan error, 1)
-	input := CreditInput{"a", "5", key(now, 2)}
+	input := CreditInput{"aaaaaaaaaaaaaaa", "5", key(now, 2)}
 	go func() { _, err := s.Credit(context.Background(), input); committed <- err }()
 	<-reached
 	closed := make(chan error, 1)
@@ -41,7 +41,7 @@ func TestCloseWaitsForCommitAndTriggersCoreTermination(t *testing.T) {
 		close(release)
 		t.Fatal("shutdown left readiness true")
 	}
-	_, err := s.Provision(background, "after-close")
+	_, err := s.Balance(background, "afterclose00000")
 	codeIs(t, err, CodeClosed)
 	close(release)
 	if err := <-committed; err != nil {
@@ -59,7 +59,7 @@ func TestCloseWaitsForCommitAndTriggersCoreTermination(t *testing.T) {
 	must(t, reopened, err)
 	defer reopened.Close()
 	credit, err := reopened.Credit(background, input)
-	if must(t, credit, err).BalanceAfter != "105" || balance(t, reopened, "a").AccountBalance.Balance != "105" {
+	if must(t, credit, err).BalanceAfter != "105" || balance(t, reopened, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "105" {
 		t.Fatal("joined restart duplicated or lost committed credit")
 	}
 }
@@ -78,6 +78,6 @@ func TestTerminationFailureIsClosedAndDoesNotReopenAccounting(t *testing.T) {
 	if s.Ready() || Failure(err).Stage != "shutdown" || Failure(err).Outcome != "unavailable" {
 		t.Fatal("termination failure changed lifecycle evidence")
 	}
-	_, err = s.Provision(background, "not-open")
+	_, err = s.Balance(background, "notopen00000000")
 	codeIs(t, err, CodeClosed)
 }

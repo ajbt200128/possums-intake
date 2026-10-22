@@ -15,7 +15,9 @@ import (
 // Extensions never become accounting inputs, persisted state or response fields.
 func TestAdditiveAccountingCompatibilityOnActualHTTP(t *testing.T) {
 	service := newTestLedger(t)
-	server := httptest.NewServer(newTestHandler(t, service, nil))
+	handler := newTestHandler(t, service, nil)
+	createAccountFixture(t, handler, "aaaaaaaaaaaaaaa")
+	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := &http.Client{Timeout: 5 * time.Second}
 	call := func(path, body, idempotency string, variant int) map[string]any {
@@ -52,15 +54,15 @@ func TestAdditiveAccountingCompatibilityOnActualHTTP(t *testing.T) {
 		}
 		return result
 	}
-	account := `{"account_id":"opaque\u0000account\n"}`
-	call("/accounts/provision", account, "", 0)
-	creditBody := `{"account_id":"opaque\u0000account\n","amount":"100"}`
+	account := `{"account_id":"aaaaaaaaaaaaaaa"}`
+	call("/balance", account, "", 0)
+	creditBody := `{"account_id":"aaaaaaaaaaaaaaa","amount":"100"}`
 	creditKey := key(101)
 	firstCredit := call("/credits", creditBody, creditKey, 0)
 	if !reflect.DeepEqual(firstCredit, call("/credits", creditBody, creditKey, 1)) {
 		t.Fatal("ignored extensions changed credit idempotency")
 	}
-	reserveBody := `{"account_id":"opaque\u0000account\n","maximum":"20","timeout_seconds":600}`
+	reserveBody := `{"account_id":"aaaaaaaaaaaaaaa","maximum":"20","timeout_seconds":600}`
 	reserveKey := key(102)
 	reservation := call("/reservations", reserveBody, reserveKey, 0)
 	if !reflect.DeepEqual(reservation, call("/reservations", reserveBody, reserveKey, 1)) {
@@ -80,7 +82,7 @@ func TestAdditiveAccountingCompatibilityOnActualHTTP(t *testing.T) {
 		t.Fatal("ignored fields affected money or holds")
 	}
 	accountRow := balance["account_balance"].([]any)[0].(map[string]any)
-	if accountRow["account_id"] != "opaque\x00account\n" {
+	if accountRow["account_id"] != "aaaaaaaaaaaaaaa" {
 		t.Fatal("gateway-compatible identity changed")
 	}
 }

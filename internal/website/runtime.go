@@ -25,9 +25,10 @@ const maxTextBytes = lispsite.MaxTextBytes
 
 func intakePolicy() lispsite.Policy {
 	return lispsite.Policy{
-		ReservedPaths:    []string{"/healthz", "/accounts/provision", "/credits", "/reservations", "/balance", "/attestation"},
+		ReservedPaths:    []string{"/healthz", "/accounts/provision", "/credits", "/reservations", "/balance", "/attestation", "/topup", "/payments"},
 		ReservedPrefixes: []string{"/api", "/_"},
 		AllowedActions:   []lispsite.Action{{Name: "auth/login", Form: "login-form"}, {Name: "auth/logout", Form: "post-form"}},
+		HostComponents:   []string{"topup-form", "topup-link", "topup-status-link", "account-link"},
 	}
 }
 
@@ -129,6 +130,11 @@ func coreDiagnostic(cause error) (*ledger.Diagnostic, bool) {
 		valid = d.Stage == "page_evaluation" && d.Constraint == "declared_presentation_capability" && d.Category == lispsite.Refused
 	case "PAGE_VIEW_REFUSED":
 		valid = d.Stage == "page_evaluation" && d.Constraint == "bounded_string_view" && d.Category == lispsite.Refused
+	case "PAGE_TEXT_LIMIT":
+		valid = d.Stage == "page_evaluation" && d.Constraint == "complete_page_text_budget" && d.Category == lispsite.Refused
+		if valid {
+			return fault("SITE_PAGE_TEXT_LIMIT", d.Stage, d.Constraint, "The complete page exceeds presentation limits. Ask the operator to inspect the page privately; no data was truncated or action replayed.", kind), true
+		}
 	case "EXECUTION_LIMIT":
 		valid = (d.Constraint == "step_budget" || d.Constraint == "evaluation_nesting") && d.Category == lispsite.Refused
 	case "EXECUTION_INTERRUPTED":

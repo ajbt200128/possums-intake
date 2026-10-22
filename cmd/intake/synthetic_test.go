@@ -170,16 +170,16 @@ func TestSyntheticCompiledCLI(t *testing.T) {
 			if status != 200 || json.Unmarshal(fields["token"], &token) != nil || token == "" {
 				t.Fatal("SYNTHETIC_LOGIN_FAILED stage=native_auth")
 			}
-			if status, _ = rpc(t, p, "/balance", `{"account_id":"synthetic-native"}`, token, ""); status != 401 {
+			if status, _ = rpc(t, p, "/balance", `{"account_id":"syntheticnative"}`, token, ""); status != 401 {
 				t.Fatal("SYNTHETIC_AUTH_SEPARATION_FAILED stage=accounting_auth")
 			}
-			if status, _ = rpc(t, p, "/api/collections/ledger_accounts/records", `{"account_id":"synthetic-native","balance":"0","enabled":true}`, syntheticAdminKey, ""); status != 401 && status != 403 {
+			if status, _ = rpc(t, p, "/api/collections/accounts/records", `{"id":"syntheticnative","balance":"0","enabled":true,"password":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","passwordConfirm":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`, syntheticAdminKey, ""); status != 401 && status != 403 {
 				t.Fatal("SYNTHETIC_AUTH_SEPARATION_FAILED stage=native_auth")
 			}
-			if status, _ = rpc(t, p, "/api/collections/ledger_accounts/records", `{"account_id":"synthetic-native","balance":"0","enabled":true}`, token, ""); status != 200 {
+			if status, _ = rpc(t, p, "/api/collections/accounts/records", `{"id":"syntheticnative","balance":"0","enabled":true,"password":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","passwordConfirm":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`, token, ""); status != 200 {
 				t.Fatal("SYNTHETIC_ACCOUNT_CREATE_FAILED stage=native_mutation")
 			}
-			if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"synthetic-native"}`, "")) != "0" {
+			if accountTotal(t, successRPC(t, p, "/balance", `{"account_id":"syntheticnative"}`, "")) != "0" {
 				t.Fatal("SYNTHETIC_SEED_CREDIT_FAILED stage=balance")
 			}
 			response, err := client.Get(p.base + "/_/")

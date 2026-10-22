@@ -134,6 +134,9 @@ func websiteRequest(t *testing.T, client *http.Client, base, method, path string
 }
 
 func TestWebsiteLocalCompiledCLI(t *testing.T) {
+	// Presence of sandbox inputs must never activate payments in the old mode.
+	t.Setenv("STRIPE_API_KEY", sandboxLocalTestKey)
+	t.Setenv("STRIPE_WEBHOOK_SECRET", sandboxLocalTestSecret)
 	binary := filepath.Join(t.TempDir(), "intake")
 	if exec.Command("go", "build", "-o", binary, ".").Run() != nil {
 		t.Fatal("SITE_TEST_COMPILED_BUILD")
@@ -226,6 +229,10 @@ func TestWebsiteLocalCompiledCLI(t *testing.T) {
 		r, markup = websiteRequest(t, client, p.base, "GET", "/home", nil)
 		if r.StatusCode != 200 || !strings.Contains(markup, "You are signed in.") {
 			t.Fatal("SITE_TEST_SIGNED_HOME")
+		}
+		r, _ = websiteRequest(t, client, p.base, "GET", "/topup", nil)
+		if r.StatusCode != 404 {
+			t.Fatal("SITE_TEST_OLD_MODE_PAYMENTS_ENABLED")
 		}
 		form = url.Values{"csrf_token": {websiteHidden(t, markup, "csrf_token")}, "revision": {websiteHidden(t, markup, "revision")}}
 		r, _ = websiteRequest(t, client, p.base, "POST", "/logout", form)

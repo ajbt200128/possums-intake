@@ -71,10 +71,10 @@ func TestSchemaDriftRejectedAndMigrationRollback(t *testing.T) {
 	}
 	defer app.ClearBootstrap()
 	partial := newService(app)
-	if e := partial.run(background, func(tx *transaction) error { return tx.exec("CREATE TABLE ledger_accounts (account_id TEXT)", nil) }, false); e != nil {
+	if e := partial.run(background, func(tx *transaction) error { return tx.exec("CREATE TABLE accounts (account_id TEXT)", nil) }, false); e != nil {
 		t.Fatal("fixture table failed")
 	}
-	e = partial.run(background, migrateV1, false)
+	e = partial.run(background, initializeSchema, false)
 	codeIs(t, e, CodeSchema)
 	var count int
 	if e := app.DB().NewQuery("SELECT count(*) FROM sqlite_schema WHERE name='ledger_meta'").Row(&count); e != nil || count != 0 {
@@ -83,7 +83,7 @@ func TestSchemaDriftRejectedAndMigrationRollback(t *testing.T) {
 }
 func TestConnectionPragmasAndForeignKeys(t *testing.T) {
 	s, _, now := testService(t)
-	fund(t, s, "a", "10", now)
+	fund(t, s, "aaaaaaaaaaaaaaa", "10", now)
 	// Hold all four physical read connections simultaneously; closing/reopening
 	// the pool verifies DSN pragmas apply to NEW connections, not only bootstrap.
 	pool := s.app.ConcurrentDB().(*dbx.DB).DB()
@@ -111,22 +111,22 @@ func TestConnectionPragmasAndForeignKeys(t *testing.T) {
 		pool.SetMaxIdleConns(0)
 		pool.SetMaxIdleConns(4)
 	}
-	r := reserve(t, s, ReserveInput{"a", "1", 600, key(now, 2)})
+	r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "1", 600, key(now, 2)})
 	for _, statement := range []string{
-		"DELETE FROM ledger_accounts WHERE account_id='a'",
-		"INSERT INTO ledger_credits(idempotency_key,account_id,amount,balance_after,committed_at,retain_until) VALUES('synthetic','missing','1','1',1,2)",
-		"UPDATE ledger_reservations SET state='expired' WHERE account_id='a'",
+		"DELETE FROM accounts WHERE id='aaaaaaaaaaaaaaa'",
+		"INSERT INTO ledger_credits(idempotency_key,account_id,amount,balance_after,committed_at,retain_until) VALUES('synthetic000000','missing','1','1',1,2)",
+		"UPDATE ledger_reservations SET state='expired' WHERE account_id='aaaaaaaaaaaaaaa'",
 	} {
 		e := s.run(background, func(tx *transaction) error { return tx.exec(statement, nil) }, true)
 		codeIs(t, e, CodeStorage)
 	}
-	b := balance(t, s, "a")
+	b := balance(t, s, "aaaaaaaaaaaaaaa")
 	if b.AccountBalance.Balance != "10" || len(b.PendingReservations) != 1 || b.PendingReservations[0].ReservationID != r.ReservationID {
 		t.Fatal("constraint violation changed state")
 	}
 	var numeric string
 	if e := s.run(background, func(tx *transaction) error {
-		return tx.query("SELECT typeof(balance) FROM ledger_accounts WHERE account_id='a'", nil).Row(&numeric)
+		return tx.query("SELECT typeof(balance) FROM accounts WHERE id='aaaaaaaaaaaaaaa'", nil).Row(&numeric)
 	}, true); e != nil || numeric != "text" {
 		t.Fatal("money stored as SQLite numeric")
 	}
@@ -135,13 +135,13 @@ func TestCorruptStateFailsClosedWithoutRepair(t *testing.T) {
 	for _, value := range []string{"18446744073709551616", "01", "-1"} {
 		t.Run(value, func(t *testing.T) {
 			s, dir, now := testService(t)
-			fund(t, s, "a", "10", now)
-			r := reserve(t, s, ReserveInput{"a", "5", 1, key(now, 2)})
+			fund(t, s, "aaaaaaaaaaaaaaa", "10", now)
+			r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "5", 1, key(now, 2)})
 			if e := s.run(background, func(tx *transaction) error {
 				if e := tx.exec("PRAGMA ignore_check_constraints=ON", nil); e != nil {
 					return e
 				}
-				if e := tx.exec("UPDATE ledger_accounts SET balance={:value} WHERE account_id='a'", dbx.Params{"value": value}); e != nil {
+				if e := tx.exec("UPDATE accounts SET balance={:value} WHERE id='aaaaaaaaaaaaaaa'", dbx.Params{"value": value}); e != nil {
 					return e
 				}
 				return tx.exec("PRAGMA ignore_check_constraints=OFF", nil)
@@ -149,7 +149,7 @@ func TestCorruptStateFailsClosedWithoutRepair(t *testing.T) {
 				t.Fatal("synthetic corruption fixture failed")
 			}
 			advance(t, s, int64(r.ExpiresAt))
-			_, e := s.Balance(background, "a")
+			_, e := s.Balance(background, "aaaaaaaaaaaaaaa")
 			codeIs(t, e, CodeCorrupt)
 			if s.Ready() {
 				t.Fatal("corrupt state remained ready")
@@ -170,10 +170,10 @@ func TestCorruptStateFailsClosedWithoutRepair(t *testing.T) {
 	}
 	// Canonical amounts alone do not establish a possible total/hold sum.
 	s, _, now := testService(t)
-	fund(t, s, "a", "10", now)
-	r := reserve(t, s, ReserveInput{"a", "8", 1, key(now, 2)})
+	fund(t, s, "aaaaaaaaaaaaaaa", "10", now)
+	r := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "8", 1, key(now, 2)})
 	if e := s.run(background, func(tx *transaction) error {
-		return tx.exec("UPDATE ledger_accounts SET balance='7' WHERE account_id='a'", nil)
+		return tx.exec("UPDATE accounts SET balance='7' WHERE id='aaaaaaaaaaaaaaa'", nil)
 	}, false); e != nil {
 		t.Fatal("fixture mutation failed")
 	}
@@ -183,19 +183,19 @@ func TestCorruptStateFailsClosedWithoutRepair(t *testing.T) {
 }
 func TestRestartPreservesAcknowledgedBalancesActiveAndTerminal(t *testing.T) {
 	s, dir, now := testService(t)
-	fund(t, s, "a", "100", now)
-	first := reserve(t, s, ReserveInput{"a", "30", 600, key(now, 2)})
+	fund(t, s, "aaaaaaaaaaaaaaa", "100", now)
+	first := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "30", 600, key(now, 2)})
 	terminal, e := s.Settle(background, SettleInput{first.ReservationID, "17"})
 	must(t, terminal, e)
-	active := reserve(t, s, ReserveInput{"a", "20", 600, key(now, 3)})
-	before := balance(t, s, "a")
+	active := reserve(t, s, ReserveInput{"aaaaaaaaaaaaaaa", "20", 600, key(now, 3)})
+	before := balance(t, s, "aaaaaaaaaaaaaaa")
 	if e := s.Close(); e != nil {
 		t.Fatal("close failed")
 	}
 	reopened, e := Open(background, dir)
 	must(t, reopened, e)
 	defer reopened.Close()
-	after := balance(t, reopened, "a")
+	after := balance(t, reopened, "aaaaaaaaaaaaaaa")
 	if before.AccountBalance != after.AccountBalance || after.Available != "63" || len(after.PendingReservations) != 1 || after.PendingReservations[0].ReservationID != active.ReservationID {
 		t.Fatal("restart lost acknowledged state")
 	}
@@ -206,7 +206,7 @@ func TestRestartPreservesAcknowledgedBalancesActiveAndTerminal(t *testing.T) {
 	}
 	row, e = reopened.Settle(background, SettleInput{terminal.ReservationID, "30"})
 	must(t, row, e)
-	if *row.ChargedAmount != "17" || balance(t, reopened, "a").AccountBalance.Balance != "83" {
+	if *row.ChargedAmount != "17" || balance(t, reopened, "aaaaaaaaaaaaaaa").AccountBalance.Balance != "83" {
 		t.Fatal("restart duplicate charged again")
 	}
 }
@@ -217,7 +217,7 @@ func TestOnlyAccountCollectionNoSuperusersOrActivityLogs(t *testing.T) {
 		if e := tx.query("SELECT count(*) FROM _superusers", nil).Row(&superusers); e != nil {
 			return e
 		}
-		return tx.query("SELECT count(*) FROM _collections WHERE name LIKE 'ledger_%'", nil).Row(&collections)
+		return tx.query("SELECT count(*) FROM _collections WHERE name='accounts'", nil).Row(&collections)
 	}, true); e != nil || superusers != 0 || collections != 1 {
 		t.Fatal("bootstrap account collection or superuser policy differs")
 	}

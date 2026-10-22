@@ -26,7 +26,7 @@ func TestHTTPPrimarySubcontextInterruptionAndDeliveryAreDistinct(t *testing.T) {
 	for _, budgetDeadline := range []bool{false, true} {
 		t.Run(fmt.Sprintf("work_budget_deadline_%t", budgetDeadline), func(t *testing.T) {
 			s := newTestLedger(t)
-			provision(t, newTestHandler(t, s, nil), "a")
+			createAccountFixture(t, newTestHandler(t, s, nil), "aaaaaaaaaaaaaaa")
 			var accounting ledger.Accounting = subcontextCancellationAccounting{s}
 			cause := context.Canceled
 			if budgetDeadline {
@@ -34,7 +34,7 @@ func TestHTTPPrimarySubcontextInterruptionAndDeliveryAreDistinct(t *testing.T) {
 				accounting = s
 				cause = context.DeadlineExceeded
 			}
-			r := failureRequest("/balance", `{"account_id":"a"}`)
+			r := failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 			spy := &failureSpy{}
 			w := &deliveryFaultWriter{failedWriter: failedWriter{header: http.Header{}}, err: cause}
 			observedHandler(t, accounting, spy).ServeHTTP(w, r)
@@ -56,7 +56,7 @@ func TestHTTPFakePrimaryInterruptionWithoutCallerProofCountsDistinctDelivery(t *
 			if cancelDuringWrite {
 				w.cancel = cancel
 			}
-			observedHandler(t, stubLedger{err: cause}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`).WithContext(ctx))
+			observedHandler(t, stubLedger{err: cause}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`).WithContext(ctx))
 			cancel()
 			kind := ledger.FailureKind(cause, 0)
 			requireFailureCounts(t, spy, kind, kind)
@@ -75,7 +75,7 @@ func TestHTTPActualCallerInterruptionAndConsequentTypedDeliveryCountOnce(t *test
 		cancel()
 		spy := &failureSpy{}
 		w := &deliveryFaultWriter{failedWriter: failedWriter{header: http.Header{}}, err: fmt.Errorf("SYNTHETIC_PRIVATE_SENTINEL: %w", cause)}
-		observedHandler(t, s, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`).WithContext(ctx))
+		observedHandler(t, s, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`).WithContext(ctx))
 		requireFailureCounts(t, spy, ledger.FailureKind(cause, 0))
 		if spy.classes[0] != telemetry.Unknown || !s.Ready() {
 			t.Fatal("caller interruption inferred receipt or changed readiness")
@@ -151,14 +151,14 @@ func (s postRunCancellationAccounting) Balance(ctx context.Context, id string) (
 
 func TestHTTPPostRunInterruptionCannotSupplyPrimaryRequestProof(t *testing.T) {
 	s := newTestLedger(t)
-	provision(t, newTestHandler(t, s, nil), "a")
+	createAccountFixture(t, newTestHandler(t, s, nil), "aaaaaaaaaaaaaaa")
 	injectHTTPCompletionFaultApp(t, s, httpCompletionApp{count: 1, cause: context.Canceled})
 	ctx, cancel := context.WithCancel(testContext)
 	defer cancel()
 	spy := &failureSpy{}
 	w := &deliveryFaultWriter{failedWriter: failedWriter{header: http.Header{}}, err: context.Canceled}
 	accounting := postRunCancellationAccounting{Accounting: s, cancel: cancel}
-	observedHandler(t, accounting, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`).WithContext(ctx))
+	observedHandler(t, accounting, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`).WithContext(ctx))
 	requireFailureCounts(t, spy, failuretype.Cancelled, failuretype.Cancelled, failuretype.Cancelled)
 }
 
@@ -183,7 +183,7 @@ func TestHTTPSecondaryCompletionInterruptionAndDeliveryAreDistinct(t *testing.T)
 		for _, cancelDuringWrite := range []bool{false, true} {
 			t.Run(fmt.Sprintf("category_%d_cancel_during_write_%t", ledger.FailureKind(cause, 0), cancelDuringWrite), func(t *testing.T) {
 				s := newTestLedger(t)
-				provision(t, newTestHandler(t, s, nil), "a")
+				createAccountFixture(t, newTestHandler(t, s, nil), "aaaaaaaaaaaaaaa")
 				injectHTTPCompletionFaultApp(t, s, httpCompletionApp{count: 1, cause: cause})
 				ctx, cancel := context.WithCancel(testContext)
 				defer cancel()
@@ -193,7 +193,7 @@ func TestHTTPSecondaryCompletionInterruptionAndDeliveryAreDistinct(t *testing.T)
 				}
 				spy := &failureSpy{}
 				identity := key(1)
-				r := failureRequest("/credits", `{"account_id":"a","amount":"10"}`).WithContext(ctx)
+				r := failureRequest("/credits", `{"account_id":"aaaaaaaaaaaaaaa","amount":"10"}`).WithContext(ctx)
 				r.Header.Set("Idempotency-Key", identity)
 				observedHandler(t, s, spy).ServeHTTP(w, r)
 				kind := ledger.FailureKind(cause, 0)
@@ -201,8 +201,8 @@ func TestHTTPSecondaryCompletionInterruptionAndDeliveryAreDistinct(t *testing.T)
 				if (!cancelDuringWrite && ctx.Err() != nil) || spy.classes[0] != telemetry.Unknown {
 					t.Fatal("independent writer failure changed caller state or inferred receipt")
 				}
-				row, err := s.Credit(testContext, ledger.CreditInput{AccountID: "a", Amount: "10", IdempotencyKey: identity})
-				balance, balanceErr := s.Balance(testContext, "a")
+				row, err := s.Credit(testContext, ledger.CreditInput{AccountID: "aaaaaaaaaaaaaaa", Amount: "10", IdempotencyKey: identity})
+				balance, balanceErr := s.Balance(testContext, "aaaaaaaaaaaaaaa")
 				if err != nil || balanceErr != nil || row.IdempotencyKey != identity || row.BalanceAfter != "10" || balance.Available != "10" || !s.Ready() {
 					t.Fatal("hook and writer faults erased or duplicated committed credit")
 				}

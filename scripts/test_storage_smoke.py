@@ -89,7 +89,7 @@ class StorageFixtureTests(unittest.TestCase):
         refunded = {"reservation_id": "r"}
         short = {"reservation_id": "b", "expires_at": "2099-01-01T00:00:00.000Z"}
         reader = mock.Mock()
-        snapshot = {"account_balance": [{"account_id": "synthetic-storage", "balance": "97", "enabled": True}],
+        snapshot = {"account_balance": [{"account_id": "storagefixture1", "balance": "97", "enabled": True}],
                     "pending_reservations": [active], "available": "87"}
         with mock.patch.object(fixture, "prepare", return_value=("key", {})), \
                 mock.patch.object(fixture.sqlite3, "connect", return_value=reader), \
@@ -98,7 +98,7 @@ class StorageFixtureTests(unittest.TestCase):
                 mock.patch.object(fixture, "snapshot", return_value=snapshot), \
                 mock.patch.object(fixture, "crash") as crash:
             with self.assertRaises(smoke.SmokeError) as caught:
-                fixture.crash_and_expiry(SimpleNamespace(state="/synthetic-unused"))
+                fixture.crash_and_expiry(SimpleNamespace(state="/synthetic-unused", accounts=["storagefixture1"]))
             self.assertEqual(caught.exception.constraint, "both_holds_still_active")
             crash.assert_not_called()
             reader.close.assert_called_once()

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"possums-intake/internal/ledger"
 )
@@ -14,7 +16,7 @@ func snapshotFixture(account string) ledger.BalanceSnapshot {
 	return ledger.BalanceSnapshot{
 		AccountBalance:      ledger.Account{AccountID: account, Balance: "18446744073709551615", Enabled: false},
 		Available:           "17",
-		PendingReservations: []ledger.Reservation{{ReservationID: strings.Repeat("a", 32), IdempotencyKey: "synthetic-key", AccountID: account, Maximum: "2", TimeoutSeconds: 60, ExpiresAt: 2000000000000, State: ledger.Active}},
+		PendingReservations: []ledger.Reservation{{ReservationID: strings.Repeat("a", 32), IdempotencyKey: "synthetic-key", AccountID: account, Maximum: "2", TimeoutSeconds: 60, InitialExpiresAt: 1999999940000, ExpiresAt: 2000000000000, State: ledger.Active}},
 	}
 }
 
@@ -22,25 +24,32 @@ func TestAccountSnapshotCompleteExactAndEscaped(t *testing.T) {
 	account := "row\n\t\x00雪\u202e"
 	snapshot := snapshotFixture(account)
 	view, err := snapshotView(account, snapshot)
-	if err != nil || len(view) != 1 {
+	if err != nil || len(view) != 3 || view["balance-usd"] != "$18446744073709.551615" || view["available-usd"] != "$0.000017" {
 		t.Fatal("complete snapshot view unavailable")
 	}
 	text := view[accountViewKey]
-	for _, expected := range []string{`Account: "row\n\t\x00\u96ea\u202e"`, "Balance (microunits): 18446744073709551615", "Available (microunits): 17", "Enabled: false", `reservation_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, `idempotency_key="synthetic-key"`, `account_id="row\n\t\x00\u96ea\u202e"`, "maximum=2", "timeout_seconds=60", "expires_at=2000000000000", `state="active"`, "charged_amount=null", "terminal_at=null", "retain_until=null"} {
+	for _, expected := range []string{"Pending holds:\n", "- Reserved: $0.000002 USD; expires: " + time.UnixMilli(2000000000000).UTC().Format(time.RFC3339Nano), `Reservation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, `Request key: "synthetic-key"`, "Timeout: 60 seconds; state: active; initial expiry: " + time.UnixMilli(1999999940000).UTC().Format(time.RFC3339Nano), "Charged: none; completed: none; retained until: none"} {
 		if !strings.Contains(text, expected) {
 			t.Fatal("snapshot omitted or changed a defined field")
 		}
 	}
-	if strings.Contains(text, account) || strings.Contains(text, "雪") || strings.Contains(text, "\u202e") || strings.Contains(text, "\x00") {
-		t.Fatal("identifier controls or Unicode not visibly escaped")
+	for _, value := range view {
+		for _, forbidden := range []string{account, strconv.QuoteToASCII(account), "雪", "\u202e", "\x00", "Enabled", "microunits"} {
+			if strings.Contains(value, forbidden) {
+				t.Fatal("snapshot exposed account identity or internal fields")
+			}
+		}
 	}
-	// Do not recompute financial arithmetic in the website: available is copied.
-	if strings.Count(text, "Available (microunits): 17") != 1 {
+	if strings.Contains(text, "Balance") || strings.Contains(text, "Available") {
+		t.Fatal("snapshot repeated header balances")
+	}
+	// Available is copied from the authoritative snapshot, not recomputed.
+	if view["available-usd"] != "$0.000017" {
 		t.Fatal("snapshot available balance recomputed")
 	}
 	snapshot.PendingReservations = nil
 	view, err = snapshotView(account, snapshot)
-	if err != nil || !strings.Contains(view[accountViewKey], "(none)\n") {
+	if err != nil || view[accountViewKey] != "Pending holds:\n(none)\n" {
 		t.Fatal("empty authoritative holds not shown explicitly")
 	}
 }

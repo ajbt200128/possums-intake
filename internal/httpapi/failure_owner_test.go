@@ -96,6 +96,13 @@ func TestHTTPFailureOwnerAuthParserAndPopulation(t *testing.T) {
 			}
 			out := request(t, h, "POST", route.path, headers, body)
 			closedDiagnostic(t, out)
+			if route.path == "/reservations/renew" {
+				expectFailures(t, spy)
+				if len(spy.classes) != 0 {
+					t.Fatal("renewal expanded telemetry population")
+				}
+				continue
+			}
 			expectFailures(t, spy, fixture.want)
 			if len(spy.classes) != 1 || spy.classes[0] != telemetry.Status4xx {
 				t.Fatal("terminal population changed")
@@ -111,7 +118,7 @@ func TestHTTPFailureOwnerAuthParserAndPopulation(t *testing.T) {
 	for _, header := range []string{"Authorization", "Content-Type", "Content-Encoding", "Idempotency-Key"} {
 		spy := &failureSpy{}
 		h := observedHandler(t, panicLedger{}, spy)
-		r := failureRequest("/balance", `{"account_id":"a"}`)
+		r := failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		r.Header.Set("Content-Encoding", "identity")
 		r.Header.Set("Idempotency-Key", key(1))
 		r.Header.Add(header, r.Header.Get(header))
@@ -165,7 +172,7 @@ func TestHTTPFailureOwnerCanonicalHostileFieldsAndFakeAccounting(t *testing.T) {
 	} {
 		spy := &failureSpy{}
 		h := observedHandler(t, stubLedger{err: fixture.err}, spy)
-		out := postJSON(t, h, "/balance", `{"account_id":"a"}`)
+		out := postJSON(t, h, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		requireStatus(t, out, fixture.status)
 		body := closedDiagnostic(t, out)
 		if body["code"] != string(fixture.code) {
@@ -176,7 +183,7 @@ func TestHTTPFailureOwnerCanonicalHostileFieldsAndFakeAccounting(t *testing.T) {
 		}
 		expectFailures(t, spy, fixture.kind)
 		// Classification and canonicalization must also work without a collector.
-		without := postJSON(t, newTestHandler(t, stubLedger{err: fixture.err}, nil), "/balance", `{"account_id":"a"}`)
+		without := postJSON(t, newTestHandler(t, stubLedger{err: fixture.err}, nil), "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		if without.Body.String() != out.Body.String() {
 			t.Fatal("disabled observer changed diagnostics")
 		}
@@ -277,7 +284,7 @@ func TestHTTPFailureOwnerDeliveryAndCancellationDedup(t *testing.T) {
 			}
 		}
 		h := observedHandler(t, stubLedger{err: &ledger.Diagnostic{Code: ledger.CodeAccount}}, spy)
-		h.ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`))
+		h.ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`))
 		expectFailures(t, spy, failuretype.AccountMissing, failuretype.ResponseDeliveryUnknown)
 		if len(spy.classes) != 1 || spy.classes[0] != telemetry.Unknown {
 			t.Fatal("failed delivery became a receipt")
@@ -306,7 +313,7 @@ func TestHTTPFailureOwnerDeliveryAndCancellationDedup(t *testing.T) {
 				w.panicValue = "SYNTHETIC_PRIVATE_SENTINEL"
 			}
 			h := observedHandler(t, stubLedger{err: cause}, spy)
-			h.ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`).WithContext(ctx))
+			h.ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`).WithContext(ctx))
 			want := []failuretype.Type{ledger.FailureKind(cause, 0)}
 			if mode == "consequent_short" || mode == "consequent_panic" {
 				want = append(want, failuretype.ResponseDeliveryUnknown)
@@ -327,7 +334,7 @@ func TestHTTPFailureOwnerDeliveryAndCancellationDedup(t *testing.T) {
 			service.err = cause // caller remains active; equal categories do not prove shared cause
 			kinds = append(kinds, want)
 		}
-		observedHandler(t, service, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`))
+		observedHandler(t, service, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`))
 		expectFailures(t, spy, kinds...)
 	}
 	for _, err := range []error{http.ErrAbortHandler, http.ErrServerClosed, http.ErrNotSupported} {
@@ -339,7 +346,7 @@ func TestHTTPFailureOwnerDeliveryAndCancellationDedup(t *testing.T) {
 			} else {
 				w.err = err
 			}
-			observedHandler(t, stubLedger{}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`))
+			observedHandler(t, stubLedger{}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`))
 			expectFailures(t, spy)
 			if spy.classes[0] != telemetry.Unknown {
 				t.Fatal("expected interruption inferred delivery")
@@ -349,7 +356,7 @@ func TestHTTPFailureOwnerDeliveryAndCancellationDedup(t *testing.T) {
 	// Unsupported Flush is a successful local write, not a new exception.
 	spy := &failureSpy{}
 	w := &noFlushWriter{header: http.Header{}}
-	observedHandler(t, stubLedger{}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`))
+	observedHandler(t, stubLedger{}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`))
 	expectFailures(t, spy)
 	if spy.classes[0] != telemetry.Status2xx {
 		t.Fatal("unsupported optional flush changed terminal evidence")
@@ -380,7 +387,7 @@ func TestHTTPFailureOwnerEncodingSourceSeamPreservesPrimaryAndProof(t *testing.T
 			writeDiagnostic(w, 400, diagInput)
 			writeJSON(w, 200, syntheticMarshaler{panicMarshal: panicMarshal})
 		}
-		out := postJSON(t, h, "/balance", `{"account_id":"a"}`)
+		out := postJSON(t, h, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		requireStatus(t, out, 503)
 		body := closedDiagnostic(t, out)
 		if body["stage"] != "response_encoding" || body["outcome"] != "unknown" || strings.Contains(body["next_step"].(string), "rolled back") {
@@ -392,10 +399,10 @@ func TestHTTPFailureOwnerEncodingSourceSeamPreservesPrimaryAndProof(t *testing.T
 		h.routes["/balance"] = func(w http.ResponseWriter, r *http.Request) {
 			accountingInvoked(w)
 			accountingReturned(w, r, nil)
-			writeJSON(w, 200, accountResponse{AccountBalance: []accountJSON{{AccountID: "a", Balance: "10", Enabled: true}}})
+			writeJSON(w, 200, accountResponse{AccountBalance: []accountJSON{{AccountID: "aaaaaaaaaaaaaaa", Balance: "10", Enabled: true}}})
 			writeJSON(w, 200, syntheticMarshaler{panicMarshal: panicMarshal})
 		}
-		out = postJSON(t, h, "/balance", `{"account_id":"a"}`)
+		out = postJSON(t, h, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 		requireStatus(t, out, 200)
 		if decodeMap(t, out)["account_balance"].([]any)[0].(map[string]any)["balance"] != "10" {
 			t.Fatal("known encoded proof erased")
@@ -437,14 +444,14 @@ func TestHTTPFailureObserverPanicCannotAffectAccounting(t *testing.T) {
 	service := newTestLedger(t)
 	spy := &failureSpy{panicObserve: true, panicInvalidate: true}
 	h := observedHandler(t, service, spy)
-	provision(t, h, "a")
-	credit(t, h, "a", "10", 1)
-	out := postJSON(t, h, "/balance", `{"account_id":"missing"}`)
+	createAccountFixture(t, h, "aaaaaaaaaaaaaaa")
+	credit(t, h, "aaaaaaaaaaaaaaa", "10", 1)
+	out := postJSON(t, h, "/balance", `{"account_id":"missing00000000"}`)
 	requireStatus(t, out, 404)
 	if spy.invalidFailures != 1 || len(spy.kinds) != 1 || spy.invalidRequests != 0 {
 		t.Fatal("failure observer panic recursed or invalidated terminal family")
 	}
-	out = postJSON(t, h, "/balance", `{"account_id":"a"}`)
+	out = postJSON(t, h, "/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`)
 	if decodeMap(t, out)["available"] != "10" {
 		t.Fatal("observer panic changed accounting")
 	}

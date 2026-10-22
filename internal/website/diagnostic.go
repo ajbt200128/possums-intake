@@ -83,9 +83,17 @@ func renderHTTPFault(cause error) *ledger.Diagnostic {
 			valid = d.Kind() == failuretype.PolicyRefused && d.Constraint == "declared_presentation_capability"
 		case "SITE_PAGE_VIEW_REFUSED":
 			valid = d.Kind() == failuretype.PolicyRefused && d.Constraint == "bounded_string_view"
+		case "SITE_PAGE_TEXT_LIMIT":
+			if d.Kind() == failuretype.PolicyRefused && d.Stage == "page_evaluation" && d.Constraint == "complete_page_text_budget" {
+				return fault("SITE_PAGE_TEXT_LIMIT", d.Stage, d.Constraint, "The complete page exceeds presentation limits. Ask the operator to inspect the page privately; no data was truncated or action replayed.", failuretype.PolicyRefused)
+			}
 		case "SITE_ACCOUNT_VIEW_LIMIT":
 			if d.Kind() == failuretype.PolicyRefused && d.Stage == "account_snapshot_view" && d.Constraint == "complete_bounded_snapshot" {
 				return accountViewLimit()
+			}
+		case "SITE_ACCOUNT_MONEY_UNAVAILABLE":
+			if d.Kind() == failuretype.NativeReadUnknown && d.Stage == "account_snapshot_validation" && d.Constraint == "canonical_uint64_microunits" {
+				return accountMoneyFault()
 			}
 		case "SITE_ACCOUNT_SCOPE_UNAVAILABLE":
 			if d.Kind() == failuretype.NativeReadUnknown && d.Stage == "account_snapshot_validation" && d.Constraint == "matching_account_and_pending_rows" {

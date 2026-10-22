@@ -29,11 +29,11 @@ func TestHTTPExpiryPostRunRoleWithEqualCategoryDeliveryAndOverflow(t *testing.T)
 		t.Run(fixture.name, func(t *testing.T) {
 			s := newTestLedger(t)
 			h := newTestHandler(t, s, nil)
-			provision(t, h, "a")
-			credit(t, h, "a", "10", 1)
+			createAccountFixture(t, h, "aaaaaaaaaaaaaaa")
+			credit(t, h, "aaaaaaaaaaaaaaa", "10", 1)
 			headers := authHeaders("application/json")
 			headers["Idempotency-Key"] = key(2)
-			out := request(t, h, "POST", "/reservations", headers, `{"account_id":"a","maximum":"5","timeout_seconds":1}`)
+			out := request(t, h, "POST", "/reservations", headers, `{"account_id":"aaaaaaaaaaaaaaa","maximum":"5","timeout_seconds":1}`)
 			requireStatus(t, out, 200)
 			id := decodeMap(t, out)["reservation"].(map[string]any)["reservation_id"].(string)
 			time.Sleep(1100 * time.Millisecond)
@@ -64,7 +64,7 @@ func TestHTTPExpiryPostRunRoleWithEqualCategoryDeliveryAndOverflow(t *testing.T)
 				wire := decodeMap(t, out)
 				row := wire["reservation"].(map[string]any)
 				exactKeys(t, wire, "code", "stage", "constraint", "outcome", "next_step", "reservation")
-				exactKeys(t, row, "reservation_id", "idempotency_key", "account_id", "maximum", "timeout_seconds", "expires_at", "state", "charged_amount", "terminal_at", "retain_until")
+				exactKeys(t, row, "reservation_id", "idempotency_key", "account_id", "maximum", "timeout_seconds", "initial_expires_at", "expires_at", "state", "charged_amount", "terminal_at", "retain_until")
 				if wire["outcome"] != "expired" || row["state"] != "expired" || row["charged_amount"] != "0" || row["terminal_at"] != row["expires_at"] {
 					t.Fatal("post-run role altered canonical authoritative expiry row")
 				}
@@ -84,7 +84,7 @@ func TestHTTPExpiryPostRunRoleWithEqualCategoryDeliveryAndOverflow(t *testing.T)
 				requireFailureCounts(t, spy, want...)
 			}
 			row, err := s.Lookup(testContext, id)
-			balance, balanceErr := s.Balance(testContext, "a")
+			balance, balanceErr := s.Balance(testContext, "aaaaaaaaaaaaaaa")
 			if err != nil || balanceErr != nil || row.State != ledger.Expired || row.ChargedAmount == nil || *row.ChargedAmount != "0" || balance.Available != "10" || !s.Ready() {
 				t.Fatal("hook/expiry/delivery/overflow reporting altered committed accounting")
 			}
@@ -105,7 +105,7 @@ func (s propagationAccounting) Balance(ctx context.Context, id string) (ledger.B
 func TestHTTPReportPropagationIsNotIndependentOuterPanic(t *testing.T) {
 	s := newTestLedger(t)
 	spy := &failureSpy{}
-	out := postJSON(t, observedHandler(t, propagationAccounting{s}, spy), "/balance", `{"account_id":"missing"}`)
+	out := postJSON(t, observedHandler(t, propagationAccounting{s}, spy), "/balance", `{"account_id":"missing00000000"}`)
 	requireStatus(t, out, 404)
 	closedDiagnostic(t, out)
 	requireFailureCounts(t, spy, failuretype.AccountMissing)
@@ -115,7 +115,7 @@ func TestHTTPReportPropagationIsNotIndependentOuterPanic(t *testing.T) {
 		h.routes["/balance"] = func(w http.ResponseWriter, r *http.Request) {
 			if mode == "encoding_before_body" {
 				accountingInvoked(w)
-				_, err := s.Balance(r.Context(), "missing")
+				_, err := s.Balance(r.Context(), "missing00000000")
 				accountingReturned(w, r, err)
 			} else {
 				h.balance(w, r) // encoded authoritative refusal before later faults
@@ -125,7 +125,7 @@ func TestHTTPReportPropagationIsNotIndependentOuterPanic(t *testing.T) {
 			}
 			panic("SYNTHETIC_PRIVATE_SENTINEL independent outer panic")
 		}
-		out := postJSON(t, h, "/balance", `{"account_id":"missing"}`)
+		out := postJSON(t, h, "/balance", `{"account_id":"missing00000000"}`)
 		d := closedDiagnostic(t, out)
 		want := []failuretype.Type{failuretype.AccountMissing, failuretype.RequestDispatchUnknown}
 		if mode == "encoding_before_body" {
@@ -181,7 +181,7 @@ func TestHTTPAmbientCancelledReadPanicRemainsUnknownAndTypedCauseSurvives(t *tes
 func TestHTTPUnknownCancelledWriterFaultPreservesCommittedCredit(t *testing.T) {
 	for _, panicWriter := range []bool{false, true} {
 		s := newTestLedger(t)
-		provision(t, newTestHandler(t, s, nil), "a")
+		createAccountFixture(t, newTestHandler(t, s, nil), "aaaaaaaaaaaaaaa")
 		ctx, cancel := context.WithCancel(testContext)
 		defer cancel()
 		w := &deliveryFaultWriter{failedWriter: failedWriter{header: http.Header{}}, cancel: cancel}
@@ -191,14 +191,14 @@ func TestHTTPUnknownCancelledWriterFaultPreservesCommittedCredit(t *testing.T) {
 			w.err = noFormatError{}
 		}
 		spy := &failureSpy{}
-		r := failureRequest("/credits", `{"account_id":"a","amount":"10"}`).WithContext(ctx)
+		r := failureRequest("/credits", `{"account_id":"aaaaaaaaaaaaaaa","amount":"10"}`).WithContext(ctx)
 		r.Header.Set("Idempotency-Key", key(1))
 		observedHandler(t, s, spy).ServeHTTP(w, r)
 		requireFailureCounts(t, spy, failuretype.ResponseDeliveryUnknown)
 		if spy.classes[0] != telemetry.Unknown {
 			t.Fatal("writer fault inferred receipt")
 		}
-		balance, err := s.Balance(testContext, "a")
+		balance, err := s.Balance(testContext, "aaaaaaaaaaaaaaa")
 		if err != nil || balance.Available != "10" || !s.Ready() {
 			t.Fatal("unknown writer fault erased committed credit")
 		}

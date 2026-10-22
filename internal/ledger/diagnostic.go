@@ -6,25 +6,36 @@ import "possums-intake/internal/failuretype"
 type Code string
 
 const (
-	CodeInput        Code = "LEDGER_INPUT_INVALID"
-	CodeNativeHold   Code = "LEDGER_NATIVE_BALANCE_HELD"
-	CodeKey          Code = "LEDGER_KEY_INVALID"
-	CodeKeyWindow    Code = "LEDGER_KEY_WINDOW"
-	CodeAccount      Code = "LEDGER_ACCOUNT_UNKNOWN"
-	CodeConflict     Code = "LEDGER_KEY_CONFLICT"
-	CodeDisabled     Code = "LEDGER_ADMISSION_DISABLED"
-	CodeInsufficient Code = "LEDGER_CREDIT_INSUFFICIENT"
-	CodeOverflow     Code = "LEDGER_AMOUNT_OVERFLOW"
-	CodeCharge       Code = "LEDGER_CHARGE_EXCEEDS_HOLD"
-	CodeExpired      Code = "LEDGER_SETTLEMENT_EXPIRED"
-	CodeEvidence     Code = "LEDGER_EVIDENCE_UNAVAILABLE"
-	CodeWriter       Code = "LEDGER_WRITER_UNAVAILABLE"
-	CodeWork         Code = "LEDGER_WORK_CANCELLED"
-	CodeBegin        Code = "LEDGER_TRANSACTION_BEGIN_UNAVAILABLE"
-	CodeStorage      Code = "LEDGER_STORAGE_UNAVAILABLE"
-	CodeRandom       Code = "LEDGER_RESERVATION_ID_UNAVAILABLE"
-	CodeCorrupt      Code = "LEDGER_STATE_INVALID"
-	CodeCommit       Code = "LEDGER_COMMIT_UNKNOWN"
+	CodePaymentDisabled Code = "PAYMENT_SYNTHETIC_NOT_INITIALIZED"
+	CodePaymentMissing  Code = "PAYMENT_REFERENCE_UNAVAILABLE"
+	CodePaymentExpired  Code = "PAYMENT_LINK_EXPIRED"
+	CodePaymentConflict Code = "PAYMENT_EVIDENCE_CONFLICT"
+	CodePaymentRandom   Code = "PAYMENT_IDENTITY_UNAVAILABLE"
+)
+
+const (
+	CodeInput               Code = "LEDGER_INPUT_INVALID"
+	CodeNativeHold          Code = "LEDGER_NATIVE_BALANCE_HELD"
+	CodeKey                 Code = "LEDGER_KEY_INVALID"
+	CodeKeyWindow           Code = "LEDGER_KEY_WINDOW"
+	CodeAccount             Code = "LEDGER_ACCOUNT_UNKNOWN"
+	CodeConflict            Code = "LEDGER_KEY_CONFLICT"
+	CodeDisabled            Code = "LEDGER_ADMISSION_DISABLED"
+	CodeInsufficient        Code = "LEDGER_CREDIT_INSUFFICIENT"
+	CodeOverflow            Code = "LEDGER_AMOUNT_OVERFLOW"
+	CodeCharge              Code = "LEDGER_CHARGE_EXCEEDS_HOLD"
+	CodeExpired             Code = "LEDGER_SETTLEMENT_EXPIRED"
+	CodeRenewalClosed       Code = "LEDGER_RENEWAL_CLOSED"
+	CodeRenewalPrecondition Code = "LEDGER_RENEWAL_PRECONDITION"
+	CodeRenewalNoProgress   Code = "LEDGER_RENEWAL_NO_PROGRESS"
+	CodeEvidence            Code = "LEDGER_EVIDENCE_UNAVAILABLE"
+	CodeWriter              Code = "LEDGER_WRITER_UNAVAILABLE"
+	CodeWork                Code = "LEDGER_WORK_CANCELLED"
+	CodeBegin               Code = "LEDGER_TRANSACTION_BEGIN_UNAVAILABLE"
+	CodeStorage             Code = "LEDGER_STORAGE_UNAVAILABLE"
+	CodeRandom              Code = "LEDGER_RESERVATION_ID_UNAVAILABLE"
+	CodeCorrupt             Code = "LEDGER_STATE_INVALID"
+	CodeCommit              Code = "LEDGER_COMMIT_UNKNOWN"
 	// CodeBoundary requires an owner's closed stage and numeric classification.
 	// It does not imply that an accounting commit was attempted.
 	CodeBoundary Code = "INTAKE_BOUNDARY_UNAVAILABLE"
@@ -53,6 +64,27 @@ func (d *Diagnostic) Error() string { return string(d.Code) }
 func diagnostic(code Code) *Diagnostic {
 	d := &Diagnostic{Code: code, kind: defaultFailureKind(code), Outcome: "no_effect", NextStep: "Correct the request; retry only the original identity."}
 	switch code {
+	case CodePaymentDisabled:
+		d.Stage = "payment_setup"
+		d.Constraint = "explicit_synthetic_initialization"
+		d.NextStep = "Payment schema is absent. Only an explicitly authorized synthetic setup may initialize it; do not initialize as recovery."
+	case CodePaymentMissing:
+		d.Stage = "payment_lookup"
+		d.Constraint = "retained_original_reference_and_account"
+		d.Outcome = "unavailable"
+		d.NextStep = "No usable original reference is available. This does not establish whether the provider charged; never recreate it to resolve uncertainty."
+	case CodePaymentExpired:
+		d.Stage = "payment_window"
+		d.Constraint = "immutable_original_deadline"
+		d.NextStep = "Automatic funding or Checkout creation is unavailable under this identity. Provider payment outcome is not established; seek separate manual resolution."
+	case CodePaymentConflict:
+		d.Stage = "payment_evidence"
+		d.Constraint = "canonical_original_synthetic_purchase"
+		d.NextStep = "Evidence does not match the original synthetic purchase. Do not rebind objects, replay creation or issue a replacement credit."
+	case CodePaymentRandom:
+		d.Stage = "payment_identity"
+		d.Constraint = "cryptographic_unique_identifier"
+		d.NextStep = "Identity allocation rolled back; cause unknown. Preserve the original form identity and inspect locally."
 	case CodeNativeHold:
 		d.Stage = "native_account_write"
 		d.Constraint = "no_active_holds_for_changed_balance"
@@ -85,9 +117,22 @@ func diagnostic(code Code) *Diagnostic {
 	case CodeCharge:
 		d.Stage = "settlement"
 		d.Constraint = "charge_within_maximum"
+	case CodeRenewalClosed:
+		d.Stage = "renewal"
+		d.Constraint = "active_reservation"
+		d.Outcome = "terminal"
+		d.NextStep = "Inspect the authoritative terminal row; renewal cannot reopen it."
+	case CodeRenewalPrecondition:
+		d.Stage = "renewal"
+		d.Constraint = "expected_not_after_authoritative_deadline"
+		d.NextStep = "Inspect the authoritative row; this attempt did not renew the hold."
+	case CodeRenewalNoProgress:
+		d.Stage = "renewal"
+		d.Constraint = "strictly_later_deadline"
+		d.NextStep = "The authoritative deadline did not advance; this attempt did not renew the hold."
 	case CodeExpired:
 		d.Stage = "settlement"
-		d.Constraint = "immutable_deadline"
+		d.Constraint = "authoritative_deadline"
 		d.Outcome = "expired"
 		d.NextStep = "Inspect the authoritative expired row; late charging is forbidden."
 	case CodeEvidence:
@@ -151,7 +196,7 @@ func diagnostic(code Code) *Diagnostic {
 		d.Stage = "state_validation"
 		d.Constraint = "supported_schema_and_metadata"
 		d.Outcome = "unavailable"
-		d.NextStep = "Inspect schema privately. No down-migration, empty reset or financial restore is authorized."
+		d.NextStep = "This source requires the fresh merged schema v3. Preserve incompatible state and inspect privately; no migration, empty reset or financial restore is authorized."
 	case CodePath:
 		d.Stage = "startup"
 		d.Constraint = "explicit_absolute_state_directory"

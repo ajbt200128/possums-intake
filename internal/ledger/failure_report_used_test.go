@@ -11,11 +11,14 @@ import (
 
 func TestFailureReportWasUsedDistinguishesPreRunValidation(t *testing.T) {
 	s, _, _ := testService(t)
+	if _, err := fixtureAccount(s, background, "aaaaaaaaaaaaaaa"); err != nil {
+		t.Fatal("fixture creation unavailable")
+	}
 	ctx, report := WithFailureReport(background)
 	if report.WasUsed() {
 		t.Fatal("fresh report marked used")
 	}
-	_, err := s.Provision(ctx, "")
+	_, err := s.Balance(ctx, "")
 	codeIs(t, err, CodeInput)
 	if report.WasUsed() {
 		t.Fatal("pre-run validation marked used")
@@ -25,7 +28,7 @@ func TestFailureReportWasUsedDistinguishesPreRunValidation(t *testing.T) {
 		t.Fatal("nil report marked used")
 	}
 	ctx, report = WithFailureReport(background)
-	_, err = s.Provision(ctx, "a")
+	_, err = s.Balance(ctx, "aaaaaaaaaaaaaaa")
 	if err != nil || !report.WasUsed() {
 		t.Fatal("completed run did not mark report")
 	}

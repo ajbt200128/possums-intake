@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"time"
-	"unicode/utf8"
 )
 
 const (
@@ -73,16 +72,17 @@ type Account struct {
 	Enabled   bool   `db:"enabled" json:"enabled"`
 }
 type Reservation struct {
-	ReservationID  string  `db:"reservation_id" json:"reservation_id"`
-	IdempotencyKey string  `db:"idempotency_key" json:"idempotency_key"`
-	AccountID      string  `db:"account_id" json:"account_id"`
-	Maximum        Money   `db:"maximum" json:"maximum"`
-	TimeoutSeconds int64   `db:"timeout_seconds" json:"timeout_seconds"`
-	ExpiresAt      Millis  `db:"expires_at" json:"expires_at"`
-	State          State   `db:"state" json:"state"`
-	ChargedAmount  *Money  `db:"charged_amount" json:"charged_amount"`
-	TerminalAt     *Millis `db:"terminal_at" json:"terminal_at"`
-	RetainUntil    *Millis `db:"retain_until" json:"retain_until"`
+	ReservationID    string  `db:"reservation_id" json:"reservation_id"`
+	IdempotencyKey   string  `db:"idempotency_key" json:"idempotency_key"`
+	AccountID        string  `db:"account_id" json:"account_id"`
+	Maximum          Money   `db:"maximum" json:"maximum"`
+	TimeoutSeconds   int64   `db:"timeout_seconds" json:"timeout_seconds"`
+	InitialExpiresAt Millis  `db:"initial_expires_at" json:"initial_expires_at"`
+	ExpiresAt        Millis  `db:"expires_at" json:"expires_at"`
+	State            State   `db:"state" json:"state"`
+	ChargedAmount    *Money  `db:"charged_amount" json:"charged_amount"`
+	TerminalAt       *Millis `db:"terminal_at" json:"terminal_at"`
+	RetainUntil      *Millis `db:"retain_until" json:"retain_until"`
 }
 type Credit struct {
 	IdempotencyKey string `db:"idempotency_key" json:"idempotency_key"`
@@ -112,6 +112,14 @@ type SettleInput struct {
 	ReservationID string
 	ChargedAmount Money
 }
+type RenewInput struct {
+	ReservationID     string
+	ExpectedExpiresAt Millis
+}
+type Renewal struct {
+	Reservation Reservation `json:"reservation"`
+	ObservedAt  Millis      `json:"observed_at"`
+}
 type CleanupResult struct {
 	Expired int
 	Pruned  int
@@ -119,11 +127,12 @@ type CleanupResult struct {
 
 // Accounting is the route packet's complete core dependency. Errors are closed
 // *Diagnostic values. Settle may return an authoritative expired row AND an
-// expired-settlement diagnostic; other failures return no usable receipt.
+// expired-settlement diagnostic. Renew may return a committed snapshot AND a
+// known refusal; transaction completion failures return no usable receipt.
 type Accounting interface {
-	Provision(context.Context, string) (Account, error)
 	Credit(context.Context, CreditInput) (Credit, error)
 	Reserve(context.Context, ReserveInput) (Reservation, error)
+	Renew(context.Context, RenewInput) (Renewal, error)
 	Settle(context.Context, SettleInput) (Reservation, error)
 	Refund(context.Context, string) (Reservation, error)
 	Balance(context.Context, string) (BalanceSnapshot, error)
@@ -153,7 +162,7 @@ func validNewKey(issued, now int64) error {
 	return nil
 }
 func validAccount(id string) bool {
-	return len(id) >= 1 && len(id) <= 128 && utf8.ValidString(id)
+	return nativeIDPattern.MatchString(id)
 }
 func retention(issued, terminal int64) Millis {
 	return Millis(max(issued+KeyWindowMS, terminal+KeyWindowMS))

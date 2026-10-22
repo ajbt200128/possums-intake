@@ -348,7 +348,7 @@ func (tx *transaction) clock() error {
 	if err := tx.query("SELECT schema_version,clock_high_water_ms FROM ledger_meta WHERE singleton=1", nil).Row(&version, &high); err != nil {
 		return err
 	}
-	if version != 1 || high < 0 || high > 9999999999999 {
+	if version != 3 || high < 0 || high > 9999999999999 {
 		return diagnostic(CodeSchema)
 	}
 	if err := tx.query("SELECT CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER)", nil).Row(&wall); err != nil {
@@ -362,7 +362,7 @@ func (tx *transaction) clock() error {
 	return tx.exec("UPDATE ledger_meta SET clock_high_water_ms={:now} WHERE singleton=1", dbx.Params{"now": tx.now})
 }
 
-const reservationColumns = "reservation_id,idempotency_key,account_id,maximum,timeout_seconds,expires_at,state,charged_amount,terminal_at,retain_until"
+const reservationColumns = "reservation_id,idempotency_key,account_id,maximum,timeout_seconds,initial_expires_at,expires_at,state,charged_amount,terminal_at,retain_until"
 const creditColumns = "idempotency_key,account_id,amount,balance_after,committed_at,retain_until"
 
 func validateAccount(a Account) error {
@@ -377,11 +377,11 @@ func validateAccount(a Account) error {
 func validateReservation(r Reservation) error {
 	issued, err := keyIssued(r.IdempotencyKey)
 	maxAmount, amtErr := r.Maximum.units()
-	if err != nil || amtErr != nil || maxAmount == 0 || !idPattern.MatchString(r.ReservationID) || !validAccount(r.AccountID) || r.TimeoutSeconds < 1 || r.TimeoutSeconds > 1800 || int64(r.ExpiresAt) <= 0 || int64(r.ExpiresAt) > 9999999999999 {
+	if err != nil || amtErr != nil || maxAmount == 0 || !idPattern.MatchString(r.ReservationID) || !validAccount(r.AccountID) || r.TimeoutSeconds < 1 || r.TimeoutSeconds > 1800 || r.InitialExpiresAt <= 0 || r.InitialExpiresAt > r.ExpiresAt || int64(r.ExpiresAt) <= 0 || int64(r.ExpiresAt) > 9999999999999 {
 		return diagnostic(CodeCorrupt)
 	}
 	// The original admission must have satisfied the immutable new-key window.
-	admitted := int64(r.ExpiresAt) - r.TimeoutSeconds*1000
+	admitted := int64(r.InitialExpiresAt) - r.TimeoutSeconds*1000
 	if admitted <= 0 || issued > admitted+FutureSkewMS || admitted >= issued+KeyWindowMS {
 		return diagnostic(CodeCorrupt)
 	}
@@ -427,7 +427,7 @@ func validateCredit(c Credit) error {
 }
 func (tx *transaction) account(id string) (Account, error) {
 	var a Account
-	err := tx.query("SELECT account_id,balance,enabled FROM ledger_accounts WHERE account_id={:id}", dbx.Params{"id": id}).One(&a)
+	err := tx.query("SELECT id AS account_id,balance,enabled FROM accounts WHERE id={:id}", dbx.Params{"id": id}).One(&a)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, diagnostic(CodeAccount)
 	}

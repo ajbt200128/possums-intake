@@ -10,32 +10,6 @@ import (
 	"github.com/pocketbase/dbx"
 )
 
-func (s *Service) Provision(ctx context.Context, id string) (Account, error) {
-	if !validAccount(id) {
-		return Account{}, diagnostic(CodeInput)
-	}
-	var result Account
-	err := s.run(ctx, func(tx *transaction) error {
-		a, err := tx.account(id)
-		if err == nil {
-			_, _, err = tx.active(a, true)
-			result = a
-			return err
-		}
-		if d, ok := err.(*Diagnostic); !ok || d.Code != CodeAccount {
-			return err
-		}
-		if _, err := tx.createAccount(NativeAccountCreate{AccountID: id, Balance: "0", Enabled: true}); err != nil {
-			return err
-		}
-		result = Account{AccountID: id, Balance: "0", Enabled: true}
-		return nil
-	}, true)
-	if err != nil {
-		return Account{}, err
-	}
-	return result, nil
-}
 func (s *Service) Credit(ctx context.Context, in CreditInput) (Credit, error) {
 	issued, err := keyIssued(in.IdempotencyKey)
 	if err != nil {
@@ -74,7 +48,7 @@ func (s *Service) Credit(ctx context.Context, in CreditInput) (Credit, error) {
 			return err
 		}
 		retain := retention(issued, tx.now)
-		if err := tx.exec("UPDATE ledger_accounts SET balance={:after} WHERE account_id={:id}", dbx.Params{"after": string(money(after)), "id": in.AccountID}); err != nil {
+		if err := tx.exec("UPDATE accounts SET balance={:after} WHERE id={:id}", dbx.Params{"after": string(money(after)), "id": in.AccountID}); err != nil {
 			return err
 		}
 		if err := tx.exec("INSERT INTO ledger_credits(idempotency_key,account_id,amount,balance_after,committed_at,retain_until) VALUES({:key},{:id},{:amount},{:after},{:now},{:retain})", dbx.Params{"key": in.IdempotencyKey, "id": in.AccountID, "amount": string(in.Amount), "after": string(money(after)), "now": tx.now, "retain": int64(retain)}); err != nil {
@@ -156,10 +130,10 @@ func (s *Service) Reserve(ctx context.Context, in ReserveInput) (Reservation, er
 			return diagnostic(CodeRandom)
 		}
 		expires := tx.now + in.TimeoutSeconds*1000
-		if err := tx.exec("INSERT INTO ledger_reservations(reservation_id,idempotency_key,account_id,maximum,timeout_seconds,expires_at,state) VALUES({:rid},{:key},{:id},{:max},{:timeout},{:expires},'active')", dbx.Params{"rid": id, "key": in.IdempotencyKey, "id": in.AccountID, "max": string(in.Maximum), "timeout": in.TimeoutSeconds, "expires": expires}); err != nil {
+		if err := tx.exec("INSERT INTO ledger_reservations(reservation_id,idempotency_key,account_id,maximum,timeout_seconds,initial_expires_at,expires_at,state) VALUES({:rid},{:key},{:id},{:max},{:timeout},{:expires},{:expires},'active')", dbx.Params{"rid": id, "key": in.IdempotencyKey, "id": in.AccountID, "max": string(in.Maximum), "timeout": in.TimeoutSeconds, "expires": expires}); err != nil {
 			return err
 		}
-		result = Reservation{ReservationID: id, IdempotencyKey: in.IdempotencyKey, AccountID: in.AccountID, Maximum: in.Maximum, TimeoutSeconds: in.TimeoutSeconds, ExpiresAt: Millis(expires), State: Active}
+		result = Reservation{ReservationID: id, IdempotencyKey: in.IdempotencyKey, AccountID: in.AccountID, Maximum: in.Maximum, TimeoutSeconds: in.TimeoutSeconds, InitialExpiresAt: Millis(expires), ExpiresAt: Millis(expires), State: Active}
 		return nil
 	}, true)
 	if err != nil {
@@ -167,6 +141,67 @@ func (s *Service) Reserve(ctx context.Context, in ReserveInput) (Reservation, er
 	}
 	return result, nil
 }
+
+// Renew uses the authoritative deadline as a once-only compare-and-extend token.
+// A known refusal commits any due expiry and returns that committed snapshot.
+// no_effect describes renewal only, not other expiry/account state changes.
+func (s *Service) Renew(ctx context.Context, in RenewInput) (Renewal, error) {
+	if !idPattern.MatchString(in.ReservationID) || in.ExpectedExpiresAt <= 0 || in.ExpectedExpiresAt > 9999999999999 {
+		return Renewal{}, diagnostic(CodeInput)
+	}
+	var result Renewal
+	var decision error
+	err := s.run(ctx, func(tx *transaction) error {
+		r, err := tx.reservation("reservation_id", in.ReservationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return diagnostic(CodeEvidence)
+		}
+		if err != nil {
+			return err
+		}
+		if in.ExpectedExpiresAt < r.InitialExpiresAt {
+			return diagnostic(CodeInput)
+		}
+		a, err := tx.account(r.AccountID)
+		if err != nil {
+			return err
+		}
+		if _, _, err := tx.active(a, true); err != nil {
+			return err
+		}
+		r, err = tx.reservation("reservation_id", in.ReservationID)
+		if err != nil {
+			return err
+		}
+		switch {
+		case r.State != Active:
+			decision = diagnostic(CodeRenewalClosed)
+		case !a.Enabled:
+			decision = diagnostic(CodeDisabled)
+		case in.ExpectedExpiresAt > r.ExpiresAt:
+			decision = diagnostic(CodeRenewalPrecondition)
+		case in.ExpectedExpiresAt < r.ExpiresAt:
+			// A duplicate or reordered older token is ordinary success.
+		default:
+			expires := Millis(tx.now + r.TimeoutSeconds*1000)
+			if expires <= r.ExpiresAt {
+				decision = diagnostic(CodeRenewalNoProgress)
+				break
+			}
+			if err := tx.exec("UPDATE ledger_reservations SET expires_at={:expires} WHERE reservation_id={:id}", dbx.Params{"expires": int64(expires), "id": r.ReservationID}); err != nil {
+				return err
+			}
+			r.ExpiresAt = expires
+		}
+		result = Renewal{Reservation: r, ObservedAt: Millis(tx.now)}
+		return nil
+	}, true)
+	if err != nil {
+		return Renewal{}, err
+	}
+	return result, decision
+}
+
 func (s *Service) Settle(ctx context.Context, in SettleInput) (Reservation, error) {
 	if _, err := in.ChargedAmount.units(); err != nil {
 		return Reservation{}, diagnostic(CodeInput)
@@ -218,7 +253,7 @@ func (s *Service) finish(ctx context.Context, id string, state State, charge Mon
 			if total < charged {
 				return diagnostic(CodeCorrupt)
 			}
-			if err := tx.exec("UPDATE ledger_accounts SET balance={:balance} WHERE account_id={:id}", dbx.Params{"balance": string(money(total - charged)), "id": a.AccountID}); err != nil {
+			if err := tx.exec("UPDATE accounts SET balance={:balance} WHERE id={:id}", dbx.Params{"balance": string(money(total - charged)), "id": a.AccountID}); err != nil {
 				return err
 			}
 		}
@@ -288,7 +323,7 @@ func (s *Service) Lookup(ctx context.Context, id string) (Reservation, error) {
 }
 
 // Cleanup expires up to 128 due rows; prune=true also prunes at most 128
-// eligible terminal/credit rows COMBINED. It never loops through a backlog.
+// eligible terminal/credit/optional-payment rows COMBINED. It never loops through a backlog.
 func (s *Service) Cleanup(ctx context.Context, prune bool) (CleanupResult, error) {
 	var result CleanupResult
 	err := s.run(ctx, func(tx *transaction) error {
@@ -296,16 +331,22 @@ func (s *Service) Cleanup(ctx context.Context, prune bool) (CleanupResult, error
 		if err := tx.query("SELECT "+reservationColumns+" FROM ledger_reservations WHERE state='active' AND expires_at<={:now} ORDER BY expires_at,reservation_id LIMIT 128", dbx.Params{"now": tx.now}).All(&due); err != nil {
 			return err
 		}
+		validatedAccounts := make(map[string]struct{}, len(due))
 		for _, r := range due {
 			if err := validateReservation(r); err != nil {
 				return err
 			}
-			a, err := tx.account(r.AccountID)
-			if err != nil {
-				return err
-			}
-			if _, _, err := tx.active(a, false); err != nil {
-				return err
+			if _, validated := validatedAccounts[r.AccountID]; !validated {
+				a, err := tx.account(r.AccountID)
+				if err != nil {
+					return err
+				}
+				if _, _, err := tx.active(a, false); err != nil {
+					return err
+				}
+				// Later expirations only reduce this validated hold sum; balances
+				// do not change within this serialized cleanup transaction.
+				validatedAccounts[r.AccountID] = struct{}{}
 			}
 			if err := tx.expire(&r); err != nil {
 				return err
@@ -341,6 +382,11 @@ func (s *Service) Cleanup(ctx context.Context, prune bool) (CleanupResult, error
 			}
 			result.Pruned++
 		}
+		payments, err := tx.prunePayments(CleanupLimit - result.Pruned)
+		if err != nil {
+			return err
+		}
+		result.Pruned += payments
 		return nil
 	}, true)
 	if err != nil {

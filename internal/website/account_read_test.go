@@ -60,7 +60,7 @@ func TestAccountReadPreservesReportedPrimaryBeforeOuterPanic(t *testing.T) {
 	f := newAccountFixture(t)
 	observer := &numericObserver{}
 	host := &Host{observer: observer, balances: balanceReadFunc(func(ctx context.Context, _ string) (ledger.BalanceSnapshot, error) {
-		f.service.Balance(ctx, "synthetic-missing")
+		f.service.Balance(ctx, "missing00000000")
 		panic("SYNTHETIC_OUTER_SECRET")
 	})}
 	_, d := host.accountSnapshot(context.Background(), accountHTTPA)

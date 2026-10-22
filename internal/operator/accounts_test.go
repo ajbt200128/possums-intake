@@ -14,11 +14,11 @@ import (
 	"possums-intake/internal/ledger"
 )
 
-const accountRecords = "/api/collections/ledger_accounts/records"
+const accountRecords = "/api/collections/accounts/records"
 
 func createNative(t *testing.T, h http.Handler, token string) string {
 	t.Helper()
-	rec := request(t, h, "POST", accountRecords, `{"account_id":"native-synthetic","balance":"18446744073709551615","enabled":true,"id":""}`, token)
+	rec := request(t, h, "POST", accountRecords, `{"balance":"18446744073709551615","enabled":true,"id":""}`, token)
 	var result struct {
 		ID           string
 		Balance      string
@@ -40,11 +40,11 @@ func TestNativeSDKQueriesAndStockInput(t *testing.T) {
 	token := login(t, h)
 	// SDK coercion, caller-selected native identity and additive fields are no
 	// longer replaced with the project's strict financial JSON parser.
-	rec := request(t, h, "POST", accountRecords, `{"id":"aaaaaaaaaaaaaaa","account_id":"stock-input","balance":10,"enabled":true,"unknown":"`+hostile+`"}`, token)
+	rec := request(t, h, "POST", accountRecords, `{"id":"aaaaaaaaaaaaaaa","balance":10,"enabled":true,"unknown":"`+hostile+`"}`, token)
 	if rec.Code != 200 {
 		t.Fatal("stock record input refused")
 	}
-	for _, query := range []string{"?fields=id,balance&filter=account_id='stock-input'", "?perPage=1000", "?page=1&page=1", "?%70age=%31", "?sort=-@rowid&expand=id"} {
+	for _, query := range []string{"?fields=id,balance&filter=id='aaaaaaaaaaaaaaa'", "?perPage=1000", "?page=1&page=1", "?%70age=%31", "?sort=-@rowid&expand=id"} {
 		if request(t, h, "GET", accountRecords+query, "", token).Code != 200 {
 			t.Fatal("stock query refused")
 		}
@@ -61,25 +61,27 @@ func TestNativeStockAccountBypassesHeldBalanceAndIdentityGuard(t *testing.T) {
 	s, app, h := fixture(t)
 	token := login(t, h)
 	for _, auth := range []string{"", testKey, "Bearer " + testKey} {
-		expectClosed(t, request(t, h, "POST", accountRecords, `{"account_id":"a","balance":"1","enabled":true}`, auth), 403, "native_account_request")
+		expectClosed(t, request(t, h, "POST", accountRecords, `{"balance":"1","enabled":true}`, auth), 403, "native_account_request")
 	}
 	id := createNative(t, h, token)
 	path := accountRecords + "/" + id
-	if request(t, h, "PATCH", path, `{"account_id":"native-renamed"}`, token).Code != 200 {
-		t.Fatal("stock identity edit refused")
+	// The SDK itself prohibits primary-key changes; trusted administration does
+	// not disable that inherent constraint or reintroduce a mutable alias.
+	if request(t, h, "PATCH", path, `{"id":"renamed00000000"}`, token).Code != 400 {
+		t.Fatal("stock primary-key constraint lost")
 	}
-	if request(t, h, "PATCH", path, `{"account_id":"native-synthetic"}`, token).Code != 200 {
-		t.Fatal("stock identity edit reversal refused")
+	if request(t, h, "PATCH", path, `{"id":"`+id+`"}`, token).Code != 200 {
+		t.Fatal("unchanged SDK identity refused")
 	}
 	key := fmt.Sprintf("v1.%013d.%032x", time.Now().UnixMilli(), 51)
-	r, err := s.Reserve(context.Background(), ledger.ReserveInput{AccountID: "native-synthetic", Maximum: "10", TimeoutSeconds: 600, IdempotencyKey: key})
+	r, err := s.Reserve(context.Background(), ledger.ReserveInput{AccountID: id, Maximum: "10", TimeoutSeconds: 600, IdempotencyKey: key})
 	if err != nil {
 		t.Fatal("reserve fixture failed")
 	}
 	if request(t, h, "PATCH", path, `{"balance":"20","enabled":true}`, token).Code != 200 {
 		t.Fatal("trusted held-balance edit refused")
 	}
-	if snapshot, err := s.Balance(context.Background(), "native-synthetic"); err != nil || snapshot.Available != "10" {
+	if snapshot, err := s.Balance(context.Background(), id); err != nil || snapshot.Available != "10" {
 		t.Fatal("stock stored total did not reach custom snapshot")
 	}
 	// SQL FK constraints still apply; policy removal does not drop constraints.
@@ -94,7 +96,7 @@ func TestNativeStockAccountBypassesHeldBalanceAndIdentityGuard(t *testing.T) {
 		t.Fatal("native write persisted activity")
 	}
 	// An unreferenced account can be deleted using stock CRUD.
-	if request(t, h, "POST", accountRecords, `{"id":"bbbbbbbbbbbbbbb","account_id":"delete-stock","balance":"1","enabled":true}`, token).Code != 200 || request(t, h, "DELETE", accountRecords+"/bbbbbbbbbbbbbbb", "", token).Code != 204 {
+	if request(t, h, "POST", accountRecords, `{"id":"bbbbbbbbbbbbbbb","balance":"1","enabled":true}`, token).Code != 200 || request(t, h, "DELETE", accountRecords+"/bbbbbbbbbbbbbbb", "", token).Code != 204 {
 		t.Fatal("stock create/delete refused")
 	}
 }
@@ -108,7 +110,7 @@ func (w *brokenNativeDelivery) Write([]byte) (int, error) { return 0, errors.New
 func TestNativePostCommitDeliveryFailureDoesNotResubmitOrEraseCommit(t *testing.T) {
 	s, _, h := fixture(t)
 	token := login(t, h)
-	req := httptest.NewRequest("POST", accountRecords, strings.NewReader(`{"account_id":"lost-native-delivery","balance":"10","enabled":true}`))
+	req := httptest.NewRequest("POST", accountRecords, strings.NewReader(nativeAccountBody(t, `{"id":"lostdelivery000","balance":"10","enabled":true}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", token)
 	aborted := false
@@ -126,7 +128,7 @@ func TestNativePostCommitDeliveryFailureDoesNotResubmitOrEraseCommit(t *testing.
 	if !aborted {
 		t.Fatal("failed native delivery was not aborted")
 	}
-	if snapshot, err := s.Balance(context.Background(), "lost-native-delivery"); err != nil || snapshot.Available != "10" {
+	if snapshot, err := s.Balance(context.Background(), "lostdelivery000"); err != nil || snapshot.Available != "10" {
 		t.Fatal("stock commit erased by delivery failure")
 	}
 }

@@ -35,11 +35,11 @@ func requireFailureCounts(t *testing.T, spy *failureSpy, want ...failuretype.Typ
 func TestHTTPExpiryDecisionAndCompletionFaultBothCount(t *testing.T) {
 	s := newTestLedger(t)
 	h := newTestHandler(t, s, nil)
-	provision(t, h, "a")
-	credit(t, h, "a", "10", 1)
+	createAccountFixture(t, h, "aaaaaaaaaaaaaaa")
+	credit(t, h, "aaaaaaaaaaaaaaa", "10", 1)
 	headers := authHeaders("application/json")
 	headers["Idempotency-Key"] = key(2)
-	out := request(t, h, "POST", "/reservations", headers, `{"account_id":"a","maximum":"5","timeout_seconds":1}`)
+	out := request(t, h, "POST", "/reservations", headers, `{"account_id":"aaaaaaaaaaaaaaa","maximum":"5","timeout_seconds":1}`)
 	requireStatus(t, out, 200)
 	id := decodeMap(t, out)["reservation"].(map[string]any)["reservation_id"].(string)
 	time.Sleep(1100 * time.Millisecond)
@@ -59,7 +59,7 @@ func TestHTTPOuterPanicIsDistinctFromObservedAccountingRefusal(t *testing.T) {
 	s := newTestLedger(t)
 	spy := &failureSpy{}
 	wrapped := &misuseReportAccounting{Accounting: s, panicAfter: true}
-	out := postJSON(t, observedHandler(t, wrapped, spy), "/balance", `{"account_id":"missing"}`)
+	out := postJSON(t, observedHandler(t, wrapped, spy), "/balance", `{"account_id":"missing00000000"}`)
 	requireStatus(t, out, 503)
 	closedDiagnostic(t, out)
 	requireFailureCounts(t, spy, failuretype.AccountMissing, failuretype.RequestDispatchUnknown)
@@ -76,7 +76,7 @@ func TestHTTPAmbientCancellationDoesNotExplainIndependentDeliveryFault(t *testin
 		} else {
 			w.err = noFormatError{}
 		}
-		observedHandler(t, stubLedger{err: context.Canceled}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"a"}`).WithContext(ctx))
+		observedHandler(t, stubLedger{err: context.Canceled}, spy).ServeHTTP(w, failureRequest("/balance", `{"account_id":"aaaaaaaaaaaaaaa"}`).WithContext(ctx))
 		requireFailureCounts(t, spy, failuretype.Cancelled, failuretype.ResponseDeliveryUnknown)
 	}
 }

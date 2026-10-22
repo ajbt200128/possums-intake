@@ -18,6 +18,7 @@ import (
 	"github.com/pocketbase/pocketbase/mails"
 	"possums-intake/internal/httpapi"
 	"possums-intake/internal/ledger"
+	"possums-intake/internal/testfixture"
 )
 
 func TestLoggingOffDefaultAndNativeActualHTTP(t *testing.T) {
@@ -27,11 +28,12 @@ func TestLoggingOffDefaultAndNativeActualHTTP(t *testing.T) {
 			name = "operator"
 		}
 		t.Run(name, func(t *testing.T) {
+			var service *ledger.Service
 			var app core.App
 			var h http.Handler
 			var dir string
 			if native {
-				_, app, h = fixture(t)
+				service, app, h = fixture(t)
 				dir = app.DataDir()
 				if app.Settings().Logs.MaxDays != 0 {
 					t.Fatal("initial native log retention enabled")
@@ -50,6 +52,7 @@ func TestLoggingOffDefaultAndNativeActualHTTP(t *testing.T) {
 				if err != nil {
 					t.Fatal("default open failed")
 				}
+				service = s
 				t.Cleanup(func() {
 					if s.Close() != nil {
 						t.Error("default close failed")
@@ -59,6 +62,9 @@ func TestLoggingOffDefaultAndNativeActualHTTP(t *testing.T) {
 				if err != nil {
 					t.Fatal("default handler failed")
 				}
+			}
+			if _, err := testfixture.Create(context.Background(), service, "logging00000000"); err != nil {
+				t.Fatal("synthetic auth account unavailable")
 			}
 			server := httptest.NewServer(h)
 			defer server.Close()
@@ -99,7 +105,7 @@ func TestLoggingOffDefaultAndNativeActualHTTP(t *testing.T) {
 				if status != 500 {
 					t.Fatal("hostile native failure not classified")
 				}
-				status, _ = send("POST", accountRecords, `{"account_id":"logging-synthetic","balance":"1","enabled":true}`, token)
+				status, _ = send("POST", accountRecords, nativeAccountBody(t, `{"balance":"1","enabled":true}`), token)
 				if status != 200 {
 					t.Fatal("native account admin unavailable")
 				}
@@ -119,7 +125,7 @@ func TestLoggingOffDefaultAndNativeActualHTTP(t *testing.T) {
 			if native && app.Settings().Logs.MaxDays != 0 {
 				t.Fatal("native settings write enabled logging")
 			}
-			if status, _ := send("POST", "/accounts/provision", `{"account_id":"logging-custom"}`, "Bearer "+testKey); status != 200 {
+			if status, _ := send("POST", "/balance", `{"account_id":"logging00000000"}`, "Bearer "+testKey); status != 200 {
 				t.Fatal("default/custom account provisioning unavailable")
 			}
 			if status, _ := send("POST", "/balance", `{"account_id":"`+hostile+`"}`, "Bearer "+hostile); status != 401 {

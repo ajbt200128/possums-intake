@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pocketbase/pocketbase/core"
 	"possums-intake/internal/httpapi"
 	"possums-intake/internal/ledger"
 	"possums-intake/internal/operator"
@@ -63,20 +64,23 @@ func TestCustomerSiteCombinedBrowser(t *testing.T) {
 	if err != nil || initializeWebsite(ctx, app) != nil {
 		t.Fatal("CUSTOMER_SITE_SCHEMA_UNAVAILABLE stage=fixture_schema constraint=explicit_supported_initialization; inspect fixture setup privately")
 	}
-	for _, account := range []string{"synthetic-site-a", "synthetic-site-b"} {
-		if _, err := service.Provision(ctx, account); err != nil {
-			t.Fatal("CUSTOMER_SITE_ACCOUNT_UNAVAILABLE stage=fixture_accounts constraint=explicit_synthetic_provision; inspect fixture privately")
-		}
-	}
 	key := func(n int) string { return fmt.Sprintf("v1.%013d.%032x", time.Now().UnixMilli(), n) }
-	if _, err := service.Credit(ctx, ledger.CreditInput{AccountID: "synthetic-site-a", Amount: "100", IdempotencyKey: key(1)}); err != nil {
-		t.Fatal("CUSTOMER_SITE_CREDIT_UNAVAILABLE stage=fixture_credit constraint=explicit_synthetic_credit; inspect fixture privately")
-	}
-	for i, maximum := range []ledger.Money{"7", "3"} {
-		if _, err := service.Reserve(ctx, ledger.ReserveInput{AccountID: "synthetic-site-a", Maximum: maximum, TimeoutSeconds: 600, IdempotencyKey: key(i + 2)}); err != nil {
-			t.Fatal("CUSTOMER_SITE_HOLD_UNAVAILABLE stage=fixture_hold constraint=immutable_synthetic_timeout; inspect fixture privately")
+	lookupA := sha256.Sum256([]byte("possums-intake/customer-key/lookup/v1\x00" + strings.Repeat("A", 128)))
+	// Fund only the actual record created by the browser's native SDK form.
+	// This explicit test hook is not runtime credential creation or aliasing.
+	app.OnRecordAfterCreateSuccess(ledger.AccountCollectionName).BindFunc(func(e *core.RecordEvent) error {
+		if e.Record.GetString("key_lookup") == "v1_"+hex.EncodeToString(lookupA[:]) {
+			if _, err := service.Credit(ctx, ledger.CreditInput{AccountID: e.Record.Id, Amount: "100", IdempotencyKey: key(1)}); err != nil {
+				return err
+			}
+			for i, maximum := range []ledger.Money{"7", "3"} {
+				if _, err := service.Reserve(ctx, ledger.ReserveInput{AccountID: e.Record.Id, Maximum: maximum, TimeoutSeconds: 600, IdempotencyKey: key(i + 2)}); err != nil {
+					return err
+				}
+			}
 		}
-	}
+		return e.Next()
+	})
 	shared := make([]byte, 32)
 	if _, err := rand.Read(shared); err != nil {
 		t.Fatal("CUSTOMER_SITE_KEY_UNAVAILABLE stage=fixture_key constraint=local_random_generation; inspect local runtime privately")
@@ -117,13 +121,17 @@ func TestCustomerSiteCombinedBrowser(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(output)) != "CUSTOMER_SITE_OK" {
 		t.Fatalf("CUSTOMER_SITE_BROWSER_UNAVAILABLE stage=%s constraint=synthetic_script_completion_cause_unknown outcome=unconfirmed; inspect the isolated fixture privately; no operation was replayed", customerSiteStage(output))
 	}
-	for _, fixture := range []struct{ key, account string }{{strings.Repeat("A", 128), "synthetic-site-a"}, {strings.Repeat("C", 64), "synthetic-site-b"}} {
+	var accountA string
+	for index, fixture := range []struct{ key string }{{strings.Repeat("A", 128)}, {strings.Repeat("C", 64)}} {
 		lookup := sha256.Sum256([]byte("possums-intake/customer-key/lookup/v1\x00" + fixture.key))
 		password := sha256.Sum256([]byte("possums-intake/customer-key/password/v1\x00" + fixture.key))
 		secret := base64.RawURLEncoding.EncodeToString(password[:])
 		record, err := app.FindFirstRecordByData(siteauth.CustomerCollection, "key_lookup", "v1_"+hex.EncodeToString(lookup[:]))
-		if err != nil || record.GetString("account_id") != fixture.account || !record.ValidatePassword(secret) {
+		if err != nil || len(record.Id) != 15 || record.Collection().Fields.GetByName("account_id") != nil || !record.ValidatePassword(secret) {
 			t.Fatal("CUSTOMER_SITE_VERIFIER_UNAVAILABLE stage=fixture_receipt constraint=exact_binding_and_sdk_verifier; inspect synthetic state privately")
+		}
+		if index == 0 {
+			accountA = record.Id
 		}
 		if filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -144,12 +152,12 @@ func TestCustomerSiteCombinedBrowser(t *testing.T) {
 			t.Fatal("CUSTOMER_SITE_PERSISTENCE_REFUSED stage=fixture_files constraint=no_raw_or_derived_key_bytes; inspect fixture privately")
 		}
 	}
-	snapshot, err := service.Balance(ctx, "synthetic-site-a")
+	snapshot, err := service.Balance(ctx, accountA)
 	if err != nil || snapshot.AccountBalance.Balance != "100" || snapshot.Available != "90" || len(snapshot.PendingReservations) != 2 {
 		t.Fatal("CUSTOMER_SITE_FINANCIAL_RECEIPT_UNAVAILABLE stage=fixture_receipt constraint=unchanged_authoritative_snapshot; do not infer rollback or replay; inspect synthetic state privately")
 	}
 	var logs, origins, customers int
-	if app.Settings().Logs.MaxDays != 0 || app.AuxDB().NewQuery("SELECT count(*) FROM _logs").Row(&logs) != nil || logs != 0 || app.DB().NewQuery("SELECT count(*) FROM _authOrigins").Row(&origins) != nil || origins != 0 || app.DB().NewQuery("SELECT count(*) FROM customer_keys").Row(&customers) != nil || customers != 2 {
+	if app.Settings().Logs.MaxDays != 0 || app.AuxDB().NewQuery("SELECT count(*) FROM _logs").Row(&logs) != nil || logs != 0 || app.DB().NewQuery("SELECT count(*) FROM _authOrigins").Row(&origins) != nil || origins != 0 || app.DB().NewQuery("SELECT count(*) FROM accounts").Row(&customers) != nil || customers != 2 {
 		t.Fatal("CUSTOMER_SITE_ACTIVITY_REFUSED stage=fixture_receipt constraint=logging_off_and_only_explicit_customers; inspect synthetic state privately")
 	}
 }

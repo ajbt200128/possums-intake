@@ -25,13 +25,6 @@ func TestCustomerSchemaLedgerRestart(t *testing.T) {
 			t.Error("restart fixture close unavailable")
 		}
 	}()
-	if _, err := s.Provision(ctx, "synthetic-persistent-account"); err != nil {
-		t.Fatal("restart fixture account unavailable")
-	}
-	before, err := s.Balance(ctx, "synthetic-persistent-account")
-	if err != nil {
-		t.Fatal("restart baseline unavailable")
-	}
 	app, err := s.OperatorApp()
 	if err != nil || siteauth.InitializeCustomerAuth(app) != nil {
 		t.Fatal("restart auth initialization unavailable")
@@ -43,11 +36,16 @@ func TestCustomerSchemaLedgerRestart(t *testing.T) {
 	key := strings.Repeat("A", 128)
 	lookup, secret := syntheticMaterial(key)
 	r := core.NewRecord(c)
-	r.Set("account_id", "synthetic-persistent-account")
+	r.Set("balance", "17")
+	r.Set("enabled", true)
 	r.Set("key_lookup", lookup)
 	r.SetPassword(secret)
 	if app.Save(r) != nil {
 		t.Fatal("restart synthetic credential unavailable")
+	}
+	before, err := s.Balance(ctx, r.Id)
+	if err != nil {
+		t.Fatal("restart baseline unavailable")
 	}
 	a, err := siteauth.NewCustomer(app)
 	if err != nil {
@@ -73,13 +71,13 @@ func TestCustomerSchemaLedgerRestart(t *testing.T) {
 		t.Fatal("restart persisted auth schema unavailable")
 	}
 	p, err := a.Validate(ctx, token)
-	if err != nil || p.AccountID != "synthetic-persistent-account" {
+	if err != nil || p.AccountID != r.Id || p.RecordID != r.Id {
 		t.Fatal("restart changed SDK signing or binding state")
 	}
 	if _, _, err := a.Login(ctx, key); err != nil {
 		t.Fatal("restart credential no longer authenticates")
 	}
-	after, err := s.Balance(ctx, "synthetic-persistent-account")
+	after, err := s.Balance(ctx, r.Id)
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatal("auth initialization/restart changed account snapshot")
 	}

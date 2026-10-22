@@ -12,7 +12,7 @@ import sqlite3
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import smoke as s
@@ -23,20 +23,20 @@ def rpc(service, path, body, *, identity=None, status=200):
 
 
 def snapshot(service):
-    return rpc(service, "/balance", {"account_id": "synthetic-storage"})
+    return rpc(service, "/balance", {"account_id": service.accounts[0]})
 
 
 def prepare(service):
     service.init()
     service.start()
-    rpc(service, "/accounts/provision", {"account_id": "synthetic-storage"})
+    s.expect(len(service.accounts) == 2, "storage_fixture", "supported_auth_accounts")
     identity = s.new_key()
-    receipt = rpc(service, "/credits", {"account_id": "synthetic-storage", "amount": "100"}, identity=identity)
+    receipt = rpc(service, "/credits", {"account_id": service.accounts[0], "amount": "100"}, identity=identity)
     return identity, receipt
 
 
 def reserve(service, timeout=600):
-    body = {"account_id": "synthetic-storage", "maximum": "10", "timeout_seconds": timeout}
+    body = {"account_id": service.accounts[0], "maximum": "10", "timeout_seconds": timeout}
     identity = s.new_key()
     row = rpc(service, "/reservations", body, identity=identity)["reservation"]
     return body, identity, row
@@ -64,9 +64,9 @@ def crash_and_expiry(service):
         _, _, refunded = reserve(service)
         refunded = rpc(service, "/reservations/refund", {"reservation_id": refunded["reservation_id"]})["reservation"]
         short_body, short_key, short = reserve(service, timeout=3)
-        deadline = datetime.strptime(short["expires_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc).timestamp()
+        deadline = datetime.strptime(short["expires_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC).timestamp()
         before = snapshot(service)
-        s.account(before["account_balance"], "synthetic-storage", "97", "storage_before_crash")
+        s.account(before["account_balance"], service.accounts[0], "97", "storage_before_crash")
         expected_holds = sorted([active, short], key=lambda row: row["reservation_id"])
         s.expect(before["pending_reservations"] == expected_holds and before["available"] == "77", "storage_before_crash", "both_holds_still_active")
         wal = Path(service.state, "data.db-wal")
@@ -88,7 +88,7 @@ def crash_and_expiry(service):
     after = snapshot(service)
     s.expect(after["account_balance"] == before["account_balance"], "storage_restart", "total_preserved")
     s.expect(after["pending_reservations"] == [active] and after["available"] == "87", "storage_restart", "expired_hold_released_active_preserved")
-    s.expect(rpc(service, "/credits", {"account_id": "synthetic-storage", "amount": "100"}, identity=credit_key) == credit, "storage_replay", "original_credit_receipt")
+    s.expect(rpc(service, "/credits", {"account_id": service.accounts[0], "amount": "100"}, identity=credit_key) == credit, "storage_replay", "original_credit_receipt")
     s.expect(rpc(service, "/reservations", body, identity=identity)["reservation"] == active, "storage_replay", "immutable_active_row")
     s.expect(rpc(service, "/reservations/refund", {"reservation_id": terminal["reservation_id"]})["reservation"] == terminal, "storage_replay", "first_settlement_wins")
     s.expect(rpc(service, "/reservations/settle", {"reservation_id": refunded["reservation_id"], "charged_amount": "10"})["reservation"] == refunded, "storage_replay", "first_refund_wins")
@@ -121,7 +121,7 @@ def capacity_failure(service, binary, root):
     failure_outcome = None
     for _ in range(256):
         identity = s.new_key()
-        status, payload = s.run_curl(service.port, service.key, "POST", "/credits", {"account_id": "synthetic-storage", "amount": "1"}, identity, "storage_capacity")
+        status, payload = s.run_curl(service.port, service.key, "POST", "/credits", {"account_id": service.accounts[0], "amount": "1"}, identity, "storage_capacity")
         s.expect(service.key.encode() not in payload, "storage_privacy", "no_key_in_response")
         response = s.decode(payload, "storage_capacity")
         if status == 200:
@@ -138,7 +138,7 @@ def capacity_failure(service, binary, root):
     service.start()  # same original state; no init, reset, copy or compensation
     observed = int(snapshot(service)["account_balance"][0]["balance"])
     capacity_balance(observed, acknowledged, failure_outcome)
-    rpc(service, "/credits", {"account_id": "synthetic-storage", "amount": "1"}, identity=failed_key)
+    rpc(service, "/credits", {"account_id": service.accounts[0], "amount": "1"}, identity=failed_key)
     s.expect(snapshot(service)["account_balance"][0]["balance"] == str(101 + acknowledged), "storage_capacity", "same_identity_resolves_once")
     service.stop()
 

@@ -90,7 +90,7 @@ func TestHTTPActualWireAndStdioNeverReceiveRawFailureFields(t *testing.T) {
 
 func TestHTTPFailureReportAndObserverAddNoSQLOrRetry(t *testing.T) {
 	s := newTestLedger(t)
-	provision(t, newTestHandler(t, s, nil), "a")
+	createAccountFixture(t, newTestHandler(t, s, nil), "aaaaaaaaaaaaaaa")
 	// Same test-only private-app seam as completion tests; no production knob.
 	field := reflect.ValueOf(s).Elem().FieldByName("app")
 	app := *(*core.App)(unsafe.Pointer(field.UnsafeAddr()))
@@ -102,7 +102,7 @@ func TestHTTPFailureReportAndObserverAddNoSQLOrRetry(t *testing.T) {
 	db.QueryLogFunc = func(context.Context, time.Duration, string, *sql.Rows, error) { reads.Add(1) }
 	db.ExecLogFunc = func(context.Context, time.Duration, string, sql.Result, error) { writes.Add(1) }
 	defer func() { db.QueryLogFunc = nil; db.ExecLogFunc = nil }()
-	for _, id := range []string{"a", "missing"} {
+	for _, id := range []string{"aaaaaaaaaaaaaaa", "missing00000000"} {
 		reads.Store(0)
 		writes.Store(0)
 		_, _ = s.Balance(testContext, id)
@@ -115,7 +115,7 @@ func TestHTTPFailureReportAndObserverAddNoSQLOrRetry(t *testing.T) {
 		if reads.Load() != baselineReads || writes.Load() != baselineWrites {
 			t.Fatal("HTTP report/observation initiated extra SQL or retry")
 		}
-		if id == "missing" {
+		if id == "missing00000000" {
 			expectFailures(t, spy, failuretype.AccountMissing)
 		} else {
 			expectFailures(t, spy)

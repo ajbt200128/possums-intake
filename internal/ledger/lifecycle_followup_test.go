@@ -85,9 +85,9 @@ func TestOpenDefaultOwnerValidationAndRealTeardownPreserveMoney(t *testing.T) {
 	for _, observed := range []bool{false, true} {
 		for _, same := range []bool{false, true} {
 			s, dir, now := testService(t)
-			fund(t, s, "synthetic", "20", now)
-			reserve(t, s, ReserveInput{"synthetic", "7", 1800, key(now, 2)})
-			before := balance(t, s, "synthetic")
+			fund(t, s, "synthetic000000", "20", now)
+			reserve(t, s, ReserveInput{"synthetic000000", "7", 1800, key(now, 2)})
+			before := balance(t, s, "synthetic000000")
 			if s.Close() != nil {
 				t.Fatal("fixture close unavailable")
 			}
@@ -135,7 +135,7 @@ func TestOpenDefaultOwnerValidationAndRealTeardownPreserveMoney(t *testing.T) {
 			if err != nil {
 				t.Fatal("preserved state reopen unavailable")
 			}
-			after := balance(t, reopened, "synthetic")
+			after := balance(t, reopened, "synthetic000000")
 			if !reflect.DeepEqual(before, after) {
 				t.Fatal("validation/teardown faults changed accounting")
 			}
