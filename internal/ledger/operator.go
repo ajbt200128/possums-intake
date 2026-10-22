@@ -72,11 +72,6 @@ func initializeOperator(tx *transaction, record *core.Record) error {
 		return err
 	}
 	collection.AuthAlert.Enabled = false
-	collection.OTP.Enabled = false
-	collection.MFA.Enabled = false
-	collection.OAuth2.Enabled = false
-	collection.PasswordAuth.Enabled = true
-	collection.PasswordAuth.IdentityFields = []string{"email"}
 	if err := app.SaveWithContext(tx.ctx, collection); err != nil {
 		return err
 	}

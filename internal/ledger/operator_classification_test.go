@@ -48,6 +48,37 @@ func TestOperatorCredentialsAndNativeSetupWithoutAuthorityRestrictions(t *testin
 	}
 }
 
+func TestOperatorInitializationPreservesNativeAuthenticationControls(t *testing.T) {
+	s, _, _ := testService(t)
+	collection, err := s.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	if err != nil {
+		t.Fatal("native collection unavailable")
+	}
+	collection.OTP.Enabled = true
+	collection.OTP.Duration = 181
+	collection.MFA.Enabled = true
+	collection.MFA.Duration = 601
+	if err := s.app.Save(collection); err != nil {
+		t.Fatal("supported native authentication configuration refused")
+	}
+	credentials := OperatorCredentials{Email: "operator@example.invalid", Password: "SYNTHETIC_OPERATOR_PASSWORD"}
+	record, err := prepareOperator(background, s.app, credentials)
+	if err != nil {
+		t.Fatal("native operator preparation unavailable")
+	}
+	if err := s.run(background, func(tx *transaction) error { return initializeOperator(tx, record) }, false); err != nil {
+		t.Fatal("native operator initialization unavailable")
+	}
+	actual, err := s.app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	if err != nil || actual.AuthAlert.Enabled || !actual.OTP.Enabled || actual.OTP.Duration != 181 || !actual.MFA.Enabled || actual.MFA.Duration != 601 || actual.OAuth2.Enabled != collection.OAuth2.Enabled || actual.PasswordAuth.Enabled != collection.PasswordAuth.Enabled {
+		t.Fatal("initialization changed native authentication controls or retained AuthAlert")
+	}
+	user, err := s.app.FindAuthRecordByEmail(core.CollectionNameSuperusers, credentials.Email)
+	if err != nil || !user.ValidatePassword(credentials.Password) {
+		t.Fatal("supported native operator record initialization unavailable")
+	}
+}
+
 func TestOperatorReadFaultsRetainOnlyNumericCause(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "operator")
 	credentials := OperatorCredentials{Email: "fake@example.test", Password: "synthetic-only-password"}
