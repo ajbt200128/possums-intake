@@ -27,6 +27,10 @@ r.CODES.update({
 
 
 STARTUP_EXPECTED = {
+    "LEDGER_REPLACE_OPTIONS_INVALID": {
+        "stage": "replacement_options", "constraint": "exact_stopped_service_discard_confirmation_and_fixed_target",
+        "outcome": "old_state_not_discarded",
+        "next_step": "Replacement refused before discard. Underlying cause unknown unless a validation constraint is stated. Preserve disk/key and inspect privately; do not automatically retry."},
     "LEDGER_STARTUP_MISSING_STATE": {
         "stage": "startup", "constraint": "existing_state_database", "outcome": "unavailable",
         "next_step": "Attach the original state. Only disposable empty local state may use explicit init."},
@@ -269,6 +273,7 @@ def qualify(archive, probe):
         try:
             volume = fixture.volume()
             fixture.once(volume, "serve", failure="LEDGER_STARTUP_MISSING_STATE")
+            fixture.once(volume, "ledger-replace", failure="LEDGER_REPLACE_OPTIONS_INVALID")
             fixture.once(volume, "init", operator=True)
             fixture.once(volume, "init", failure="LEDGER_INIT_NONEMPTY")
             server = fixture.start(volume, operator=True)

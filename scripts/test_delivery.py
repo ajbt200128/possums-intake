@@ -737,6 +737,24 @@ class DeliveryTests(unittest.TestCase):
         with patch.object(smoke, "command", return_value=result):
             self.stop("image_privacy", lambda: fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA"))
 
+    def test_image_replacement_without_explicit_selection_refuses_before_init(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
+        view = {"code": "LEDGER_REPLACE_OPTIONS_INVALID", "stage": "replacement_options",
+                "constraint": "exact_stopped_service_discard_confirmation_and_fixed_target",
+                "outcome": "old_state_not_discarded",
+                "next_step": "Replacement refused before discard. Underlying cause unknown unless a validation constraint is stated. Preserve disk/key and inspect privately; do not automatically retry."}
+        result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
+        with patch.object(smoke, "command", return_value=result) as command:
+            fixture.once("synthetic-volume", "ledger-replace", failure="LEDGER_REPLACE_OPTIONS_INVALID")
+        args = command.call_args.args[0]
+        self.assertEqual(args[-3:], ["ledger-replace", "--state", "/state"])
+        self.assertNotIn("--entrypoint", args)
+        self.assertNotIn("--discard-existing-ledger", args)
+        view["outcome"] = "no_effect"
+        result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
+        with patch.object(smoke, "command", return_value=result):
+            self.stop("image_privacy", lambda: fixture.once("synthetic-volume", "ledger-replace", failure="LEDGER_REPLACE_OPTIONS_INVALID"))
+
     def test_actual_image_negative_requires_exact_closed_diagnostic(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
         view = {"code": "LEDGER_STARTUP_SCHEMA", **smoke.STARTUP_EXPECTED["LEDGER_STARTUP_SCHEMA"]}

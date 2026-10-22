@@ -29,6 +29,9 @@ func executeContext(ctx context.Context, args []string) error {
 }
 
 func executeObserved(ctx context.Context, args []string, observer failureowner.Observer) error {
+	if len(args) > 0 && args[0] == "ledger-replace" {
+		return executeLedgerReplace(ctx, args[1:], observer)
+	}
 	if len(args) > 0 && args[0] == "stripe-sandbox-dev" {
 		return executeStripeSandboxDev(ctx, args[1:], observer)
 	}
