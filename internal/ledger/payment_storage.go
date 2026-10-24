@@ -77,7 +77,7 @@ func validatePaymentDDL(query func(string, dbx.Params) *dbx.Query) (bool, error)
 		return false, nil
 	}
 	if objects != 6 {
-		return false, diagnostic(CodeSchema)
+		return false, schemaFailure(schemaPaymentLayout)
 	}
 	for _, statement := range strings.Split(paymentSchemaV1, ";") {
 		statement = strings.TrimSpace(statement)
@@ -88,13 +88,13 @@ func validatePaymentDDL(query func(string, dbx.Params) *dbx.Query) (bool, error)
 		var stored string
 		err := query("SELECT sql FROM sqlite_schema WHERE name={:name}", dbx.Params{"name": name}).Row(&stored)
 		if err == sql.ErrNoRows {
-			return false, diagnostic(CodeSchema)
+			return false, schemaFailure(schemaPaymentLayout)
 		}
 		if err != nil {
 			return false, err
 		}
 		if stored != statement {
-			return false, diagnostic(CodeSchema)
+			return false, schemaFailure(schemaPaymentLayout)
 		}
 	}
 	var count, version, days int
@@ -103,16 +103,16 @@ func validatePaymentDDL(query func(string, dbx.Params) *dbx.Query) (bool, error)
 		return false, err
 	}
 	if count != 1 {
-		return false, diagnostic(CodeSchema)
+		return false, schemaFailure(schemaPaymentMetadata)
 	}
 	if err := query("SELECT schema_version,identity,sales_retention_days FROM payment_meta WHERE singleton=1", nil).Row(&version, &identity, &days); err != nil {
 		if err == sql.ErrNoRows {
-			return false, diagnostic(CodeSchema)
+			return false, schemaFailure(schemaPaymentMetadata)
 		}
 		return false, err
 	}
 	if version != 1 || identity != "synthetic-only" || days != paymentSalesDays {
-		return false, diagnostic(CodeSchema)
+		return false, schemaFailure(schemaPaymentMetadata)
 	}
 	return true, nil
 }

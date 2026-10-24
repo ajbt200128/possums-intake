@@ -123,8 +123,8 @@ func classifiedFailure(err error, fallback failuretype.Type) (d *Diagnostic, kin
 }
 
 // CanonicalFailure is opt-in: legacy Failure and its callers are unchanged.
-// Only closed core codes select public templates; public fields are never
-// copied from an error. Owners of init/runtime variants must adapt separately.
+// Only closed core codes and schema reasons select public templates; public
+// fields are never copied. Owners of init/runtime variants adapt separately.
 func CanonicalFailure(err error, fallback failuretype.Type) *Diagnostic {
 	if err == nil {
 		return nil
@@ -132,6 +132,9 @@ func CanonicalFailure(err error, fallback failuretype.Type) *Diagnostic {
 	d, kind := classifiedFailure(err, fallback)
 	if d != nil && defaultFailureKind(d.Code).Valid() {
 		clean := diagnostic(d.Code)
+		if d.Code == CodeSchema {
+			clean = schemaFailure(schemaReason(d.Constraint))
+		}
 		clean.kind = kind
 		return clean
 	}

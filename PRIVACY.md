@@ -145,6 +145,44 @@ Prepare a separately selected fixed-path `ledger-replace` maintenance command/pr
 
 This intentionally loses existing authentication/signing, publication, accounting and other application state within the selected ledger child; fresh operator creation is part of the approved initialization, never a serving upsert. It does not delete sensitive snapshots previously downloaded elsewhere or establish secure erasure of filesystem/WAL/platform/history copies. All payments/default-off, no real-sale/gateway/inference/telemetry, privacy/closed diagnostic, original disk/key and verification/nonreplay limits remain. The exact implementation, qualification and any eventual observed operation are separate evidence in [the deployment record](docs/merged-account-deployment.md).
 
+### Subsequent fresh-volume reset for the newest qualified source
+
+After reporting a Tinfoil-resolved QEMU boot problem and a changed attached volume,
+the operator explicitly selected **start fresh**. They confirmed that all current
+state is synthetic and authorized permanently discarding the currently attached
+ledger volume and all accounts, balances, holds and operator/site state; create
+**one blank replacement of the same currently configured size on the same
+instance**, initialize once explicitly, then admit existing-only serving only
+after supported successful initialization completion. They also confirmed that
+the intended replacement key is already saved identically in their password
+manager and the current `LEDGER_VOLUME_KEY_B64` managed secret. Inspect secret-name
+metadata only; do not read, generate, regenerate, replace or reveal that value.
+This narrowly supersedes prior disk-preservation/no-allocation/no-init limits for
+this reset only. It is not recovery or permission to retry failed initialization.
+
+Qualify the newest source, content-free schema/volume diagnostic refinements,
+actual native Linux tests, independently matching artifacts, provenance and signed
+initialization/serving profiles before destructive activation. Reconcile the
+current disk/host/instance attachment and its actual size rather than reuse the
+obsolete 1 GiB binding. Preserve instance/domain/CPU2/memory8192/GPU0, CC on/debug
+off; no extra standing disk, real funds, payments/gateway activation, inference,
+raw logs or guard bypass. Stop/detach/delete/create/attach/init/serve outcomes
+require authoritative reconciliation; failed/unknown outcomes are not safe-retry
+evidence. Running/healthy alone is not initialization completion. Deletion is not
+secure erasure of platform/snapshot/native-history copies.
+
+The operator additionally permits enabling Honeycomb telemetry **if useful**.
+This supplies no new signal, logging/tracing, retention, credential-reuse or
+privacy-gate exception: use only the reviewed aggregate metrics after destination,
+private ingestion-credential, source/wire/runtime and deployment qualification.
+Do not reuse gateway credentials or collect raw startup diagnostics. Current
+serving constructs its telemetry runtime only after volume preparation and ledger
+opening, so enabling it cannot explain failures before those boundaries. Keep
+export disabled during offline tests and fresh initialization qualification; any
+later activation is a separately evidenced configuration change, not a debugging
+retry or permission to export more detail. No export is established by this
+policy record.
+
 ## First telemetry scope: metrics only
 
 Use supported Go OpenTelemetry metrics SDK/exporter libraries with explicit, closed observations and a bounded in-memory release policy. Do not copy gateway Rust code or reimplement OTLP. Export directly over authenticated, hostname/certificate-verified OTLP HTTP/protobuf TLS to Honeycomb US; no Collector, agent, external platform reader or log bridge.

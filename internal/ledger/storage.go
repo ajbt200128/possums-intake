@@ -437,7 +437,7 @@ func validateAccountCollection(tx *transaction) error {
 	c, err := tx.app.FindCollectionByNameOrId(AccountCollectionID)
 	if err == sql.ErrNoRows {
 		// The pinned collection lookup proves this required object is absent.
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaAccountMissing)
 	}
 	if err != nil {
 		return readFailure(err)
@@ -447,14 +447,14 @@ func validateAccountCollection(tx *transaction) error {
 		return readFailure(err)
 	}
 	if !match {
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaAccountMetadata)
 	}
 	var count int
 	if err := tx.query("SELECT count(*) FROM _collections WHERE lower(name) GLOB 'ledger_*' OR lower(name) IN ('accounts','customer_keys')", nil).Row(&count); err != nil {
 		return readFailure(err)
 	}
 	if count != 1 {
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaAccountInventory)
 	}
 	return nil
 }
@@ -472,7 +472,7 @@ func validateDDL(query func(string, dbx.Params) *dbx.Query) error {
 		return readFailure(err)
 	}
 	if objects != 11 {
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaObjectInventory)
 	}
 	for _, statement := range strings.Split(schemaV3, ";") {
 		statement = strings.TrimSpace(statement)
@@ -487,13 +487,13 @@ func validateDDL(query func(string, dbx.Params) *dbx.Query) error {
 		var stored string
 		err := query("SELECT sql FROM sqlite_schema WHERE name={:name}", dbx.Params{"name": strings.Trim(name, "`")}).Row(&stored)
 		if err == sql.ErrNoRows {
-			return diagnostic(CodeSchema)
+			return schemaFailure(schemaObjectMissing)
 		}
 		if err != nil {
 			return readFailure(err)
 		}
 		if stored != statement {
-			return diagnostic(CodeSchema)
+			return schemaFailure(schemaObjectDefinition)
 		}
 	}
 	if _, err := validatePaymentDDL(query); err != nil {
@@ -548,7 +548,7 @@ func preflightObserved(ctx context.Context, dir string, observer failureowner.Ob
 	var collection core.Collection
 	if err := query("SELECT * FROM _collections WHERE id={:id}", dbx.Params{"id": AccountCollectionID}).One(&collection); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return diagnostic(CodeSchema)
+			return schemaFailure(schemaAccountMissing)
 		}
 		return err
 	}
@@ -557,14 +557,14 @@ func preflightObserved(ctx context.Context, dir string, observer failureowner.Ob
 		return err
 	}
 	if !match {
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaAccountMetadata)
 	}
 	var collections int
 	if err := query("SELECT count(*) FROM _collections WHERE lower(name) GLOB 'ledger_*' OR lower(name) IN ('accounts','customer_keys')", nil).Row(&collections); err != nil {
 		return err
 	}
 	if collections != 1 {
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaAccountInventory)
 	}
 	return nil
 }
@@ -590,7 +590,7 @@ func (s *Service) validate(ctx context.Context) error {
 				return readFailure(err)
 			}
 			if got != p.expected {
-				return diagnostic(CodeSchema)
+				return schemaFailure(schemaConnectionSettings)
 			}
 		}
 		var violations []struct {

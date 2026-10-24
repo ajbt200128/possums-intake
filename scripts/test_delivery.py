@@ -727,15 +727,31 @@ class DeliveryTests(unittest.TestCase):
     def test_fresh_v3_schema_refusal_uses_exact_current_cli_contract(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
         view = {"code": "LEDGER_STARTUP_SCHEMA", "stage": "state_validation",
-                "constraint": "supported_schema_and_metadata", "outcome": "unavailable",
-                "next_step": "This source requires the fresh merged schema v3. Preserve incompatible state and inspect privately; no migration, empty reset or financial restore is authorized."}
+                "constraint": "supported_schema_object_inventory", "outcome": "unavailable",
+                "next_step": "The schema object inventory is incompatible; this check does not identify a particular missing object or historical version. Underlying cause unknown. Preserve state and inspect the schema privately; no reset, automatic migration or financial restore is authorized."}
         result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
         with patch.object(smoke, "command", return_value=result):
-            fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA")
+            fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA", schema_constraint="supported_schema_object_inventory")
         view["next_step"] = "Inspect schema privately. No down-migration, empty reset or financial restore is authorized."
         result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
         with patch.object(smoke, "command", return_value=result):
-            self.stop("image_privacy", lambda: fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA"))
+            self.stop("image_privacy", lambda: fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA", schema_constraint="supported_schema_object_inventory"))
+
+    def test_image_schema_refinements_require_exact_full_tuple(self):
+        fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
+        for constraint in ("supported_schema_object_inventory", "supported_schema_object_definition"):
+            view = {"code": "LEDGER_STARTUP_SCHEMA", **smoke.SCHEMA_EXPECTED[constraint]}
+            result = subprocess.CompletedProcess([], 1, b"", json.dumps(view).encode())
+            with patch.object(smoke, "command", return_value=result):
+                fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA", schema_constraint=constraint)
+            for field in ("code", "stage", "constraint", "outcome", "next_step", "extra"):
+                hostile = {**view, field: "hostile private fixture"}
+                result = subprocess.CompletedProcess([], 1, b"", json.dumps(hostile).encode())
+                with patch.object(smoke, "command", return_value=result):
+                    self.stop("image_privacy", lambda constraint=constraint: fixture.once("synthetic-volume", "serve", failure="LEDGER_STARTUP_SCHEMA", schema_constraint=constraint))
+        self.assertEqual(smoke.SCHEMA_EXPECTED["supported_schema_object_definition"], {
+            "stage": "state_validation", "constraint": "supported_schema_object_definition", "outcome": "unavailable",
+            "next_step": "A required schema object has an incompatible definition. Underlying cause unknown. Preserve state and inspect the schema privately; no reset, automatic migration or financial restore is authorized."})
 
     def test_image_replacement_without_explicit_selection_refuses_before_init(self):
         fixture = smoke.Fixture("sha256:" + "1" * 64, "/synthetic-probe")
@@ -771,7 +787,7 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(once.call_args_list, [
             call("synthetic-partial-state", "init", failure="LEDGER_COMMIT_UNKNOWN", file_limit=196608),
             call("synthetic-partial-state", "migration-rollback", probe=True),
-            call("synthetic-partial-state", "serve", failure="LEDGER_STARTUP_SCHEMA"),
+            call("synthetic-partial-state", "serve", failure="LEDGER_STARTUP_SCHEMA", schema_constraint="supported_schema_object_inventory"),
             call("synthetic-partial-state", "init", failure="LEDGER_INIT_NONEMPTY"),
             call("synthetic-partial-state", "logs", probe=True),
         ])
