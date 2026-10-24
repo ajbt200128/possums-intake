@@ -9,6 +9,7 @@ type Outcome string
 type NextStep string
 
 const (
+	CodeLiveConfiguration    Code = "STRIPE_LIVE_CONFIGURATION_INVALID"
 	CodeSandboxConfiguration Code = "STRIPE_SANDBOX_CONFIGURATION_INVALID"
 	CodeConfiguration        Code = "STRIPE_OFFLINE_CONFIGURATION_INVALID"
 	CodeInput                Code = "STRIPE_INPUT_INVALID"
@@ -18,6 +19,7 @@ const (
 	CodeWebhook              Code = "STRIPE_WEBHOOK_REJECTED"
 	CodeUnexpected           Code = "STRIPE_COMPONENT_CAUSE_UNKNOWN"
 
+	StageLiveConfiguration    Stage = "live_configuration"
 	StageSandboxConfiguration Stage = "sandbox_configuration"
 	StageConfiguration        Stage = "offline_configuration"
 	StageCreate               Stage = "checkout_create"
@@ -27,6 +29,11 @@ const (
 	StageCharge               Stage = "charge_read"
 	StageWebhook              Stage = "webhook_verify"
 
+	ConstraintLive              Constraint = "fixed_live_and_private_live_configuration_required"
+	ConstraintLiveContext       Constraint = "pinned_direct_live_context_required"
+	ConstraintLiveURL           Constraint = "canonical_live_checkout_url_required"
+	ConstraintTax               Constraint = "original_exclusive_stripe_tax_context_required"
+	ConstraintTaxComplete       Constraint = "complete_self_stripe_tax_and_exact_totals_required"
 	ConstraintSandbox           Constraint = "fixed_sandbox_and_private_test_credentials_required"
 	ConstraintSandboxURL        Constraint = "canonical_test_checkout_url_required"
 	ConstraintOffline           Constraint = "loopback_fixture_configuration_required"
@@ -55,11 +62,13 @@ const (
 	OutcomeReadUnavailable Outcome = "funding_evidence_unavailable"
 	OutcomeWebhookRejected Outcome = "notification_rejected_no_funding"
 
-	NextFixSandbox NextStep = "correct_private_sandbox_configuration_before_attempting"
-	NextFixFixture NextStep = "correct_offline_fixture_before_attempting"
-	NextReconcile  NextStep = "inspect_original_purchase_without_create_replay_new_purchase_may_duplicate_payment"
-	NextReadOnly   NextStep = "inspect_closed_code_and_original_purchase_no_funding_or_mutation_inferred"
-	NextWebhook    NextStep = "check_signature_version_and_fixture_configuration_no_funding_inferred"
+	NextFixLive     NextStep = "correct_private_live_configuration_and_original_purchase_before_attempting"
+	NextWebhookLive NextStep = "check_signature_version_and_live_configuration_no_funding_inferred"
+	NextFixSandbox  NextStep = "correct_private_sandbox_configuration_before_attempting"
+	NextFixFixture  NextStep = "correct_offline_fixture_before_attempting"
+	NextReconcile   NextStep = "inspect_original_purchase_without_create_replay_new_purchase_may_duplicate_payment"
+	NextReadOnly    NextStep = "inspect_closed_code_and_original_purchase_no_funding_or_mutation_inferred"
+	NextWebhook     NextStep = "check_signature_version_and_fixture_configuration_no_funding_inferred"
 )
 
 // Error is a closed, content-free diagnostic. It deliberately has no wrapped
@@ -86,6 +95,9 @@ func failure(code Code, stage Stage, constraint Constraint, outcome Outcome, sta
 		next = NextFixFixture
 		if stage == StageSandboxConfiguration {
 			next = NextFixSandbox
+		}
+		if stage == StageLiveConfiguration {
+			next = NextFixLive
 		}
 	case OutcomeCreateUnknown:
 		next = NextReconcile

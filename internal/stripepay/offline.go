@@ -36,6 +36,9 @@ type Client struct {
 	returnURL     string
 	webhookSecret string
 	sandbox       bool
+	offline       bool
+	live          bool
+	taxCode       string
 }
 
 // NewOffline never reads environment credentials and never constructs a default
@@ -51,7 +54,7 @@ func NewOffline(cfg OfflineConfig) (client *Client, err error) {
 	if !ok || cfg.APIKey != FixtureAPIKey || cfg.WebhookSecret != FixtureWebhookSecret || stripe.APIVersion != APIVersion {
 		return nil, failure(CodeConfiguration, StageConfiguration, ConstraintOffline, OutcomeNotAttempted, 0)
 	}
-	return &Client{sdk: newFixedSDK(cfg.APIKey, endpoint.String()), origin: endpoint.String(), returnURL: origin.String() + ReturnPath, webhookSecret: cfg.WebhookSecret}, nil
+	return &Client{sdk: newFixedSDK(cfg.APIKey, endpoint.String()), origin: endpoint.String(), returnURL: origin.String() + ReturnPath, webhookSecret: cfg.WebhookSecret, offline: true}, nil
 }
 
 func newFixedSDK(apiKey, endpoint string) *stripe.Client {
@@ -116,7 +119,19 @@ func validAmount(cents uint64) bool {
 }
 func validSeconds(seconds int64) bool { return seconds > 0 && seconds <= 9999999999 }
 func (c *Client) configured() bool {
-	return c != nil && c.sdk != nil && (c.sandbox || c.webhookSecret == FixtureWebhookSecret)
+	if c == nil || c.sdk == nil {
+		return false
+	}
+	switch {
+	case c.live && !c.sandbox && !c.offline:
+		return c.origin == sandboxCheckoutOrigin && boundedSecret(c.webhookSecret, "whsec_") && taxCodePattern.MatchString(c.taxCode)
+	case c.sandbox && !c.live && !c.offline:
+		return c.origin == sandboxCheckoutOrigin && boundedSecret(c.webhookSecret, "whsec_") && c.taxCode == ""
+	case c.offline && !c.live && !c.sandbox:
+		return c.webhookSecret == FixtureWebhookSecret && c.taxCode == ""
+	default:
+		return false
+	}
 }
 
 type observationKey struct{}
