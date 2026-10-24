@@ -13,26 +13,37 @@ import (
 )
 
 const (
-	volumeKeyEnv                    = "LEDGER_VOLUME_KEY_B64"
-	volumeTimeout                   = 30 * time.Second
-	codeVolumeInput     ledger.Code = "LEDGER_VOLUME_INPUT_INVALID"
-	codeVolumeKey       ledger.Code = "LEDGER_VOLUME_KEY_INVALID"
-	codeVolumeRejected  ledger.Code = "LEDGER_VOLUME_KEY_REJECTED"
-	codeVolumeCancelled ledger.Code = "LEDGER_VOLUME_CANCELLED"
-	codeVolumeDeadline  ledger.Code = "LEDGER_VOLUME_DEADLINE_EXCEEDED"
-	codeVolumeSocket    ledger.Code = "LEDGER_VOLUME_SOCKET_UNAVAILABLE"
-	codeVolumeExchange  ledger.Code = "LEDGER_VOLUME_EXCHANGE_UNAVAILABLE"
-	codeVolumeMount     ledger.Code = "LEDGER_VOLUME_MOUNT_UNVERIFIED"
-	codeVolumeCleanup   ledger.Code = "LEDGER_VOLUME_CLEANUP_UNCONFIRMED"
-	codeVolumeUnknown   ledger.Code = "LEDGER_VOLUME_CAUSE_UNKNOWN"
-	codeVolumePlatform  ledger.Code = "LEDGER_VOLUME_PLATFORM_UNSUPPORTED"
+	volumeKeyEnv                        = "LEDGER_VOLUME_KEY_B64"
+	volumeTimeout                       = 30 * time.Second
+	volumeInitializeTimeout             = 15 * time.Minute
+	codeVolumeInput         ledger.Code = "LEDGER_VOLUME_INPUT_INVALID"
+	codeVolumeKey           ledger.Code = "LEDGER_VOLUME_KEY_INVALID"
+	codeVolumeRejected      ledger.Code = "LEDGER_VOLUME_KEY_REJECTED"
+	codeVolumeCancelled     ledger.Code = "LEDGER_VOLUME_CANCELLED"
+	codeVolumeDeadline      ledger.Code = "LEDGER_VOLUME_DEADLINE_EXCEEDED"
+	codeVolumeSocket        ledger.Code = "LEDGER_VOLUME_SOCKET_UNAVAILABLE"
+	codeVolumeExchange      ledger.Code = "LEDGER_VOLUME_EXCHANGE_UNAVAILABLE"
+	codeVolumeMount         ledger.Code = "LEDGER_VOLUME_MOUNT_UNVERIFIED"
+	codeVolumeCleanup       ledger.Code = "LEDGER_VOLUME_CLEANUP_UNCONFIRMED"
+	codeVolumeUnknown       ledger.Code = "LEDGER_VOLUME_CAUSE_UNKNOWN"
+	codeVolumePlatform      ledger.Code = "LEDGER_VOLUME_PLATFORM_UNSUPPORTED"
 )
 
 // The caller owns failure observation and calls this exactly once before ledger
 // work. Unsetting affects future child environments, not memory erasure, native
 // process history, or the platform's managed-secret custody.
 func prepareManagedVolume(ctx context.Context, name, state string, initialize bool) error {
-	return prepareManagedVolumeUsing(ctx, name, state, initialize, preparePlatformVolume)
+	return prepareManagedVolumeUsing(ctx, name, state, initialize,
+		func(ctx context.Context, name, state string, packet []byte, progress *volumeProgress) error {
+			return preparePlatformVolume(ctx, name, state, packet, initialize, progress)
+		})
+}
+
+func volumeOperationTimeout(initialize bool) time.Duration {
+	if initialize {
+		return volumeInitializeTimeout
+	}
+	return volumeTimeout
 }
 
 func prepareManagedVolumeUsing(ctx context.Context, name, state string, initialize bool, run func(context.Context, string, string, []byte, *volumeProgress) error) (result error) {
@@ -47,7 +58,7 @@ func prepareManagedVolumeUsing(ctx context.Context, name, state string, initiali
 	if unsetErr != nil {
 		return volumeFailure(codeVolumeUnknown, "volume_key", "environment_removal_cause_unknown", progress)
 	}
-	ctx, cancel := context.WithTimeout(ctx, volumeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, volumeOperationTimeout(initialize))
 	defer cancel()
 	if !validVolumeName(name) || !validVolumeStatePath(state) {
 		return volumeFailure(codeVolumeInput, "volume_options", "canonical_name_and_absolute_ledger_child", progress)

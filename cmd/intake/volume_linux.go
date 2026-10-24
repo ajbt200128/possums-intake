@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func preparePlatformVolume(ctx context.Context, name, state string, packet []byte, progress *volumeProgress) (result error) {
+func preparePlatformVolume(ctx context.Context, name, state string, packet []byte, initialize bool, progress *volumeProgress) (result error) {
 	path := "/run/tinfoil/volumes/" + name + "/control.sock"
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -29,7 +29,7 @@ func preparePlatformVolume(ctx context.Context, name, state string, packet []byt
 	if err != nil {
 		return volumeOperationFailure(ctx, err, codeVolumeExchange, "volume_connect", "connect_cause_unknown", progress)
 	}
-	if err = exchangeVolumePacket(ctx, conn.(*net.UnixConn), packet, progress); err != nil {
+	if err = exchangeVolumePacket(ctx, conn.(*net.UnixConn), packet, initialize, progress); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -51,13 +51,13 @@ type volumePacketConn interface {
 }
 
 // Internal socket seam only; the production entry point never accepts a path.
-func exchangeVolumePacket(ctx context.Context, conn volumePacketConn, packet []byte, progress *volumeProgress) (result error) {
+func exchangeVolumePacket(ctx context.Context, conn volumePacketConn, packet []byte, initialize bool, progress *volumeProgress) (result error) {
 	defer closeVolumeResource(conn.Close, &result, progress)
 	if err := ctx.Err(); err != nil {
 		return volumeOperationFailure(ctx, err, codeVolumeExchange, "volume_exchange", "context_unavailable", progress)
 	}
 	deadline, ok := ctx.Deadline()
-	if !ok || deadline.After(time.Now().Add(volumeTimeout)) {
+	if !ok || deadline.After(time.Now().Add(volumeOperationTimeout(initialize))) {
 		return volumeFailure(codeVolumeExchange, "volume_exchange", "finite_deadline_required", progress)
 	}
 	if err := conn.SetDeadline(deadline); err != nil {

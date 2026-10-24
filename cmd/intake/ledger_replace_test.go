@@ -120,8 +120,13 @@ func TestLedgerReplaceUnlockOnlyAndVolumeFailureStops(t *testing.T) {
 				if initialize || name != "ledger" || state != replaceState {
 					t.Fatal("wrong volume selection")
 				}
-				return prepareManagedVolumeUsing(ctx, name, state, initialize, func(_ context.Context, _, _ string, packet []byte, p *volumeProgress) error {
+				return prepareManagedVolumeUsing(ctx, name, state, initialize, func(ctx context.Context, _, _ string, packet []byte, p *volumeProgress) error {
 					calls++
+					deadline, ok := ctx.Deadline()
+					remaining := time.Until(deadline)
+					if !ok || remaining > 30*time.Second || remaining < 29*time.Second {
+						t.Fatal("replacement widened ordinary unlock deadline")
+					}
 					if len(packet) != 34 || packet[0] != 2 || packet[1] != 'u' {
 						t.Fatal("replacement sent initialization packet")
 					}
