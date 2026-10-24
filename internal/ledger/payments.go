@@ -25,8 +25,12 @@ func (s *Service) PreparePayment(ctx context.Context, in PreparePaymentInput) (P
 	}
 	var result PaymentPurchase
 	err := s.run(ctx, func(tx *transaction) error {
-		if err := tx.requirePayments(); err != nil {
+		identity, err := tx.paymentIdentity()
+		if err != nil {
 			return err
+		}
+		if (identity == PaymentIdentitySynthetic && in.TaxCode != "") || (identity == PaymentIdentityLiveStripeTax && !paymentTaxCodePattern.MatchString(in.TaxCode)) {
+			return diagnostic(CodeInput)
 		}
 		// Even an existing attempt cannot authorize a stale form; stored windows
 		// cannot be extended by supplying a fresh expiry for the same attempt.
@@ -35,7 +39,7 @@ func (s *Service) PreparePayment(ctx context.Context, in PreparePaymentInput) (P
 		}
 		p, err := tx.payment("form_attempt", in.Form.Attempt)
 		if err == nil {
-			if p.AccountID != in.AccountID || (PaymentTerms{p.Currency, p.GrossMinor, p.CreditUnits}) != terms || p.FormIssuedAt != in.Form.IssuedAt || p.FormExpiresAt != in.Form.ExpiresAt {
+			if p.AccountID != in.AccountID || (PaymentTerms{p.Currency, p.GrossMinor, p.CreditUnits}) != terms || p.FormIssuedAt != in.Form.IssuedAt || p.FormExpiresAt != in.Form.ExpiresAt || p.TaxCode != in.TaxCode {
 				return diagnostic(CodePaymentConflict)
 			}
 			if tx.now >= int64(p.UnlinkAt) {
@@ -72,7 +76,13 @@ func (s *Service) PreparePayment(ctx context.Context, in PreparePaymentInput) (P
 		if collision != 0 || ref == create || ref == in.Form.Attempt || create == in.Form.Attempt {
 			return diagnostic(CodePaymentRandom)
 		}
-		if err := tx.exec("INSERT INTO payment_purchases(purchase_ref,form_attempt,account_id,currency,charge_minor,credit_units,issued_ms,unlink_at,checkout_expires_at,form_issued_ms,form_expires_at,create_key,create_state,funding_state) VALUES({:ref},{:form},{:account},'usd',{:gross},{:units},{:issued},{:unlink},{:expires},{:formissued},{:formexpires},{:key},'prepared','unfunded')", dbx.Params{"ref": ref, "form": in.Form.Attempt, "account": in.AccountID, "gross": string(terms.GrossMinor), "units": string(terms.CreditUnits), "issued": tx.now, "unlink": tx.now + paymentLinkMS, "expires": (tx.now + paymentCheckoutMS) / 1000 * 1000, "formissued": int64(in.Form.IssuedAt), "formexpires": int64(in.Form.ExpiresAt), "key": create}); err != nil {
+		columns := "purchase_ref,form_attempt,account_id,currency,charge_minor,credit_units,issued_ms,unlink_at,checkout_expires_at,form_issued_ms,form_expires_at,create_key,create_state,funding_state"
+		values := "{:ref},{:form},{:account},'usd',{:gross},{:units},{:issued},{:unlink},{:expires},{:formissued},{:formexpires},{:key},'prepared','unfunded'"
+		if identity == PaymentIdentityLiveStripeTax {
+			columns += ",tax_code"
+			values += ",{:taxcode}"
+		}
+		if err := tx.exec("INSERT INTO payment_purchases("+columns+") VALUES("+values+")", dbx.Params{"ref": ref, "form": in.Form.Attempt, "account": in.AccountID, "gross": string(terms.GrossMinor), "units": string(terms.CreditUnits), "issued": tx.now, "unlink": tx.now + paymentLinkMS, "expires": (tx.now + paymentCheckoutMS) / 1000 * 1000, "formissued": int64(in.Form.IssuedAt), "formexpires": int64(in.Form.ExpiresAt), "key": create, "taxcode": in.TaxCode}); err != nil {
 			return err
 		}
 		result, err = tx.payment("purchase_ref", ref)
@@ -208,7 +218,7 @@ func (s *Service) BindPaymentSession(ctx context.Context, evidence StripeSession
 func (tx *transaction) bindPayment(p *PaymentPurchase, e StripeSessionEvidence) error {
 	created, ok := paymentSeconds(e.CreatedSeconds)
 	expires, expiresOK := paymentSeconds(e.ExpiresSeconds)
-	if !ok || !expiresOK || e.Reference != p.Reference || e.LiveMode || e.Mode != "payment" || e.Currency != p.Currency || e.GrossMinor != p.GrossMinor || e.Quantity != 1 || !paymentSessionPattern.MatchString(e.SessionID) || (e.PaymentIntentID != "" && !paymentIntentPattern.MatchString(e.PaymentIntentID)) || p.CreateState == "prepared" || created < int64(p.IssuedAt)-FutureSkewMS || created > int64(p.IssuedAt)+paymentCreateMS+FutureSkewMS || expires != int64(p.CheckoutExpiresAt) || created > tx.now+FutureSkewMS {
+	if !ok || !expiresOK || e.Reference != p.Reference || e.LiveMode != (p.TaxCode != "") || e.TaxCode != p.TaxCode || e.Mode != "payment" || e.Currency != p.Currency || e.GrossMinor != p.GrossMinor || e.Quantity != 1 || !paymentSessionPattern.MatchString(e.SessionID) || (e.PaymentIntentID != "" && !paymentIntentPattern.MatchString(e.PaymentIntentID)) || p.CreateState == "prepared" || created < int64(p.IssuedAt)-FutureSkewMS || created > int64(p.IssuedAt)+paymentCreateMS+FutureSkewMS || expires != int64(p.CheckoutExpiresAt) || created > tx.now+FutureSkewMS {
 		return diagnostic(CodePaymentConflict)
 	}
 	if tx.now >= int64(p.UnlinkAt) || tx.now >= created+paymentLinkMS {
@@ -260,6 +270,9 @@ func (s *Service) FundStripePurchase(ctx context.Context, e StripeFundingEvidenc
 		if err != nil {
 			return err
 		}
+		if p.TaxCode == "" && e.Tax != nil {
+			return diagnostic(CodePaymentConflict)
+		}
 		// Refresh after the local read, not at the adapter's earlier network time.
 		if err := tx.clock(); err != nil {
 			return err
@@ -286,8 +299,17 @@ func (s *Service) FundStripePurchase(ctx context.Context, e StripeFundingEvidenc
 			result.Status = PaymentBlocked
 			return nil
 		}
+		// Binding never freezes unfinished tax. Only first funding requires final
+		// canonical tax evidence; later refunds cannot erase a known receipt.
+		collected, tax := p.GrossMinor, Money("0")
+		if p.TaxCode != "" {
+			if e.Tax == nil || !e.Tax.Complete || !e.Tax.Exclusive || !e.Tax.LiabilitySelf || !paymentTaxTotal(p.GrossMinor, e.Tax.Amount, e.Tax.Total) {
+				return diagnostic(CodePaymentConflict)
+			}
+			collected, tax = e.Tax.Total, e.Tax.Amount
+		}
 		chargeAt, validTime := paymentSeconds(e.ChargeCreatedSeconds)
-		if e.PaymentStatus != "paid" || e.IntentStatus != "succeeded" || e.IntentAmount != p.GrossMinor || e.AmountReceived != p.GrossMinor || e.ChargeStatus != "succeeded" || !e.Paid || !e.Captured || e.ChargeCurrency != p.Currency || e.ChargeAmount != p.GrossMinor || e.AmountCaptured != p.GrossMinor || !validTime || chargeAt < int64(*p.SessionCreatedAt) || chargeAt > int64(p.CheckoutExpiresAt) || chargeAt > tx.now+FutureSkewMS {
+		if e.PaymentStatus != "paid" || e.IntentStatus != "succeeded" || e.IntentAmount != collected || e.AmountReceived != collected || e.ChargeStatus != "succeeded" || !e.Paid || !e.Captured || e.ChargeCurrency != p.Currency || e.ChargeAmount != collected || e.AmountCaptured != collected || !validTime || chargeAt < int64(*p.SessionCreatedAt) || chargeAt > int64(p.CheckoutExpiresAt) || chargeAt > tx.now+FutureSkewMS {
 			return diagnostic(CodePaymentConflict)
 		}
 		a, err := tx.account(p.AccountID)
@@ -317,7 +339,13 @@ func (s *Service) FundStripePurchase(ctx context.Context, e StripeFundingEvidenc
 		if err := tx.exec("UPDATE accounts SET balance={:after} WHERE id={:account}", dbx.Params{"after": string(money(after)), "account": p.AccountID}); err != nil {
 			return err
 		}
-		if err := tx.exec("INSERT INTO payment_sales(sale_id,account_id,sale_date,currency,gross_minor,credit_units) VALUES({:id},{:account},{:date},'usd',{:gross},{:units})", dbx.Params{"id": sale, "account": p.AccountID, "date": paymentSaleDate(chargeAt), "gross": string(p.GrossMinor), "units": string(p.CreditUnits)}); err != nil {
+		columns := paymentSaleColumns
+		values := "{:id},{:account},{:date},'usd',{:gross},{:units}"
+		if p.TaxCode != "" {
+			columns += ",principal_minor,tax_minor"
+			values += ",{:principal},{:tax}"
+		}
+		if err := tx.exec("INSERT INTO payment_sales("+columns+") VALUES("+values+")", dbx.Params{"id": sale, "account": p.AccountID, "date": paymentSaleDate(chargeAt), "gross": string(collected), "units": string(p.CreditUnits), "principal": string(p.GrossMinor), "tax": string(tax)}); err != nil {
 			return err
 		}
 		if err := tx.exec("UPDATE payment_purchases SET funding_state='funded',sale_id={:sale} WHERE purchase_ref={:ref}", dbx.Params{"sale": sale, "ref": p.Reference}); err != nil {

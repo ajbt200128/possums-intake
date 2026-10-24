@@ -31,7 +31,7 @@ func paymentForm(now int64, n int) PaymentForm {
 }
 func preparePurchase(t *testing.T, s *Service, now int64, n int) PaymentPurchase {
 	t.Helper()
-	p, err := s.PreparePayment(background, PreparePaymentInput{"paymentaccount0", "usd5", paymentForm(now, n)})
+	p, err := s.PreparePayment(background, PreparePaymentInput{"paymentaccount0", "usd5", paymentForm(now, n), ""})
 	return must(t, p, err)
 }
 func claimPurchase(t *testing.T, s *Service, p PaymentPurchase) PaymentPurchase {
@@ -44,7 +44,7 @@ func claimPurchase(t *testing.T, s *Service, p PaymentPurchase) PaymentPurchase 
 }
 func fundingEvidence(p PaymentPurchase, n int) StripeFundingEvidence {
 	return StripeFundingEvidence{
-		Session:       StripeSessionEvidence{p.Reference, fmt.Sprintf("cs_test_%d", n), fmt.Sprintf("pi_test_%d", n), int64(p.IssuedAt) / 1000, int64(p.CheckoutExpiresAt) / 1000, false, "payment", "usd", p.GrossMinor, 1},
+		Session:       StripeSessionEvidence{p.Reference, fmt.Sprintf("cs_test_%d", n), fmt.Sprintf("pi_test_%d", n), int64(p.IssuedAt) / 1000, int64(p.CheckoutExpiresAt) / 1000, false, "payment", "usd", p.GrossMinor, 1, ""},
 		PaymentStatus: "paid", IntentStatus: "succeeded", IntentAmount: p.GrossMinor, AmountReceived: p.GrossMinor,
 		ChargeStatus: "succeeded", ChargeCreatedSeconds: int64(p.IssuedAt) / 1000, ChargeCurrency: "usd", ChargeAmount: p.GrossMinor, AmountCaptured: p.GrossMinor, Paid: true, Captured: true, AmountRefunded: "0",
 	}
@@ -102,7 +102,7 @@ func TestSyntheticPaymentsExplicitAdditiveInitialization(t *testing.T) {
 	if err := s.app.DB().NewQuery("SELECT count(*) FROM sqlite_schema WHERE name GLOB 'payment_*'").Row(&count); err != nil || count != 0 {
 		t.Fatal("implicit schema")
 	}
-	_, err := s.PreparePayment(background, PreparePaymentInput{"paymentaccount0", "usd5", paymentForm(now, 1)})
+	_, err := s.PreparePayment(background, PreparePaymentInput{"paymentaccount0", "usd5", paymentForm(now, 1), ""})
 	codeIs(t, err, CodePaymentDisabled)
 	if err := s.InitializeSyntheticPayments(background); err != nil {
 		t.Fatal("explicit init")
@@ -159,9 +159,9 @@ func TestSyntheticPaymentFormsClaimsAndAccountIsolation(t *testing.T) {
 		t.Fatal("duplicate form allocated another reference")
 	}
 	for _, input := range []PreparePaymentInput{
-		{"paymentaccount0", "usd10", paymentForm(now, 1)},
-		{"otheraccount000", "usd5", paymentForm(now, 1)},
-		{"paymentaccount0", "usd5", PaymentForm{p.FormAttempt, Millis(now), Millis(now + paymentFormMS - 1)}},
+		{"paymentaccount0", "usd10", paymentForm(now, 1), ""},
+		{"otheraccount000", "usd5", paymentForm(now, 1), ""},
+		{"paymentaccount0", "usd5", PaymentForm{p.FormAttempt, Millis(now), Millis(now + paymentFormMS - 1)}, ""},
 	} {
 		_, err := s.PreparePayment(background, input)
 		codeIs(t, err, CodePaymentConflict)
@@ -220,10 +220,10 @@ func TestSyntheticPaymentFormsClaimsAndAccountIsolation(t *testing.T) {
 		t.Fatal("lost known binding")
 	}
 	advance(t, s, now+paymentFormMS)
-	_, err = s.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 1)})
+	_, err = s.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 1), ""})
 	codeIs(t, err, CodePaymentExpired)
 	// A missing ancient form cannot reallocate either.
-	_, err = s.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 2)})
+	_, err = s.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 2), ""})
 	codeIs(t, err, CodePaymentExpired)
 	if purchases, _, _ := paymentCounts(t, s); purchases != 1 {
 		t.Fatal("stale form allocated")
@@ -425,7 +425,7 @@ func TestSyntheticPaymentNoRebindingOrMissingProvision(t *testing.T) {
 	missing.Session.Reference = strings.Repeat("f", 64)
 	_, err = s.FundStripePurchase(background, missing)
 	codeIs(t, err, CodePaymentMissing)
-	_, err = s.PreparePayment(background, PreparePaymentInput{"nevercreated000", "usd5", paymentForm(now, 3)})
+	_, err = s.PreparePayment(background, PreparePaymentInput{"nevercreated000", "usd5", paymentForm(now, 3), ""})
 	codeIs(t, err, CodeAccount)
 	if purchases, sales, _ := paymentCounts(t, s); purchases != 2 || sales != 1 {
 		t.Fatal("identity conflict changed receipts")
@@ -457,7 +457,7 @@ func TestSyntheticPaymentExpiryPruneReplayAndSalesCutoff(t *testing.T) {
 	_, err = s.FundStripePurchase(background, e)
 	codeIs(t, err, CodePaymentMissing)
 	// Replaying an old form cannot recreate its now-missing reference.
-	_, err = s.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 1)})
+	_, err = s.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 1), ""})
 	codeIs(t, err, CodePaymentExpired)
 	freshNow := int64(p.UnlinkAt)
 	fresh := claimPurchase(t, s, preparePurchase(t, s, freshNow, 2))
@@ -488,7 +488,7 @@ func TestSyntheticPaymentExpiryPruneReplayAndSalesCutoff(t *testing.T) {
 	defer reopened.Close()
 	_, err = reopened.FundStripePurchase(background, e)
 	codeIs(t, err, CodePaymentMissing)
-	_, err = reopened.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 1)})
+	_, err = reopened.PreparePayment(background, PreparePaymentInput{p.AccountID, "usd5", paymentForm(now, 1), ""})
 	codeIs(t, err, CodePaymentExpired)
 	if balance(t, reopened, p.AccountID).Available != "5000000" {
 		t.Fatal("pruning changed balance")
