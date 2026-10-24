@@ -187,16 +187,91 @@ func startupUnknown(phase startupPhase) ledger.Code {
 	}
 }
 
+// Startup-only schema refinements never become accounting codes or metric
+// categories. Both directions reconstruct fixed templates; no cause fields are
+// copied into the bounded record or health output.
+var startupSchemaTemplates = [...]struct {
+	code       ledger.Code
+	constraint string
+	observed   string
+}{
+	{"LEDGER_SCHEMA_OBJECT_MISSING", "required_schema_object_present", "A required schema object is absent."},
+	{"LEDGER_SCHEMA_OBJECT_DEFINITION", "supported_schema_object_definition", "A required schema object has an incompatible definition."},
+	{"LEDGER_SCHEMA_OBJECT_INVENTORY", "supported_schema_object_inventory", "The schema object inventory is incompatible; this check does not identify a particular missing object or historical version."},
+	{"LEDGER_SCHEMA_ACCOUNT_MISSING", "required_account_collection_present", "The required account collection metadata is absent."},
+	{"LEDGER_SCHEMA_ACCOUNT_METADATA", "compatible_account_collection_metadata", "The account collection metadata is incompatible."},
+	{"LEDGER_SCHEMA_ACCOUNT_INVENTORY", "supported_account_collection_inventory", "The account collection inventory is incompatible."},
+	{"LEDGER_SCHEMA_CONNECTION_SETTINGS", "required_connection_configuration", "A storage connection setting does not match the required configuration."},
+	{"LEDGER_SCHEMA_LEDGER_METADATA", "valid_ledger_metadata", "The ledger metadata row or version invariant is not satisfied."},
+	{"LEDGER_SCHEMA_PAYMENT_LAYOUT", "complete_compatible_payment_schema", "The optional payment object schema is incomplete or incompatible."},
+	{"LEDGER_SCHEMA_PAYMENT_METADATA", "valid_payment_metadata", "The payment metadata invariant is not satisfied."},
+}
+
+// These six startup-only codes identify exchange boundaries, not root causes,
+// packet progress, resource closure or additional error-metric categories.
+var startupVolumeExchangeTemplates = [...]struct {
+	code              ledger.Code
+	stage             string
+	sourceConstraints []string
+	constraint        string
+	observed          string
+}{
+	{"LEDGER_VOLUME_CONNECT_UNAVAILABLE", "volume_connect", []string{"connect_cause_unknown"}, "completed_volume_control_connection", "The local volume control connection did not complete."},
+	{"LEDGER_VOLUME_EXCHANGE_BOUND_UNAVAILABLE", "volume_exchange", []string{"finite_deadline_required", "deadline_setup_cause_unknown"}, "finite_exchange_deadline_configured", "The local bounded exchange deadline was refused or could not be configured."},
+	{"LEDGER_VOLUME_SEND_UNCONFIRMED", "volume_send", []string{"single_complete_packet_cause_unknown"}, "single_complete_volume_packet", "A single complete control packet write was not confirmed."},
+	{"LEDGER_VOLUME_RESPONSE_UNAVAILABLE", "volume_response", []string{"bounded_complete_response_cause_unknown"}, "bounded_complete_volume_response", "A complete bounded control response was not received; receive failure, truncation or excess length was observed."},
+	{"LEDGER_VOLUME_PLATFORM_FAILED", "volume_response", []string{"platform_operation_failed_cause_unknown"}, "successful_platform_volume_operation", "The control endpoint returned the exact failed response; the platform reported an operation failure. This does not establish a wrong disk key."},
+	{"LEDGER_VOLUME_RESPONSE_UNRECOGNIZED", "volume_response", []string{"exact_response_required_cause_unknown"}, "recognized_exact_volume_response", "The control endpoint returned a response that did not match an accepted exact protocol response."},
+}
+
 // Only typed project codes in the phase-specific local catalog survive. Never
 // copy Diagnostic fields, inspect error strings or invoke arbitrary error hooks.
 func startupFailureCode(phase startupPhase, err error) ledger.Code {
-	if d, ok := err.(*ledger.Diagnostic); ok && d != nil && startupCodeAllowed(phase, d.Code) {
-		return d.Code
+	if d, ok := err.(*ledger.Diagnostic); ok && d != nil {
+		for _, template := range startupSchemaTemplates {
+			if d.Code == ledger.CodeSchema && d.Constraint == template.constraint && (phase == phaseInit || phase == phaseOpen) {
+				return template.code
+			}
+			// These codes are record projections, not accepted source codes.
+			if d.Code == template.code {
+				return startupUnknown(phase)
+			}
+		}
+		for _, template := range startupVolumeExchangeTemplates {
+			// Like schema refinements, these are record codes, not source codes.
+			if d.Code == template.code {
+				return startupUnknown(phase)
+			}
+			if phase == phaseVolumePrepare && d.Code == codeVolumeExchange && d.Stage == template.stage {
+				for _, constraint := range template.sourceConstraints {
+					if d.Constraint == constraint {
+						return template.code
+					}
+				}
+			}
+		}
+		if startupCodeAllowed(phase, d.Code) {
+			return d.Code
+		}
 	}
 	return startupUnknown(phase)
 }
 
 func startupCodeAllowed(phase startupPhase, code ledger.Code) bool {
+	if phase == phaseVolumePrepare {
+		for _, template := range startupVolumeExchangeTemplates {
+			if code == template.code {
+				return true
+			}
+		}
+	}
+	if phase == phaseInit || phase == phaseOpen {
+		for _, template := range startupSchemaTemplates {
+			if code == template.code {
+				return true
+			}
+		}
+	}
 	if code != "" && code == startupUnknown(phase) {
 		return true
 	}
@@ -469,6 +544,16 @@ func startupHealthDiagnostic(r startupRecord) *ledger.Diagnostic {
 	}
 	if r.State == "starting" {
 		return healthDiagnostic("SYNTHETIC_STARTUP_INCOMPLETE", string(r.Phase), "completed_startup_checkpoint", "Startup completion is unconfirmed; cause unknown. Inspect the synthetic container privately.")
+	}
+	for _, template := range startupSchemaTemplates {
+		if r.Code == template.code {
+			return healthDiagnostic(r.Code, string(r.Phase), template.constraint, template.observed+" Underlying cause unknown. Preserve state and inspect the schema privately; no reset, automatic migration or financial restore is authorized.")
+		}
+	}
+	for _, template := range startupVolumeExchangeTemplates {
+		if r.Code == template.code {
+			return healthDiagnostic(r.Code, string(r.Phase), template.constraint, template.observed+" Underlying cause unknown. Readiness is unconfirmed; volume effects and cleanup outcomes are unknown. Preserve the original disk/key and primary diagnostic; inspect platform state privately. Do not retry the volume operation, initialize, reset or restore state.")
+		}
 	}
 	next := "Underlying startup cause unknown. Inspect runtime configuration and temporary storage privately; do not reuse or reinitialize partial state."
 	constraint := "completed_startup_checkpoint"

@@ -647,6 +647,39 @@ func TestStartupDiagnosticsCompiledProcess(t *testing.T) {
 		}
 		return err == nil, d
 	}
+	// Exercise the actual compiled healthcheck presentation for every closed
+	// schema refinement. Source-error fields never enter the record.
+	for _, template := range startupSchemaTemplates {
+		t.Run(string(template.code), func(t *testing.T) {
+			r := startupRecord{1, "failed", phaseOpen, template.code}
+			if writeStartupRecord("/tmp", r) != nil {
+				t.Fatal("SCHEMA_COMPILED_RECORD_FIXTURE")
+			}
+			env := replaceStartupEnv(startupProcessEnv(t.TempDir(), "true"), "OTEL_SDK_DISABLED", "true")
+			ready, got := runHealth(t, env)
+			want, _ := json.Marshal(startupHealthDiagnostic(r))
+			wire, _ := json.Marshal(got)
+			if ready || !bytes.Equal(wire, want) {
+				t.Fatal("SCHEMA_COMPILED_HEALTH_EXACT_TEMPLATE")
+			}
+		})
+	}
+	// Only the passive compiled healthcheck runs here; no volume operation.
+	for _, template := range startupVolumeExchangeTemplates {
+		t.Run(string(template.code), func(t *testing.T) {
+			r := startupRecord{1, "failed", phaseVolumePrepare, template.code}
+			if writeStartupRecord("/tmp", r) != nil {
+				t.Fatal("VOLUME_COMPILED_RECORD_FIXTURE")
+			}
+			env := replaceStartupEnv(startupProcessEnv(t.TempDir(), "true"), "OTEL_SDK_DISABLED", "true")
+			ready, got := runHealth(t, env)
+			want, _ := json.Marshal(startupHealthDiagnostic(r))
+			wire, _ := json.Marshal(got)
+			if ready || !bytes.Equal(wire, want) {
+				t.Fatal("VOLUME_COMPILED_HEALTH_EXACT_TEMPLATE")
+			}
+		})
+	}
 	for _, tc := range []struct {
 		name, envKey, value string
 		phase               startupPhase

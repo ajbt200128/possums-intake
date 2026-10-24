@@ -210,6 +210,9 @@ func (s *Service) rollbackFailure(cause error, work context.Context, failures *t
 		s.ready.Store(false)
 	}
 	clean := diagnostic(code)
+	if code == CodeSchema && d != nil {
+		clean = schemaFailure(schemaReason(d.Constraint))
+	}
 	clean.kind = kind
 	failures.add(kind)
 	return clean
@@ -343,13 +346,13 @@ func (tx *transaction) clock() error {
 		return err
 	}
 	if count != 1 {
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaLedgerMetadata)
 	}
 	if err := tx.query("SELECT schema_version,clock_high_water_ms FROM ledger_meta WHERE singleton=1", nil).Row(&version, &high); err != nil {
 		return err
 	}
 	if version != 3 || high < 0 || high > 9999999999999 {
-		return diagnostic(CodeSchema)
+		return schemaFailure(schemaLedgerMetadata)
 	}
 	if err := tx.query("SELECT CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER)", nil).Row(&wall); err != nil {
 		return err

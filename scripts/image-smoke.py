@@ -45,6 +45,15 @@ STARTUP_EXPECTED = {
         "next_step": "Initialization incomplete or unconfirmed. Preserve partial state; do not re-run init on it. Inspect privately or select a different empty disposable directory."},
 }
 
+SCHEMA_EXPECTED = {
+    "supported_schema_object_inventory": {
+        "stage": "state_validation", "constraint": "supported_schema_object_inventory", "outcome": "unavailable",
+        "next_step": "The schema object inventory is incompatible; this check does not identify a particular missing object or historical version. Underlying cause unknown. Preserve state and inspect the schema privately; no reset, automatic migration or financial restore is authorized."},
+    "supported_schema_object_definition": {
+        "stage": "state_validation", "constraint": "supported_schema_object_definition", "outcome": "unavailable",
+        "next_step": "A required schema object has an incompatible definition. Underlying cause unknown. Preserve state and inspect the schema privately; no reset, automatic migration or financial restore is authorized."},
+}
+
 # Synthetic per-file cap: pinned bootstrap completes, then the v1 DDL commit
 # cannot grow its WAL. Exact init-stage diagnostics and SQL checks are required;
 # a platform that instead fails bootstrap must NOT qualify migration execution.
@@ -142,7 +151,7 @@ class Fixture:
                       "-e", "LEDGER_OPERATOR_PASSWORD=" + self.operator_password]
         return flags
 
-    def once(self, volume, mode, *, probe=False, failure=None, file_limit=None, operator=False):
+    def once(self, volume, mode, *, probe=False, failure=None, file_limit=None, operator=False, schema_constraint=None):
         name = self.prefix + "-once-" + str(len(self.containers))
         self.containers.append(name)
         args = ["docker", "run", "--rm", "--name", name, *self.flags(volume, operator=operator)]
@@ -161,7 +170,13 @@ class Fixture:
                 view = json.loads(result.stderr)
             except (TypeError, ValueError):
                 raise r.Stop("image_privacy") from None
-            r.require(failure in STARTUP_EXPECTED and view == {"code": failure, **STARTUP_EXPECTED[failure]}, "image_privacy")
+            if schema_constraint is not None:
+                r.require(failure == "LEDGER_STARTUP_SCHEMA" and schema_constraint in SCHEMA_EXPECTED, "image_privacy")
+                expected = SCHEMA_EXPECTED[schema_constraint]
+            else:
+                r.require(failure in STARTUP_EXPECTED, "image_privacy")
+                expected = STARTUP_EXPECTED[failure]
+            r.require(view == {"code": failure, **expected}, "image_privacy")
         else:
             r.require(result.returncode == 0 and result.stderr == b"", "image_runtime")
             expected = {"passed": True, "stage": "synthetic_probe"} if probe else {"status": "initialized_empty"}
@@ -178,7 +193,7 @@ class Fixture:
         self.once(volume, "migration-rollback", probe=True)
         # Remove the fault constraint, preserving the exact original partial
         # volume: neither serve nor repeated init may recover/reset it.
-        self.once(volume, "serve", failure="LEDGER_STARTUP_SCHEMA")
+        self.once(volume, "serve", failure="LEDGER_STARTUP_SCHEMA", schema_constraint="supported_schema_object_inventory")
         self.once(volume, "init", failure="LEDGER_INIT_NONEMPTY")
         self.once(volume, "logs", probe=True)
 
@@ -292,7 +307,8 @@ def qualify(archive, probe):
                 bad = fixture.volume()
                 fixture.once(bad, "init")
                 fixture.once(bad, mode, probe=True)
-                fixture.once(bad, "serve", failure="LEDGER_STARTUP_SCHEMA")
+                fixture.once(bad, "serve", failure="LEDGER_STARTUP_SCHEMA",
+                             schema_constraint="supported_schema_object_definition" if mode == "unsupported-schema" else "supported_schema_object_inventory")
             fixture.migration_failure()
             fixture.native_operator()
         finally:
