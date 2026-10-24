@@ -61,7 +61,7 @@ func TestVolumeStartupActualExchangeBoundaries(t *testing.T) {
 					c.closeErr = errors.New(startupSentinel)
 				}
 				p := &volumeProgress{}
-				err := exchangeVolumePacket(ctx, &c, make([]byte, 34), p)
+				err := exchangeVolumePacket(ctx, &c, make([]byte, 34), false, p)
 				cancel()
 				d, ok := err.(*ledger.Diagnostic)
 				if !ok || d.Code != tc.sourceCode || d.Stage != tc.stage || d.Constraint != tc.constraint || c.writes != tc.writes || c.reads != tc.reads || c.closes != 1 {

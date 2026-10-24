@@ -24,9 +24,13 @@ type fakeVolumeConn struct {
 	writeErr, readErr, deadlineErr, closeErr error
 	writes, reads, closes                    int
 	afterRead                                func()
+	deadline                                 time.Time
 }
 
-func (c *fakeVolumeConn) SetDeadline(time.Time) error { return c.deadlineErr }
+func (c *fakeVolumeConn) SetDeadline(deadline time.Time) error {
+	c.deadline = deadline
+	return c.deadlineErr
+}
 func (c *fakeVolumeConn) Write(p []byte) (int, error) {
 	c.writes++
 	if c.writeN >= 0 {
@@ -47,7 +51,7 @@ func TestVolumeExchangeClosedProtocol(t *testing.T) {
 	for _, response := range []string{"", "o", "ok\n", "ok\x00", "OK", "HOSTILE", "rejected", "failed", "okHOSTILE"} {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		c := &fakeVolumeConn{response: response, writeN: -1}
-		err := exchangeVolumePacket(ctx, c, make([]byte, 34), &volumeProgress{})
+		err := exchangeVolumePacket(ctx, c, make([]byte, 34), false, &volumeProgress{})
 		cancel()
 		code := codeVolumeExchange
 		if response == "rejected" {
@@ -67,7 +71,7 @@ func TestVolumeExchangeClosedProtocol(t *testing.T) {
 		{writeN: -1, deadlineErr: errors.New("HOSTILE")},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		err := exchangeVolumePacket(ctx, c, make([]byte, 34), &volumeProgress{})
+		err := exchangeVolumePacket(ctx, c, make([]byte, 34), false, &volumeProgress{})
 		cancel()
 		requireVolumeFailure(t, err, codeVolumeExchange)
 		if c.writes > 1 || c.reads > 1 || c.closes != 1 {
@@ -78,14 +82,116 @@ func TestVolumeExchangeClosedProtocol(t *testing.T) {
 	defer cancel()
 	c := &fakeVolumeConn{response: "ok", writeN: -1, closeErr: errors.New("HOSTILE")}
 	p := &volumeProgress{}
-	d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), p), codeVolumeCleanup)
+	d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), false, p), codeVolumeCleanup)
 	if !p.ok || d.Outcome != "volume_ok_ledger_not_started" {
 		t.Fatal("close lost exact ok evidence")
 	}
 	c = &fakeVolumeConn{writeN: -1}
-	requireVolumeFailure(t, exchangeVolumePacket(context.Background(), c, nil, &volumeProgress{}), codeVolumeExchange)
+	requireVolumeFailure(t, exchangeVolumePacket(context.Background(), c, nil, false, &volumeProgress{}), codeVolumeExchange)
 	if c.writes != 0 {
 		t.Fatal("sent without finite deadline")
+	}
+}
+
+func TestVolumeExchangeOperationDeadlines(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		initialize bool
+		budget     time.Duration
+		accepted   bool
+	}{
+		{"unlock_fixed_limit", false, 30 * time.Second, true},
+		{"initialize_fixed_limit", true, 15 * time.Minute, true},
+		{"initialize_over_thirty_seconds", true, time.Minute, true},
+		{"unlock_same_long_context", false, time.Minute, false},
+		{"unlock_excess_limit", false, 31 * time.Second, false},
+		{"initialize_excess_limit", true, 16 * time.Minute, false},
+		{"unlock_missing_deadline", false, 0, false},
+		{"initialize_missing_deadline", true, 0, false},
+		{"unlock_earlier_deadline", false, time.Second, true},
+		{"initialize_earlier_deadline", true, time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.budget != 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.budget)
+				defer cancel()
+			}
+			want, _ := ctx.Deadline()
+			c := &fakeVolumeConn{response: "ok", writeN: -1}
+			p := &volumeProgress{}
+			// Deliberately keep packet bytes identical: authority is the bool,
+			// never inferred from a packet or an environment variable.
+			err := exchangeVolumePacket(ctx, c, make([]byte, 34), tc.initialize, p)
+			if tc.accepted {
+				if err != nil || !c.deadline.Equal(want) || !p.sent || !p.ok || c.writes != 1 || c.reads != 1 {
+					t.Fatal("authorized deadline or exact ok evidence changed")
+				}
+			} else {
+				d := requireVolumeFailure(t, err, codeVolumeExchange)
+				if d.Constraint != "finite_deadline_required" || d.Outcome != "no_volume_request_sent" || !c.deadline.IsZero() || p.sent || p.ok || c.writes != 0 || c.reads != 0 {
+					t.Fatal("unbounded or unauthorized exchange admitted")
+				}
+			}
+			if c.closes != 1 {
+				t.Fatal("exchange did not close exactly once")
+			}
+			if tc.initialize && tc.accepted && tc.budget > 30*time.Second {
+				unlock := &fakeVolumeConn{response: "ok", writeN: -1}
+				progress := &volumeProgress{}
+				d := requireVolumeFailure(t, exchangeVolumePacket(ctx, unlock, make([]byte, 34), false, progress), codeVolumeExchange)
+				if d.Outcome != "no_volume_request_sent" || !unlock.deadline.IsZero() || progress.sent || progress.ok || unlock.writes != 0 || unlock.reads != 0 || unlock.closes != 1 {
+					t.Fatal("same initialization context widened unlock authority")
+				}
+			}
+		})
+	}
+}
+
+func TestVolumeExchangeCancelledOrExpiredNeverSends(t *testing.T) {
+	for _, initialize := range []bool{false, true} {
+		for _, expired := range []bool{false, true} {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			code := codeVolumeCancelled
+			if expired {
+				cancel()
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				code = codeVolumeDeadline
+			} else {
+				cancel()
+			}
+			c := &fakeVolumeConn{response: "ok", writeN: -1}
+			p := &volumeProgress{}
+			d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, nil, initialize, p), code)
+			cancel()
+			if d.Outcome != "no_volume_request_sent" || !c.deadline.IsZero() || p.sent || p.ok || c.writes != 0 || c.reads != 0 || c.closes != 1 {
+				t.Fatal("unavailable context sent or leaked a request")
+			}
+		}
+	}
+}
+
+func TestVolumeInitializeFailurePreservesOutcomeAndDeadline(t *testing.T) {
+	for _, response := range []string{"", "ok"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		want, _ := ctx.Deadline()
+		c := &fakeVolumeConn{response: response, writeN: -1, closeErr: errors.New("HOSTILE")}
+		code := codeVolumeDeadline
+		outcome := "volume_outcome_unknown"
+		if response == "ok" {
+			c.afterRead = cancel
+			code = codeVolumeCancelled
+			outcome = "volume_ok_ledger_not_started"
+		} else {
+			c.readErr = os.ErrDeadlineExceeded
+		}
+		p := &volumeProgress{}
+		d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), true, p), code)
+		cancel()
+		if !c.deadline.Equal(want) || d.Outcome != outcome || !strings.Contains(d.NextStep, "closure is also unconfirmed") || !p.sent || p.ok != (response == "ok") || c.writes != 1 || c.reads != 1 || c.closes != 1 {
+			t.Fatal("initialization failure widened deadline or erased evidence")
+		}
 	}
 }
 
@@ -94,7 +200,7 @@ func TestVolumeExactOKSurvivesCancellation(t *testing.T) {
 	defer cancel()
 	c := &fakeVolumeConn{response: "ok", writeN: -1, afterRead: cancel}
 	p := &volumeProgress{}
-	d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), p), codeVolumeCancelled)
+	d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), false, p), codeVolumeCancelled)
 	if !p.ok || d.Outcome != "volume_ok_ledger_not_started" || c.writes != 1 || c.reads != 1 || c.closes != 1 {
 		t.Fatal("cancellation erased exact socket ok evidence")
 	}
@@ -123,7 +229,7 @@ func TestVolumeTypedSocketFailures(t *testing.T) {
 				c.readErr = wrapped
 			}
 			p := &volumeProgress{}
-			d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), p), test.code)
+			d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), false, p), test.code)
 			cancel()
 			if c.writes > 1 || c.reads > 1 || c.closes != 1 || (stage != "deadline" && d.Outcome != "volume_outcome_unknown") {
 				t.Fatal("typed socket failure changed ownership or outcome")
@@ -133,7 +239,7 @@ func TestVolumeTypedSocketFailures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	c := &fakeVolumeConn{response: "rejected", writeN: -1, afterRead: cancel, closeErr: os.ErrDeadlineExceeded}
 	p := &volumeProgress{}
-	d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), p), codeVolumeRejected)
+	d := requireVolumeFailure(t, exchangeVolumePacket(ctx, c, make([]byte, 34), false, p), codeVolumeRejected)
 	if !strings.Contains(d.NextStep, "closure is also unconfirmed") {
 		t.Fatal("cleanup erased refusal")
 	}
@@ -176,7 +282,7 @@ func TestVolumeRealUnixpacket(t *testing.T) {
 			t.Fatal("Linux unixpacket dial unavailable")
 		}
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
-		err = exchangeVolumePacket(ctx, conn, packet, &volumeProgress{})
+		err = exchangeVolumePacket(ctx, conn, packet, false, &volumeProgress{})
 		cancel()
 		serverOK := <-done
 		listener.Close()
@@ -232,7 +338,7 @@ func TestVolumeRealUnixpacketTimeout(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	p := &volumeProgress{}
-	err = exchangeVolumePacket(ctx, conn, make([]byte, 34), p)
+	err = exchangeVolumePacket(ctx, conn, make([]byte, 34), false, p)
 	cancel()
 	close(release)
 	serverOK := <-done

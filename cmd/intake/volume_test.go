@@ -93,9 +93,14 @@ func TestVolumeConsumesEnvironmentBeforeValidationAndBuildsOnePacket(t *testing.
 				if _, present := os.LookupEnv(volumeKeyEnv); present {
 					t.Fatal("key remains in child environment")
 				}
+				budget := 30 * time.Second
+				if initialize {
+					budget = 15 * time.Minute
+				}
 				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > volumeTimeout || time.Until(deadline) <= 0 {
-					t.Fatal("unbounded deadline")
+				remaining := time.Until(deadline)
+				if !ok || remaining > budget || remaining < budget-time.Second {
+					t.Fatal("wrong operation deadline")
 				}
 				mode := byte('u')
 				if initialize {
@@ -118,16 +123,46 @@ func TestVolumeConsumesEnvironmentBeforeValidationAndBuildsOnePacket(t *testing.
 	}
 }
 
+func TestVolumeEarlierParentDeadlineWins(t *testing.T) {
+	for _, initialize := range []bool{false, true} {
+		t.Setenv(volumeKeyEnv, syntheticVolumeKey())
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		want, _ := ctx.Deadline()
+		calls := 0
+		err := prepareManagedVolumeUsing(ctx, "ledger", "/state/ledger", initialize,
+			func(ctx context.Context, _, _ string, _ []byte, _ *volumeProgress) error {
+				calls++
+				deadline, ok := ctx.Deadline()
+				if !ok || !deadline.Equal(want) {
+					t.Fatal("operation extended parent deadline")
+				}
+				return nil
+			})
+		cancel()
+		if err != nil || calls != 1 {
+			t.Fatal("bounded preparation did not invoke exactly once")
+		}
+	}
+}
+
 func TestVolumeCancellationPanicAndClosePrivacy(t *testing.T) {
-	t.Setenv(volumeKeyEnv, syntheticVolumeKey())
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err := prepareManagedVolumeUsing(ctx, "ledger", "/state/ledger", false, nil)
-	requireVolumeFailure(t, err, codeVolumeCancelled)
-	t.Setenv(volumeKeyEnv, syntheticVolumeKey())
-	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-	defer stop()
-	requireVolumeFailure(t, prepareManagedVolumeUsing(expired, "ledger", "/state/ledger", false, nil), codeVolumeDeadline)
+	for _, initialize := range []bool{false, true} {
+		t.Setenv(volumeKeyEnv, syntheticVolumeKey())
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := prepareManagedVolumeUsing(ctx, "ledger", "/state/ledger", initialize, nil)
+		d := requireVolumeFailure(t, err, codeVolumeCancelled)
+		if d.Outcome != "no_volume_request_sent" {
+			t.Fatal("cancelled preparation sent a request")
+		}
+		t.Setenv(volumeKeyEnv, syntheticVolumeKey())
+		expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		d = requireVolumeFailure(t, prepareManagedVolumeUsing(expired, "ledger", "/state/ledger", initialize, nil), codeVolumeDeadline)
+		stop()
+		if d.Outcome != "no_volume_request_sent" {
+			t.Fatal("expired preparation sent a request")
+		}
+	}
 	for _, sent := range []bool{false, true} {
 		t.Setenv(volumeKeyEnv, syntheticVolumeKey())
 		err := prepareManagedVolumeUsing(context.Background(), "ledger", "/state/ledger", true,

@@ -160,9 +160,19 @@ metadata only; do not read, generate, regenerate, replace or reveal that value.
 This narrowly supersedes prior disk-preservation/no-allocation/no-init limits for
 this reset only. It is not recovery or permission to retry failed initialization.
 
+The operator separately approved a fixed **15-minute maximum only for explicit
+blank-disk initialization**, after source review identified that the former
+30-second exchange deadline can expire while the platform is still formatting.
+Ordinary unlock retains its 30-second maximum; an earlier caller deadline still
+wins. Keep one send, no retry/fallback, and unknown-outcome preservation. This is
+a timing-policy authorization, not a measured formatting-duration guarantee or
+proof of any prior failure's cause. It adds no initialization diagnostic recorder,
+new listener or background recovery.
+
 Qualify the newest source, content-free schema/volume diagnostic refinements,
-actual native Linux tests, independently matching artifacts, provenance and signed
-initialization/serving profiles before destructive activation. Reconcile the
+initialization-only timing correction, actual native Linux tests, independently
+matching artifacts, provenance and signed initialization/serving profiles before
+destructive activation. Reconcile the
 current disk/host/instance attachment and its actual size rather than reuse the
 obsolete 1 GiB binding. Preserve instance/domain/CPU2/memory8192/GPU0, CC on/debug
 off; no extra standing disk, real funds, payments/gateway activation, inference,

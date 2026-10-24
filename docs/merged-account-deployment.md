@@ -24,6 +24,31 @@ runtime plan, not another v0.1.19 replay. It narrowly supersedes prior disk
 preservation for this reset only; the historical extra existing-only diagnostic
 allowance below was unused by the agent and is not an additional reset/retry right.
 
+A read-only fresh-bootstrap audit found a source-supported timing risk: the
+project's former 30-second context covered initialization, while the pinned CVM
+performs formatting before replying and notes it can take minutes. No disk-size
+benchmark or prior-runtime cause is inferred. After disclosure, the operator
+explicitly approved a fixed **15-minute initialization-only maximum**, retaining
+30 seconds for unlock, earlier parent deadlines and one-send/no-retry behavior.
+The separate correction explicitly carries the parsed initialization boolean
+through platform preparation and exchange; ordinary unlock and `ledger-replace`
+retain the shorter bound. Implementation focused race and host build passed;
+Linux cross-compilation stopped on an uncached offline dependency, not a passing
+native test. Parent inspected all eight source/test diffs. Independent read-only
+review found no material findings. Complete pinned offline qualification passed:
+root race once (12 packages passed, three had no tests), vet, build, module
+verification and **214 Python tests, one skipped**. The skip was the unselected
+disposable local HTTP integration; Linux-only and actual-image qualification remain
+native CI gates. In-memory source snapshots matched before/after; command leaders
+joined, process groups were absent and owned build output was removed. Temporary implementation test-output files
+and its built binary were initially left behind; parent verified exact owned
+regular-file inventory and absence of a running workspace executable, then removed
+only those artifacts without reading/copying their contents. This is cleanup,
+not secure erasure. No logging feature or production diagnostic persistence was
+added. Initialization remains blocked until native qualification passes. The correct new encrypted-disk
+profile is `persistent-bootstrap` (`init --initialize-volume`), not unlock-only
+`persistent-ledger-init` or destructive existing-state `ledger-replace`.
+
 Before deletion, qualify the newest source/image and signed fresh-bootstrap plus
 existing-only serving profiles. Reconcile stopped writer and exact current
 instance/host/disk/size, then one explicit detach/delete/create/attach sequence,
@@ -32,6 +57,20 @@ process completion. Preserve domain/CPU2/memory8192/GPU0/CC-on/debug-off, no ext
 standing disk, real funds, payment/gateway activation, inference or raw logs.
 Unknown mutation outcomes require passive reconciliation, not automatic replay.
 No reset operation has been issued by the agent under this new authorization.
+The local procedure review found only older cached volume-command source. Parent
+closed that source gap by fetching and reading the complete immutable CLI
+**`0186df0a07cce6d415eafe2c722c192cfe60dd67`** `volume.go` and `controlplane.go`.
+Plain create performs one host-bound allocation POST; attachment is a separate PUT,
+detach/delete use separate DELETE calls and do not establish stopped status by
+themselves. Resolve by exact privately bound IDs, reconcile fresh reciprocal
+container/volume metadata, and require old absence before new allocation. The
+parser distinguishes decimal GB from binary GiB and requires positive whole bytes
+aligned to 512; preserve actual current `size_bytes`, not the display label.
+Do not select `--auto-unlock` or mix another key-delivery mechanism. The SDK uses a
+60-second HTTP client and default redirects, with decoding/rendering after calls;
+source-level single invocation is not a wire-once guarantee or safe-retry receipt.
+This public source inspection neither changes resources nor proves allocator/API
+behavior, quota/host capacity or successful future deletion/creation/attachment.
 Policy/custody details are in
 [the scoped fresh reset](../PRIVACY.md#subsequent-fresh-volume-reset-for-the-newest-qualified-source).
 

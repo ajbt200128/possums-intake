@@ -69,7 +69,7 @@ func TestLedgerReplaceLinuxUnixpacketThenKernelMountRefusal(t *testing.T) {
 				if err != nil {
 					return volumeOperationFailure(ctx, err, codeVolumeExchange, "volume_connect", "connect_cause_unknown", p)
 				}
-				if err := exchangeVolumePacket(ctx, conn.(*net.UnixConn), packet, p); err != nil {
+				if err := exchangeVolumePacket(ctx, conn.(*net.UnixConn), packet, false, p); err != nil {
 					return err
 				}
 				return verifyVolumeMount(ctx, dir, p)
