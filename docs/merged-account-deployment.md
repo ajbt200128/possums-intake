@@ -1,6 +1,35 @@
 # Merged-account intake deployment — current work
 
-## Latest operator decision — fresh synthetic volume reset for newest qualified source
+## Current closeout — operator-run reset and v0.1.22 serving
+
+Both signed release profiles completed independent and separate parent acceptance
+using actual downloaded bytes and the original provenance/cryptographic gates:
+**v0.1.21** fresh bootstrap and **v0.1.22** existing-only serving, using qualified
+source **`d5b9c1678364d577d78caee893213f64d4770222`** and image
+**`sha256:32b0584774e8f72721e19ca8530ccd953671070477882c961790185288b25795`**.
+
+The operator explicitly took control of runtime operations. After the handoff,
+they reported completing the approved fresh-disk sequence, observing the exact
+bootstrap process exit zero, deploying v0.1.22, entering native administration
+and creating/viewing an account with a balance. These are **operator-reported
+runtime observations**, not agent-performed mutations, independent runtime
+attestation, funding receipts or financial durability qualification. The agent
+issued no runtime/disk operation for that fresh reset. That selected reset is
+consumed; preserve the new disk/key and application state, with no additional
+reset, initialization, retry or general restore authority. Historical failures
+below remain cause-unknown; successful fresh bootstrap does not identify them.
+
+The operator subsequently confirmed **gateway integration has already been
+tested** and requested real Stripe payments. Do not repeat the stale missing-
+gateway blocker or initiate inference to recheck it. Ordinary deployed serving
+still has payment capability disabled; native balance edits are trusted direct
+accounting overrides, not idempotent funding. The new selected tax-exclusive,
+20-day shared-cutoff live-payment preparation and its remaining activation gates
+are recorded in [the live activation work record](stripe-live-activation.md) and
+[the scoped privacy direction](../PRIVACY.md#subsequent-live-stripe-payment-direction).
+The operator's deployment-control handoff remains unchanged.
+
+## Previous operator decision — fresh synthetic volume reset for newest qualified source
 
 The operator reported that Tinfoil resolved the QEMU boot problem and changed the
 attached volume, then manually deployed **v0.1.19**. A bounded passive native read
@@ -57,6 +86,91 @@ process completion. Preserve domain/CPU2/memory8192/GPU0/CC-on/debug-off, no ext
 standing disk, real funds, payment/gateway activation, inference or raw logs.
 Unknown mutation outcomes require passive reconciliation, not automatic replay.
 No reset operation has been issued by the agent under this new authorization.
+
+### Final-main qualification and once-only image publication
+
+The timing correction source commit **`5bc20f8e6f20009484c82b54c80bc70186b25e24`**
+and separate authority/evidence commit **`a55302877e5d535275e74b8c68ced23d33346801`**
+passed PR #10's exact-head native CI and merged normally, without bypass, at
+**`d5b9c1678364d577d78caee893213f64d4770222`**. PR #10 was unwatched after merge.
+Separate final-main CI **40123794039 / attempt 1** passed. One fresh native
+qualification dispatch **40124406164 / attempt 1** passed; the initially unavailable
+run binding was passively reconciled without redispatch. Existing admission gates
+verified distinct hosted A/B runners, exact source/jobs/artifact identities, matching
+manifests and archive hashes, actual A-image runtime/startup cases and config
+identity. Parent independently downloaded and verified the artifacts; owned public
+acceptance downloads were removed afterward.
+
+After the operator explicitly confirmed other manual deployment/volume/secret
+changes and publishing jobs would remain paused, the qualified native-owner helper
+performed one digest-preserving, zero-retry copy and its original package/public
+visibility/private-source-link/raw-registry-digest postchecks passed:
+
+- Source: **`d5b9c1678364d577d78caee893213f64d4770222`**.
+- Image: **`sha256:32b0584774e8f72721e19ca8530ccd953671070477882c961790185288b25795`**.
+- Archive: **`5c954e9eb9521384f1676d44d932e0780fc502b0bf3e35c06453d4d61bda88dc`**.
+
+This qualifies publication, not runtime readiness or the cause of prior failure.
+Fresh bootstrap public configuration preparation now uses the unchanged pinned
+`persistent-bootstrap` template; exact render gate passed and all **96 public
+offline tests passed**. Independent configuration review found no material
+findings. Public PR #20, exact head
+**`6ee4ea2537c28e72442e6a85939c7f4b6242162a`**, merged normally without bypass at
+**`2bda0b04a4e2357a6ea20606a9f3e3c9531fd24e`**; this repository had no automatic
+PR workflow checks, so its 96 local tests and explicit signing-workflow checks
+remain distinct evidence. The bootstrap config SHA256 is
+**`0ac4da5e181e088cfd59c742c523e9439ce5935cf0d57b1c0c4c16c3d6daa879`**.
+
+Local signing-wrapper preconditions initially failed: omitted authenticated-read
+context, then a module search-path import precondition before authentication.
+Passive reconciliation established no tag or signing run from those attempts.
+After correction, one lightweight **v0.1.21** tag was created/pushed and its exact
+public commit verified. A subsequent complete Actions-list read exceeded the
+existing native helper's 64 KiB output bound before dispatch; a separate passive
+read established no conflicting/current-source run. Locally projecting the same
+complete list's necessary fields (including total count) respected the bound
+without truncating coverage or changing the signing guards. One signing dispatch
+was then acknowledged and bound to **40126814619 / attempt 1**, profile
+`persistent-bootstrap`. Independent release acceptance and a separate parent
+check both passed using actual downloaded assets and the original manifest,
+release-metadata and supported GH cryptographic verification gates. Manifest
+SHA256 **`d061bd01188369c0944fcb8478ed24e9b9d7888c3ac18ef5ac696f800df56e24`**;
+`tinfoil.hash` SHA256
+**`bcee00b1e0151055e6115ca641fc6643784f03e2ae6bf97fba69f30510ad07b6`**,
+containing the manifest hash plus newline. Source/signer/tag/workflow certificate,
+hosted runner and exact signing invocation were verified while public main
+still matched the bootstrap commit. Both owned public download workspaces were
+removed after joined commands. No tag was repointed and no signing invocation
+was replayed. Native host tool
+history remains separate; no raw output log was created for these corrections.
+
+The subsequent existing-only serving packet changes only `tinfoil-config.yml`
+to the unchanged pinned `persistent-serve` template, with the same accepted image
+receipt and CVM pin. Exact render gate, 96 offline tests and independent read-only
+review passed with no material findings. Public PR #21 exact head
+**`7c8653c9b679a0d562be29eb6276223436f408c9`** merged normally at
+**`f5127e8bc85b14c7a538f7861d0240b8c9eaf71e`**. Config SHA256
+**`f6e8fe2a9120b3e52bc0702c99037abe6ee6b48538729e49ef8a25e2fc68d873`**.
+One lightweight **v0.1.22** tag was created and verified at that exact public main;
+one signing dispatch was acknowledged and bound to
+**40127509593 / attempt 1** for `persistent-serve`. Independent acceptance of its
+actual downloaded serving assets/signature and a separate parent check both
+passed through the original release/manifest/metadata/cryptographic gates.
+Manifest SHA256 is
+**`415b198a597c082737c69883643f65b44302116993789fed85bd7778a42900fe`**;
+`tinfoil.hash` SHA256 is
+**`a58fbc6bba81d055562dd4b4bad8b7cd3d346475e60e39054c506935e0785a3c`**.
+Owned download workspaces were removed after commands joined. A subsequent
+passive native admission reconciled the unique target/domain/host/shape/security,
+sole reciprocal ledger attachment and actual positive 512-aligned byte size,
+plus secret-name metadata only. The operator then took over the actual reset as
+recorded above. The public README's unrelated uncommitted history remains
+excluded. Serving has neither `--initialize-volume` nor operator credentials,
+and does not select the managed diagnostic exception or activate telemetry. No
+stop, disk mutation, initialization or instance deploy was issued by the agent
+under the fresh-reset approval; subsequent operator-reported execution is
+separately attributed above.
+
 The local procedure review found only older cached volume-command source. Parent
 closed that source gap by fetching and reading the complete immutable CLI
 **`0186df0a07cce6d415eafe2c722c192cfe60dd67`** `volume.go` and `controlplane.go`.
@@ -74,7 +188,7 @@ behavior, quota/host capacity or successful future deletion/creation/attachment.
 Policy/custody details are in
 [the scoped fresh reset](../PRIVACY.md#subsequent-fresh-volume-reset-for-the-newest-qualified-source).
 
-The latest user-supplied health tuple reports
+The earlier user-supplied health tuple reported
 **`LEDGER_VOLUME_EXCHANGE_UNAVAILABLE` / `volume_prepare` /
 `completed_volume_control_exchange` / `not_ready`**. It identifies a pre-ledger
 boundary but not which connect/send/receive/response branch failed. Project
@@ -419,7 +533,7 @@ live maintenance process was interrupted, explain its exit 1, or establish a
 QEMU/host/disk fault, discard progress, Linux/enclave behavior or deployed cause.
 No additional runtime allowance was consumed.
 
-## Current authority and hard limits
+## Historical authority and hard limits before the fresh reset
 
 The operator explicitly authorized deploying the updated standalone intake/backend/website to the existing Tinfoil instance, including reviewed source integration, logical commits/pushes, normal protected-main integration, native image qualification, registry handoff and protected signing. The operator subsequently selected **Replace existing database**, after disclosure that current accounts, balances, holds and operator/site state would be discarded, the encrypted disk/key preserved, and an explicitly destructive one-shot procedure qualified first.
 
@@ -427,7 +541,7 @@ That specific database replacement was authorized **after qualification, signing
 
 Preserve the original disk/key, intended instance/host, **`possums.dev`**, CPU2/memory8192/GPU0, CC enabled/debug disabled and all historical releases. The operator confirmed this domain is healthy and the earlier incident resolved; the temporary incident hold was lifted without a deployed mutation. Reconcile current native identity/configuration/shape/storage immediately before activation; earlier inventory is not a fresh admission receipt. The existing local sandbox remains untouched.
 
-Ordinary serving keeps Stripe payments **disabled**. Shipping top-up code authorizes no runtime Stripe-secret delivery, payment activation, real sales, inference, gateway/client changes or telemetry export. Gateway recognition/spending remains separate integration.
+At this checkpoint, ordinary serving kept Stripe payments **disabled**, and shipping top-up code alone did not authorize runtime Stripe-secret delivery, payment activation, real sales, inference, gateway/client changes or telemetry export. Later live-payment selections and operator-confirmed tested gateway integration are recorded in the current closeout and live activation work record above; they do not authorize agent-created charges, gateway inference probes or telemetry expansion.
 
 Applicable policies: [authority](../PRIVACY.md#authority-and-scope), [accounting/persistence](../PRIVACY.md#accounting-and-processor-boundaries), [trusted native administration](../PRIVACY.md#trusted-intake-manual-admin-exception), [merged accounts](../PRIVACY.md#subsequent-operator-selected-merged-account-schema), [specific replacement approval](../PRIVACY.md#explicit-same-disk-database-replacement-approval), [forbidden diagnostics](../PRIVACY.md#forbidden-collection-and-defaults), and the sibling gateway's full privacy policy. Keys never enter source, arguments, agent history, diagnostics or release artifacts. Platform-managed key custody/decryption, beta volume rollback limitations, native history and downloaded artifacts remain separate boundaries. Logical discard is not secure erasure; signing/health is not fresh runtime verification or financial durability evidence.
 
