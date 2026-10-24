@@ -36,6 +36,44 @@ The operator subsequently authorized sandbox read/write setup and local syntheti
 
 Application SDK credentials and the local listener's signing secret may be consumed privately by the explicitly selected local sandbox process, never copied into chat, tool history, arguments, source, diagnostics or ledger records. `.env`, editor/backup/terminal history, process memory, CLI's own locally stored authentication and Stripe's audit/network retention are independent persistence boundaries. No whole-host transience or secure-erasure claim is made. MCP OAuth is separate authority, not an application SDK credential; a sandbox label alone is not proof of API scope. Preserve disabled ordinary-serving defaults, supported signature/API validation, bounded TLS-verified SDK calls, no automatic creation replay, and explicit CLI telemetry opt-out. Never capture raw CLI listener output into agent history. The operator subsequently requested Go-only private startup and authorized the agent to start the local sandbox for their browser test. A separately selected development command may read only the literal application-key assignment from bounded ignored `.env`, privately supervise one pinned CLI listener with an isolated empty configuration, pass its actual listener secret to the existing Go runtime in memory, and emit one fixed content-free readiness marker after a passive local HTTPS check using that runtime's exact ephemeral certificate as the trusted root. No raw CLI output, persistent diagnostics, TLS bypass, extra listener, background reconciliation, automatic Checkout, payment submission or process restart follows. Ordinary serving and the manual sandbox command do not gain dotenv loading or CLI startup. See [the scoped local sandbox plan](docs/stripe-sandbox-local.md) for sequencing and unqualified activation gates.
 
+## Subsequent live Stripe payment direction
+
+After the successful operator-run fresh-volume rollout, the operator requested
+real Stripe payments and confirmed that the live Stripe account is activated and
+gateway integration has already been tested. They selected **20 days for local
+account-linked sales retention** and **Stripe Tax**. These supersede the
+synthetic-only direction and 90-day fixture retention as the intended live
+product, not evidence that the existing synthetic schema/client accepts live
+payments or that any real-data activation has occurred.
+
+Prepare the focused live implementation and qualification under
+[the live activation work record](docs/stripe-live-activation.md). Preserve the
+current disk, credentials, balances/holds, tested gateway contract and existing
+20-day maximum provider-link policy; do not relabel synthetic state, reset storage
+or weaken signature, mode, exact arithmetic or replay validation. The operator
+subsequently selected **tax added on top of the chosen credit principal** and a
+**shared cutoff 20 days after checkout initiation** for purchase/provider-link
+and sale deletion together. No payment/support/duplicate-delivery refresh; a sale
+paid later has slightly less than 20 days of local retention. The proposed live
+record inventory and transactional paired-deletion design are in the linked
+work record; review and qualify them before activation. Any necessary
+principal/tax/total fields must be explicitly inventoried; no additional sale
+expiry timestamp is proposed. This direction does not authorize retaining customer addresses,
+tax IDs, names, email, card information, provider payloads or exact activity
+history in application records or observability.
+
+The local 20-day choice does not establish legal/accounting retention compliance
+or delete Stripe/card-network records. Stripe Tax selection does not establish
+registrations, prepaid-product classification or remittance. Public processor,
+tax/pricing, refund/support and retention disclosures and supported SDK/runtime
+qualification remain required before enabling charges. Existing no automatic
+refund/clawback, no subscriptions/autoreload/saved cards/unnecessary Customers,
+closed transient diagnostics, no logs/traces or telemetry expansion remain.
+Use private secret entry only when configuration is ready; never use sandbox
+credentials or the local listener's signing secret as live endpoint authority.
+No live provider call or agent-created charge follows merely from this policy
+record. The operator's current deployment-control handoff remains unchanged.
+
 ## Renewable reservation and customer-duration packet
 
 The operator approved local source/disposable-synthetic qualification of

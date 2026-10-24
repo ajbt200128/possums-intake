@@ -18,8 +18,11 @@ func (c *Client) CreateCheckout(ctx context.Context, in CreateRequest) (out Chec
 	defer recoverBoundary(&err, StageCreate, OutcomeCreateUnknown)
 	p := in.Purchase
 	now := time.Now()
-	if !c.configured() || ctx == nil || !validPurchase(p) || !tokenPattern.MatchString(in.IdempotencyKey) || in.IdempotencyKey == p.Reference || now.Before(p.IssuedAt.Add(-time.Minute)) || now.After(p.IssuedAt.Add(5*time.Minute)) {
-		return Checkout{}, failure(CodeInput, StageCreate, ConstraintInput, OutcomeNotAttempted, 0)
+	if !c.configured() || ctx == nil || !c.validPurchase(p) || !tokenPattern.MatchString(in.IdempotencyKey) || in.IdempotencyKey == p.Reference || now.Before(p.IssuedAt.Add(-time.Minute)) || now.After(p.IssuedAt.Add(5*time.Minute)) {
+		return Checkout{}, c.failure(CodeInput, StageCreate, ConstraintInput, OutcomeNotAttempted, 0)
+	}
+	if c.live && p.TaxCode != c.taxCode {
+		return Checkout{}, c.failure(CodeInput, StageCreate, ConstraintTax, OutcomeNotAttempted, 0)
 	}
 	ctx, cancel, observed := requestContext(ctx)
 	defer cancel()
@@ -34,12 +37,12 @@ func (c *Client) CreateCheckout(ctx context.Context, in CreateRequest) (out Chec
 		// NOT qualified by these offline fixtures.
 		AllowedPaymentMethodTypes: stripe.StringSlice([]string{"card"}),
 		// Card filtering alone does not disable Link's saved-information UI.
-		WalletOptions: &stripe.CheckoutSessionCreateWalletOptionsParams{Link: &stripe.CheckoutSessionCreateWalletOptionsLinkParams{Display: stripe.String("never")}},
-		PaymentIntentData:         &stripe.CheckoutSessionCreatePaymentIntentDataParams{CaptureMethod: stripe.String("automatic")},
-		AdaptivePricing:           &stripe.CheckoutSessionCreateAdaptivePricingParams{Enabled: stripe.Bool(false)},
-		AllowPromotionCodes:       stripe.Bool(false),
-		AfterExpiration:           &stripe.CheckoutSessionCreateAfterExpirationParams{Recovery: &stripe.CheckoutSessionCreateAfterExpirationRecoveryParams{Enabled: stripe.Bool(false)}},
-		InvoiceCreation:           &stripe.CheckoutSessionCreateInvoiceCreationParams{Enabled: stripe.Bool(false)},
+		WalletOptions:       &stripe.CheckoutSessionCreateWalletOptionsParams{Link: &stripe.CheckoutSessionCreateWalletOptionsLinkParams{Display: stripe.String("never")}},
+		PaymentIntentData:   &stripe.CheckoutSessionCreatePaymentIntentDataParams{CaptureMethod: stripe.String("automatic")},
+		AdaptivePricing:     &stripe.CheckoutSessionCreateAdaptivePricingParams{Enabled: stripe.Bool(false)},
+		AllowPromotionCodes: stripe.Bool(false),
+		AfterExpiration:     &stripe.CheckoutSessionCreateAfterExpirationParams{Recovery: &stripe.CheckoutSessionCreateAfterExpirationRecoveryParams{Enabled: stripe.Bool(false)}},
+		InvoiceCreation:     &stripe.CheckoutSessionCreateInvoiceCreationParams{Enabled: stripe.Bool(false)},
 		LineItems: []*stripe.CheckoutSessionCreateLineItemParams{{
 			Quantity:           stripe.Int64(1),
 			AdjustableQuantity: &stripe.CheckoutSessionCreateLineItemAdjustableQuantityParams{Enabled: stripe.Bool(false)},
@@ -50,23 +53,35 @@ func (c *Client) CreateCheckout(ctx context.Context, in CreateRequest) (out Chec
 		}},
 	}
 	params.SetIdempotencyKey(in.IdempotencyKey)
-	params.AddExpand("line_items.data.price")
+	if c.live {
+		params.AutomaticTax = &stripe.CheckoutSessionCreateAutomaticTaxParams{Enabled: stripe.Bool(true), Liability: &stripe.CheckoutSessionCreateAutomaticTaxLiabilityParams{Type: stripe.String("self")}}
+		params.BillingAddressCollection = stripe.String("auto")
+		params.LineItems[0].PriceData.TaxBehavior = stripe.String("exclusive")
+		params.LineItems[0].PriceData.ProductData.Name = stripe.String("Prepaid inference credit")
+		params.LineItems[0].PriceData.ProductData.TaxCode = stripe.String(p.TaxCode)
+		params.AddExpand("line_items.data.price.product")
+	} else {
+		params.AddExpand("line_items.data.price")
+	}
 	s, sdkErr := c.sdk.V1CheckoutSessions.Create(ctx, params)
-	if err := providerFailure(sdkErr, observed, StageCreate, OutcomeCreateUnknown); err != nil {
+	if err := c.providerFailure(sdkErr, observed, StageCreate, OutcomeCreateUnknown); err != nil {
 		return Checkout{}, err
 	}
-	if constraint := validateSession(s, p); constraint != "" {
-		return Checkout{}, failure(CodeEvidence, StageCreate, constraint, OutcomeCreateUnknown, observed.status)
+	if constraint := c.validateSession(s, p); constraint != "" {
+		return Checkout{}, c.failure(CodeEvidence, StageCreate, constraint, OutcomeCreateUnknown, observed.status)
 	}
 	if s.Status != stripe.CheckoutSessionStatusOpen || s.PaymentStatus != stripe.CheckoutSessionPaymentStatusUnpaid {
-		return Checkout{}, failure(CodeEvidence, StageCreate, ConstraintSession, OutcomeCreateUnknown, observed.status)
+		return Checkout{}, c.failure(CodeEvidence, StageCreate, ConstraintSession, OutcomeCreateUnknown, observed.status)
 	}
 	if !c.validHostedURL(s.URL) {
 		constraint := ConstraintURL
 		if c.sandbox {
 			constraint = ConstraintSandboxURL
 		}
-		return Checkout{}, failure(CodeEvidence, StageHostedURL, constraint, OutcomeCreateUnknown, observed.status)
+		if c.live {
+			constraint = ConstraintLiveURL
+		}
+		return Checkout{}, c.failure(CodeEvidence, StageHostedURL, constraint, OutcomeCreateUnknown, observed.status)
 	}
 	return Checkout{Session: projectSession(s), HostedURL: s.URL}, nil
 }
@@ -92,10 +107,10 @@ func (c *Client) validHostedURL(value string) bool {
 		return false
 	}
 	u, err := url.Parse(value)
-	if c.sandbox {
+	if c.sandbox || c.live {
 		return err == nil && u.Scheme+"://"+u.Host == sandboxCheckoutOrigin && u.User == nil && u.Opaque == "" &&
 			u.RawQuery == "" && !u.ForceQuery && u.RawPath == "" && u.String() == value &&
-			strings.HasPrefix(u.Path, "/c/pay/") && sessionPattern.MatchString(strings.TrimPrefix(u.Path, "/c/pay/")) &&
+			strings.HasPrefix(u.Path, "/c/pay/") && c.validSessionID(strings.TrimPrefix(u.Path, "/c/pay/")) &&
 			len(u.Fragment) <= 2048 && printableFragment(u.Fragment)
 	}
 	return err == nil && u.Scheme+"://"+u.Host == c.origin && u.User == nil && u.Opaque == "" && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.RawFragment == "" && u.RawPath == "" && len(u.Path) > 1 && u.Path[0] == '/'
@@ -110,12 +125,12 @@ func printableFragment(fragment string) bool {
 	return true
 }
 
-func validateSession(s *stripe.CheckoutSession, p Purchase) Constraint {
-	if s == nil || s.Livemode {
+func (c *Client) validateSession(s *stripe.CheckoutSession, p Purchase) Constraint {
+	if s == nil || s.Livemode != c.live {
 		return ConstraintContext
 	}
-	if s.Object != "checkout.session" || !sessionPattern.MatchString(s.ID) || s.Mode != stripe.CheckoutSessionModePayment || s.UIMode != stripe.CheckoutSessionUIModeHostedPage ||
-		s.ClientReferenceID != p.Reference || s.Currency != stripe.CurrencyUSD || s.AmountTotal != int64(p.GrossCents) || s.AmountSubtotal != int64(p.GrossCents) ||
+	if s.Object != "checkout.session" || !c.validSessionID(s.ID) || s.Mode != stripe.CheckoutSessionModePayment || s.UIMode != stripe.CheckoutSessionUIModeHostedPage ||
+		s.ClientReferenceID != p.Reference || s.Currency != stripe.CurrencyUSD || (!c.live && s.AmountTotal != int64(p.GrossCents)) || s.AmountSubtotal != int64(p.GrossCents) ||
 		!validSeconds(s.Created) || s.Created < p.IssuedAt.Unix()-60 || s.Created > p.IssuedAt.Unix()+360 || s.Created > time.Now().Unix()+60 || s.ExpiresAt != p.ExpiresAt.Unix() || s.Created >= s.ExpiresAt ||
 		s.RecoveredFrom != "" || s.PaymentLink != nil || s.Subscription != nil || s.SetupIntent != nil || s.Customer != nil || s.CustomerAccount != "" || s.CustomerCreation != stripe.CheckoutSessionCustomerCreationIfRequired ||
 		len(s.Metadata) != 0 || len(s.Discounts) != 0 || s.AllowPromotionCodes || len(s.PaymentMethodTypes) != 1 || s.PaymentMethodTypes[0] != "card" ||
@@ -130,12 +145,12 @@ func validateSession(s *stripe.CheckoutSession, p Purchase) Constraint {
 		return ConstraintLineItem
 	}
 	item := s.LineItems.Data[0]
-	if item == nil || item.Object != "item" || item.Quantity != 1 || item.Currency != stripe.CurrencyUSD || item.AmountTotal != int64(p.GrossCents) || item.AmountSubtotal != int64(p.GrossCents) || item.AmountDiscount != 0 || item.AmountTax != 0 ||
+	if item == nil || item.Object != "item" || item.Quantity != 1 || item.Currency != stripe.CurrencyUSD || (!c.live && item.AmountTotal != int64(p.GrossCents)) || item.AmountSubtotal != int64(p.GrossCents) || item.AmountDiscount != 0 || (!c.live && item.AmountTax != 0) ||
 		(item.AdjustableQuantity != nil && item.AdjustableQuantity.Enabled) || len(item.Discounts) != 0 || item.Price == nil {
 		return ConstraintLineItem
 	}
 	price := item.Price
-	if price.Object != "price" || price.Livemode || price.Deleted || price.Currency != stripe.CurrencyUSD || price.UnitAmount != int64(p.GrossCents) || price.BillingScheme != stripe.PriceBillingSchemePerUnit || price.Type != stripe.PriceTypeOneTime || price.Recurring != nil || price.CustomUnitAmount != nil || price.TransformQuantity != nil {
+	if price.Object != "price" || price.Livemode != c.live || price.Deleted || price.Currency != stripe.CurrencyUSD || price.UnitAmount != int64(p.GrossCents) || price.BillingScheme != stripe.PriceBillingSchemePerUnit || price.Type != stripe.PriceTypeOneTime || price.Recurring != nil || price.CustomUnitAmount != nil || price.TransformQuantity != nil {
 		return ConstraintLineItem
 	}
 	// v87 uses exact decimal.Decimal, not float64. The integer is mandatory;
@@ -143,11 +158,17 @@ func validateSession(s *stripe.CheckoutSession, p Purchase) Constraint {
 	if price.UnitAmountDecimal.Exponent() < -12 || price.UnitAmountDecimal.Exponent() > 4 || (!price.UnitAmountDecimal.IsZero() && price.UnitAmountDecimal.String() != strconv.FormatUint(p.GrossCents, 10)) {
 		return ConstraintLineItem
 	}
+	if c.live {
+		return validateLiveSession(s, p)
+	}
 	return ""
 }
 
 func projectSession(s *stripe.CheckoutSession) Session {
-	out := Session{Reference: s.ClientReferenceID, SessionID: s.ID, CreatedSeconds: s.Created, ExpiresSeconds: s.ExpiresAt, Currency: "usd", GrossCents: uint64(s.AmountTotal), Quantity: 1}
+	out := Session{Reference: s.ClientReferenceID, SessionID: s.ID, CreatedSeconds: s.Created, ExpiresSeconds: s.ExpiresAt, Currency: "usd", GrossCents: uint64(s.AmountSubtotal), Quantity: 1, LiveMode: s.Livemode}
+	if s.Livemode {
+		out.TaxCode = s.LineItems.Data[0].Price.Product.TaxCode.ID
+	}
 	if s.PaymentIntent != nil {
 		out.PaymentIntentID = s.PaymentIntent.ID
 	}

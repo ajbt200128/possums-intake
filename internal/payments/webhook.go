@@ -55,7 +55,7 @@ func (s *Service) webhookResult(r *http.Request) (int, webhookReply) {
 		return refuse(http.StatusMethodNotAllowed, "PAYMENT_WEBHOOK_METHOD_REFUSED", "post_required")
 	}
 	if !s.configured() {
-		return http.StatusServiceUnavailable, webhookReply{Status: "unavailable", Error: localFailure("PAYMENT_OFFLINE_CONFIGURATION_INVALID", "payment_webhook", "explicit_offline_admission_required", "not_attempted")}
+		return http.StatusServiceUnavailable, webhookReply{Status: "unavailable", Error: s.configurationFailure("payment_webhook")}
 	}
 	if r.ContentLength > stripepay.MaxWebhookBytes {
 		return refuse(http.StatusRequestEntityTooLarge, "PAYMENT_WEBHOOK_BODY_REFUSED", "bounded_raw_body_required")

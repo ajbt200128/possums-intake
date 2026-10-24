@@ -1,9 +1,13 @@
 # Stripe adapter boundaries
 
-Synthetic-only source/test packet under `PRIVACY.md`'s **Local synthetic Stripe
-top-up implementation** and **Forbidden collection and defaults**, and
-`docs/stripe-topup-plan.md`. No ordinary-runtime activation or production client. The separate payments
-coordinator owns local synthetic integration; this package remains accounting-free.
+Explicit offline, sandbox and live SDK adapters under `PRIVACY.md`'s **Local
+synthetic Stripe top-up implementation**, **Subsequent live Stripe payment
+direction** and **Forbidden collection and defaults**, and
+`docs/stripe-live-activation.md`. The authoritative gateway `PRIVACY.md`'s **Data
+handling boundaries**, **Telemetry: permitted signals and forbidden data** and
+**Processors, retention, access and shutdown** also apply. Source/offline
+qualification is not runtime activation or provider acceptance. The separate
+payments coordinator owns integration; this package remains accounting-free.
 
 ## API and ownership
 
@@ -31,7 +35,8 @@ coordinator owns local synthetic integration; this package remains accounting-fr
   its latest Charge/expanded refunds. Validates original create window (minus
   60 seconds through five minutes plus 60 seconds), exact expiry, USD integer
   amounts, one quantity/price, paid/completed Session, succeeded automatic-capture
-  PI, succeeded paid/captured card Charge, object bindings and test/direct context.
+  PI, succeeded paid/captured card Charge, object bindings and constructor-selected
+  live/test direct context.
   Nonnegative bounded refund amounts and all object/amount relationships are
   checked before projection. Only `CodeEvidence/StageCharge/ConstraintRefund`
   deliberately returns **both validated canonical Evidence and a closed error**:
@@ -47,7 +52,7 @@ coordinator owns local synthetic integration; this package remains accounting-fr
   neither a funding receipt nor atomic with a concurrent Stripe refund/dispute.
 - `DecodeWebhook(raw, signature) (Notification, error)` caps raw bytes at 256 KiB,
   uses supported SDK verification/default five-minute tolerance and version
-  enforcement, additionally requires the exact pinned API, rejects connected/live
+  enforcement, additionally requires the exact pinned API, rejects connected or wrong-mode
   context, and projects two Checkout success event kinds to a Session ID and a
   validated reference LOOKUP SELECTOR only. A missing/invalid selector is rejected;
   it cannot recreate purchases. Canonical Session retrieval must independently
@@ -107,6 +112,117 @@ Commands used module-network lookups disabled:
 `devenv shell -- env OTEL_SDK_DISABLED=true GOPROXY=off GOSUMDB=off go test -race ./internal/stripepay ./internal/payments -count=1 -timeout=180s`
 
 `devenv shell -- env OTEL_SDK_DISABLED=true GOPROXY=off GOSUMDB=off go vet ./internal/stripepay ./internal/payments`
+
+## Distinct live source boundary and exclusive tax
+
+`NewLive(LiveConfig{ReturnOrigin, APIKey, WebhookSecret, TaxCode})` is inert and
+has no environment lookup or configurable provider endpoint. It fixes API and
+hosted navigation separately to `https://api.stripe.com` and
+`https://checkout.stripe.com`, using the same four-backend privacy wiring as the
+other modes. No constructor, accessor, URL check or webhook decode dispatches.
+Only bounded `sk_live_`/`rk_live_` and `whsec_` shapes are admitted (ASCII
+alphanumeric suffix, 256-byte maximum). Shape is not proof of remote mode,
+permissions, endpoint-secret ownership or valid tax setup. The caller privately
+supplies inputs; this package never reads credentials from files or environment.
+
+ReturnOrigin must be a canonical lowercase HTTPS DNS origin with at least two
+labels, alphabetic TLD, no port/userinfo/path/query/fragment/opaque form, and no IP
+or recognized special-use local/test suffix. Validation performs no DNS lookup:
+public routing, ownership and deployed TLS are operator qualification, not
+constructor evidence. Live hosted URLs require the existing canonical bounded
+`/c/pay/cs_live_...` path and the same finite printable-fragment policy as sandbox.
+Sandbox still permits only `cs_test_...`; offline remains fixture-origin only.
+Nil/zero/unselected/contradictory mode flags fail closed. `IsLive()` and
+`ProductTaxCode()` expose trusted constructor-owned configuration, with an empty
+code outside configured live mode. `IsSandbox()` is unchanged.
+
+There is **no default product classification**: the operator must supply a
+canonical `txcd_` plus eight digits. `Purchase.TaxCode` is the original immutable
+trusted classification, never a browser input. Live create requires it to equal
+current configuration before dispatch; retrieval instead checks the original
+purchase code, so earlier pending purchases survive a later configuration change.
+Test/offline purchases must have an empty code. No Product ID escapes projection
+or is stored by this package.
+
+Live create requests automatic tax with explicit self liability, minimum `auto`
+billing-address collection, an inline exclusive Price, the operator Product tax
+code, and name `Prepaid inference credit`. Card-only, Link display `never`, guest
+`if_required`, invoices disabled, no future usage/save inputs, no Customer or
+metadata inputs, no recovery and no replay stay intact. Test/sandbox wire fields
+and their existing expansion remain unchanged. Live create/retrieve expand
+`line_items.data.price.product` on their existing SDK calls (no fourth GET).
+The pinned SDK's `Product.TaxCode` is `*stripe.TaxCode`; its supported unmarshaller
+accepts either a tax-code ID or expanded TaxCode. No custom JSON decoder or
+separate Product/TaxCode fetch is used.
+
+Binding validates immutable principal/subtotal, one quantity/unit price, expanded
+live Product/original code, exclusive behavior, automatic-tax enablement, context,
+timing and prohibited features. An open/unpaid Session may have unresolved tax
+and nullable provisional totals; these are **not a stable quote** and are not
+projected. `Session.GrossCents` always means **credit principal/subtotal**, never
+the total charged. Session also projects `LiveMode` and original `TaxCode`.
+
+Final evidence additionally requires complete automatic tax, explicit `self`
+liability with no Account, explicit `stripe` provider, and nonnil total details.
+Unknown/absent/null provider or liability cannot prove those facts and is refused
+for funding; nullable open-state fields may remain unresolved. This is a narrow
+supported-flow admission rule, not a claim that Stripe never returns null.
+SDK nonpointer integer fields follow the documented API semantics (for example,
+line tax defaults to zero when no tax is applied); no second raw-body presence
+parser is introduced. Checked integer arithmetic enforces principal + nonnegative
+tax = line total = Session total, equal Session/line tax, and zero shipping and
+discounts. PaymentIntent amount/received and Charge amount/captured must equal
+that **final total**, retaining all prior binding/currency/time/refund checks.
+Zero tax is accepted only with the same complete canonical context; no local rate
+calculation or legal taxability conclusion follows. Managed-payments,
+performance-location and incompatible tax contexts are refused rather than
+inventing support.
+
+Only after the complete Session → PI → Charge/refunds chain validates is optional
+`Evidence.Tax` projected as `TaxEvidence{AmountCents, TotalCents, Complete,
+Exclusive, LiabilitySelf}`. All ordinary errors return zero Evidence. The sole
+existing typed refund/dispute error retains validated evidence (including tax)
+for the owner's sticky block, **never funding or receipt clawback**. No ledger
+mapping, cutoff/retention, runtime selection, website, deployment, metrics family,
+background task or provider retry is added here.
+
+### Live packet offline evidence and remaining gates
+
+Public synthetic fixtures replace the private SDK with a bounded loopback SDK
+**before any operation**. No exported bypass or live endpoint override exists.
+Tests cover inert valid/invalid constructors and four-backend settings, strict
+mode/URL refusals, exact live request allowlist versus unchanged V1 requests,
+unresolved open tax binding, all four principals with zero/nonzero tax, original
+code after configuration change, tax/amount/context mismatches and unknowns,
+actual SDK signed-event roundtrips, three-GET bounds, one-POST/zero-retry failures,
+validated refund partial outcomes, hostile bodies and no raw SDK output. Fixtures
+contain deliberately private-looking synthetic customer/card fields that must not
+survive projections or diagnostics. Host-native test history remains a separate
+boundary; no whole-process immediate-erasure claim follows.
+
+Actual Stripe expansion/provider/nullable-field responses, restricted-key scopes,
+hosted guest/address/Link/3DS behavior, tax registration/classification/remittance
+and active public notices remain provider/operator qualification gates. This
+packet performs **no provider calls, key access, real charges or deployment**.
+The already operator-accepted gateway integration is not reclassified as missing;
+new live coordinator/runtime mapping and full-root functional qualification are
+separate packets. No real-data activation follows from offline success.
+
+Scoped live-packet results: package race suite passed (1.930s), scoped vet/build
+passed, and full-root compile-only tests passed with no positional-caller gaps.
+Nine changed Go files had no active LSP Go diagnostics. An auxiliary Semgrep
+warning flags inspecting the SDK-returned Event on an error; pinned SDK inspection
+confirms Event is a value, populated before its API-version error, so the existing
+closed version classification is intentional (no nil dereference or raw error use).
+No full-root functional suite or provider qualification is claimed.
+
+`devenv --offline shell -- env OTEL_SDK_DISABLED=true GOPROXY=off GOSUMDB=off PYTHONDONTWRITEBYTECODE=1 go test -race -p 1 ./internal/stripepay -count=1`
+
+`devenv --offline shell -- env OTEL_SDK_DISABLED=true GOPROXY=off GOSUMDB=off PYTHONDONTWRITEBYTECODE=1 go vet ./internal/stripepay`
+
+`devenv --offline shell -- env OTEL_SDK_DISABLED=true GOPROXY=off GOSUMDB=off PYTHONDONTWRITEBYTECODE=1 go build ./internal/stripepay`
+
+`devenv --offline shell -- env OTEL_SDK_DISABLED=true GOPROXY=off GOSUMDB=off PYTHONDONTWRITEBYTECODE=1 go test -p 1 ./... -run '^$' -count=1`
 
 ## Dependency/source qualification
 

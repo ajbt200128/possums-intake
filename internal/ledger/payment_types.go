@@ -14,6 +14,14 @@ const (
 	paymentMaxTime    int64 = 9999999999999
 )
 
+// PaymentIdentity is the closed, persisted payment feature identity.
+type PaymentIdentity string
+
+const (
+	PaymentIdentitySynthetic     PaymentIdentity = "synthetic-only"
+	PaymentIdentityLiveStripeTax PaymentIdentity = "live-stripe-tax"
+)
+
 // PaymentDenomination returns a value copy; callers cannot alter the price list.
 func PaymentDenomination(choice string) (PaymentTerms, bool) {
 	switch choice {
@@ -50,6 +58,7 @@ type PreparePaymentInput struct {
 	AccountID    string
 	Denomination string
 	Form         PaymentForm
+	TaxCode      string // Trusted product classification; never browser authority.
 }
 
 // PaymentPurchase is PRIVATE adapter data, not a customer response DTO. In
@@ -75,13 +84,14 @@ type PaymentPurchase struct {
 	SessionCreatedAt  *Millis `db:"session_created_ms"`
 	SaleID            *string `db:"sale_id"`
 	FundingState      string  `db:"funding_state"`
+	TaxCode           string  `db:"tax_code"`
 }
 
 // StripeSessionEvidence contains only canonical, already validated adapter
 // evidence. The adapter verifies signature/context/API version, line items,
 // canonical Session->PaymentIntent->Charge relationships and expected provider
 // account OUTSIDE the transaction. Event timestamps are deliberately absent.
-// This synthetic core always rejects LiveMode; there is no live initializer.
+// LiveMode and TaxCode must match the purchase's persisted feature identity.
 type StripeSessionEvidence struct {
 	Reference       string
 	SessionID       string
@@ -91,8 +101,18 @@ type StripeSessionEvidence struct {
 	LiveMode        bool
 	Mode            string
 	Currency        string
-	GrossMinor      Money
+	GrossMinor      Money // Legacy name: CREDIT PRINCIPAL/subtotal, never collected total.
 	Quantity        int
+	TaxCode         string
+}
+
+// StripeTaxEvidence is final canonical exclusive-tax evidence, not a tax quote.
+type StripeTaxEvidence struct {
+	Amount        Money
+	Total         Money
+	Complete      bool
+	Exclusive     bool
+	LiabilitySelf bool
 }
 
 type StripeFundingEvidence struct {
@@ -114,6 +134,7 @@ type StripeFundingEvidence struct {
 	// Any relevant refund evidence, including pending/failed/unknown statuses,
 	// is sticky before funding; a later success cannot automatically unblock it.
 	RefundObserved bool
+	Tax            *StripeTaxEvidence
 }
 
 // PaymentFundingResult confirms original funding, NOT current availability.
@@ -137,6 +158,18 @@ type PaymentPurgeResult struct {
 var paymentTokenPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var paymentSessionPattern = regexp.MustCompile(`^cs_[A-Za-z0-9_]{1,200}$`)
 var paymentIntentPattern = regexp.MustCompile(`^pi_[A-Za-z0-9_]{1,200}$`)
+var paymentTaxCodePattern = regexp.MustCompile(`^txcd_[0-9]{8}$`)
+
+func paymentTaxTotal(principal, tax, total Money) bool {
+	p, pe := principal.units()
+	t, te := tax.units()
+	g, ge := total.units()
+	if pe != nil || te != nil || ge != nil || p == 0 || g == 0 {
+		return false
+	}
+	sum, err := add(p, t)
+	return err == nil && sum == g
+}
 
 func paymentTermsValid(currency string, gross, units Money) bool {
 	for _, choice := range []string{"usd5", "usd10", "usd25", "usd50"} {

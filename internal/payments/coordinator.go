@@ -1,5 +1,5 @@
-// Package payments coordinates explicitly initialized synthetic ledger payments
-// with an explicitly selected Stripe adapter. Ordinary runtime never constructs it.
+// Package payments coordinates explicitly initialized ledger payments with an
+// explicitly selected Stripe adapter. Ordinary runtime never constructs it.
 package payments
 
 import (
@@ -12,43 +12,54 @@ import (
 
 const startupBudget = 10 * time.Second
 
+// stripeAdapter is private so tests can exercise live coordination without
+// changing the SDK's fixed origins. Public admission accepts only its owned client.
+type stripeAdapter interface {
+	IsLive() bool
+	IsSandbox() bool
+	ProductTaxCode() string
+	CheckoutOrigin() string
+	CheckoutURLAllowed(string) bool
+	CreateCheckout(context.Context, stripepay.CreateRequest) (stripepay.Checkout, error)
+	RetrieveEvidence(context.Context, string, stripepay.Purchase) (stripepay.Evidence, error)
+	DecodeWebhook([]byte, string) (stripepay.Notification, error)
+}
+
 // Service holds no payment cache, provider bridge, queue, worker or retry policy.
 // The website owns live session/form validation and memory-only references.
 type Service struct {
-	ledger *ledger.Service
-	stripe *stripepay.Client
+	ledger   *ledger.Service
+	stripe   stripeAdapter
+	identity ledger.PaymentIdentity
+	sandbox  bool
 }
 
 // NewOffline NEVER initializes schema. Admission opens only after bounded purge
 // batches drain successfully. A failure returns no partially enabled service.
 func NewOffline(ctx context.Context, core *ledger.Service, client *stripepay.Client) (out *Service, err error) {
 	defer recoverError(&err, "payment_admission", "unknown")
-	if ctx == nil || core == nil || client.CheckoutOrigin() == "" || client.IsSandbox() {
+	if ctx == nil || core == nil || client == nil || client.CheckoutOrigin() == "" || client.IsSandbox() || client.IsLive() {
 		return nil, localFailure("PAYMENT_OFFLINE_CONFIGURATION_INVALID", "payment_admission", "explicit_initialized_ledger_and_fixture_required", "not_attempted")
 	}
-	return admit(ctx, core, client)
+	return admit(ctx, core, client, ledger.PaymentIdentitySynthetic)
 }
 
-func admit(ctx context.Context, core *ledger.Service, client *stripepay.Client) (*Service, error) {
-	ctx, cancel := context.WithTimeout(ctx, startupBudget)
-	defer cancel()
-	for {
-		if ctx.Err() != nil {
-			return nil, localFailure("PAYMENT_PURGE_UNAVAILABLE", "payment_admission", "complete_bounded_startup_purge_required", "unavailable")
-		}
-		result, e := core.PurgeSyntheticPayments(ctx)
-		if e != nil {
-			return nil, e
-		}
-		if !result.More {
-			break
-		}
-	}
-	return &Service{ledger: core, stripe: client}, nil
+func admit(ctx context.Context, core *ledger.Service, client *stripepay.Client, expected ledger.PaymentIdentity) (*Service, error) {
+	return admitObserved(ctx, core, client, expected, nil)
 }
 
 func (s *Service) configured() bool {
-	return s != nil && s.ledger != nil && s.stripe != nil && s.stripe.CheckoutOrigin() != ""
+	if s == nil || s.ledger == nil || s.stripe == nil || s.stripe.CheckoutOrigin() == "" || s.stripe.IsSandbox() != s.sandbox {
+		return false
+	}
+	switch s.identity {
+	case ledger.PaymentIdentityLiveStripeTax:
+		return s.stripe.IsLive() && !s.sandbox && s.stripe.ProductTaxCode() != "" && s.stripe.CheckoutOrigin() == "https://checkout.stripe.com"
+	case ledger.PaymentIdentitySynthetic:
+		return !s.stripe.IsLive() && s.stripe.ProductTaxCode() == "" && (!s.sandbox || s.stripe.CheckoutOrigin() == "https://checkout.stripe.com")
+	default:
+		return false
+	}
 }
 
 func (s *Service) CheckoutURLAllowed(value string) bool {
@@ -72,9 +83,13 @@ func (s *Service) StartTopup(ctx context.Context, account string, form ledger.Pa
 		}
 	}()
 	if !s.configured() || ctx == nil {
-		return out, localFailure("PAYMENT_OFFLINE_CONFIGURATION_INVALID", "payment_start", "explicit_offline_admission_required", "not_attempted")
+		return out, s.configurationFailure("payment_start")
 	}
-	p, err := s.ledger.PreparePayment(ctx, ledger.PreparePaymentInput{AccountID: account, Denomination: denomination, Form: form})
+	input := ledger.PreparePaymentInput{AccountID: account, Denomination: denomination, Form: form}
+	if s.identity == ledger.PaymentIdentityLiveStripeTax {
+		input.TaxCode = s.stripe.ProductTaxCode()
+	}
+	p, err := s.ledger.PreparePayment(ctx, input)
 	if err != nil {
 		return out, err
 	}
@@ -113,7 +128,7 @@ func (s *Service) StartTopup(ctx context.Context, account string, form ledger.Pa
 func (s *Service) TopupStatus(ctx context.Context, account, ref string) (out TopupResult, err error) {
 	defer recoverError(&err, "payment_status", "unknown")
 	if !s.configured() || ctx == nil {
-		return out, localFailure("PAYMENT_OFFLINE_CONFIGURATION_INVALID", "payment_status", "explicit_offline_admission_required", "not_attempted")
+		return out, s.configurationFailure("payment_status")
 	}
 	p, err := s.ledger.GetPayment(ctx, account, ref)
 	if unavailableReference(err) {

@@ -28,6 +28,18 @@ func (e *Error) Unwrap() error { return e.cause }
 func localFailure(code, stage, constraint, outcome string) *Error {
 	return &Error{Code: code, Stage: stage, Constraint: constraint, Outcome: outcome, CauseUnknown: constraint == "component_cause_unknown", NextStep: "Inspect closed fields and local status; do not replay Checkout creation. A new purchase may duplicate payment."}
 }
+func (s *Service) configurationFailure(stage string) *Error {
+	if s != nil {
+		if s.identity == ledger.PaymentIdentityLiveStripeTax {
+			return localFailure("PAYMENT_LIVE_CONFIGURATION_INVALID", stage, "explicit_live_tax_admission_required", "not_attempted")
+		}
+		if s.sandbox {
+			return localFailure("PAYMENT_SANDBOX_CONFIGURATION_INVALID", stage, "explicit_sandbox_admission_required", "not_attempted")
+		}
+	}
+	return localFailure("PAYMENT_OFFLINE_CONFIGURATION_INVALID", stage, "explicit_offline_admission_required", "not_attempted")
+}
+
 func recoverError(err *error, stage, outcome string) {
 	if recover() != nil {
 		*err = localFailure("PAYMENT_COMPONENT_CAUSE_UNKNOWN", stage, "component_cause_unknown", outcome)

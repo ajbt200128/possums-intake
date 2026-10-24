@@ -69,12 +69,23 @@
         (ui:p "Current balance is unavailable. Open your account page or check again; your payment was not retried.")
         (ui:text "\n"))))
 
+(defun payment-notice (view)
+  "Only the closed host mode selects live copy; empty legacy views stay test-only."
+  (if (get (sorted-map "live" true) (view-text view "payment-mode"))
+      (ui:group
+        (ui:p "Payments are live. The selected USD amount becomes inference credit; tax is added at Stripe Checkout and does not become credit.")
+        (ui:text "\n\n")
+        (ui:p "Stripe processes payment and tax details and keeps its own records. Card and tax-address details are not stored in our local sales records.")
+        (ui:text "\n\n")
+        (ui:p "Local purchase links and sales records share a deletion cutoff 20 days after checkout starts. Maintenance delays and storage remnants can retain data longer; this does not delete Stripe records."))
+      (ui:p "Sandbox/test only. Use synthetic payment details; do not make real payments.")))
+
 (defun topup-page (view preferences)
   "Compose the first-party payment page; all actions and hidden inputs stay host-owned."
   (let ((state (view-text view "payment-state")))
     (page "Add credit"
       (ui:group
-        (ui:p "Sandbox/test only. Use synthetic payment details; do not make real payments.")
+        (payment-notice view)
         (ui:text "\n\n")
         (ui:p (payment-status-text state))
         (ui:text "\n")

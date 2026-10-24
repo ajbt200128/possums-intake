@@ -9,6 +9,7 @@ import (
 	"possums-intake/internal/failureowner"
 	"possums-intake/internal/failuretype"
 	"possums-intake/internal/ledger"
+	"possums-intake/internal/payments"
 	"possums-intake/internal/siteauth"
 	"possums-intake/internal/website"
 )
@@ -57,6 +58,14 @@ func initializeWebsiteStateObserved(ctx context.Context, dir string, observer fa
 }
 
 func newWebsiteHandler(service *ledger.Service, fallback http.Handler, observer failureowner.Observer) (*website.Host, error) {
+	return newWebsiteHandlerWithPayments(service, fallback, observer, nil)
+}
+
+func newWebsiteHandlerWithPayments(service *ledger.Service, fallback http.Handler, observer failureowner.Observer, paymentService *payments.Service) (*website.Host, error) {
+	var actions website.TopupActions
+	if paymentService != nil {
+		actions = paymentService
+	}
 	app, err := service.CustomerAuthApp()
 	if err != nil {
 		return nil, err
@@ -70,7 +79,7 @@ func newWebsiteHandler(service *ledger.Service, fallback http.Handler, observer 
 	// Forwarded/X-Forwarded-Proto header. Never expose this listener directly.
 	host, err := website.New(auth, fallback, website.Config{
 		Lifetime: time.Hour, IdleTimeout: 10 * time.Minute, ConcurrentRequests: 16,
-		FailureObserver: observer, Balances: service, TLSOffloaded: true,
+		FailureObserver: observer, Balances: service, TLSOffloaded: true, Payments: actions,
 	})
 	if err != nil {
 		return nil, err

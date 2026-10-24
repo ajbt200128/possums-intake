@@ -19,9 +19,11 @@ import (
 
 type browserTopup struct {
 	origin string
+	live   bool
 	starts atomic.Int64
 }
 
+func (b *browserTopup) IsLive() bool                       { return b.live }
 func (b *browserTopup) CheckoutOrigin() string             { return b.origin }
 func (b *browserTopup) CheckoutURLAllowed(raw string) bool { return raw == b.origin+"/checkout" }
 func (b *browserTopup) StartTopup(context.Context, string, ledger.PaymentForm, string) (TopupResult, error) {
@@ -38,6 +40,15 @@ func TestTopupBrowserNavigation(t *testing.T) {
 	if os.Getenv("INTAKE_TOPUP_BROWSER") != "synthetic-only" {
 		t.Skip("explicit isolated browser qualification not selected")
 	}
+	for _, live := range []bool{false, true} {
+		t.Run(map[bool]string{false: "test", true: "live"}[live], func(t *testing.T) {
+			runTopupBrowserNavigation(t, live)
+		})
+	}
+}
+
+func runTopupBrowserNavigation(t *testing.T, live bool) {
+	t.Helper()
 	f := newAccountFixture(t)
 	if _, err := f.service.Credit(context.Background(), ledger.CreditInput{AccountID: accountHTTPA, Amount: "5000000", IdempotencyKey: accountingKey(1)}); err != nil {
 		t.Fatal("TOPUP_BROWSER_SYNTHETIC_CREDIT")
@@ -68,7 +79,7 @@ func TestTopupBrowserNavigation(t *testing.T) {
 		_, _ = w.Write([]byte(`<a href="` + accountOrigin + `/topup/return">Return</a>`))
 	}))
 	t.Cleanup(provider.Close)
-	fixture := &browserTopup{origin: provider.URL}
+	fixture := &browserTopup{origin: provider.URL, live: live}
 	f.host.payments = fixture
 	// Publish immutable host capabilities before starting this serving goroutine.
 	account.StartTLS()
@@ -76,7 +87,7 @@ func TestTopupBrowserNavigation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "node", "topup-browser-test.mjs")
-	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TOPUP_ACCOUNT_ORIGIN=" + account.URL, "TOPUP_ACCOUNT_SPKI=" + base64.StdEncoding.EncodeToString(spki[:]), "TOPUP_CHECKOUT_ORIGIN=" + provider.URL}
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TOPUP_ACCOUNT_ORIGIN=" + account.URL, "TOPUP_ACCOUNT_SPKI=" + base64.StdEncoding.EncodeToString(spki[:]), "TOPUP_CHECKOUT_ORIGIN=" + provider.URL, "TOPUP_PAYMENT_MODE=" + topupMode(fixture)}
 	output, err := command.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(output)) != "TOPUP_BROWSER_OK" {
 		stage := "completion_unknown"

@@ -1,6 +1,6 @@
-// Package stripepay provides explicit offline and local sandbox Stripe adapters.
-// It has no live-mode constructor, environment credential lookup, persistence,
-// accounting dependency, activity hooks, or automatic create replay.
+// Package stripepay provides explicitly selected offline, sandbox and live Stripe
+// adapters. It has no environment credential lookup, persistence, accounting
+// dependency, activity hooks, or automatic create replay.
 package stripepay
 
 import "time"
@@ -39,6 +39,7 @@ type Purchase struct {
 	GrossCents uint64
 	IssuedAt   time.Time
 	ExpiresAt  time.Time
+	TaxCode    string // Original trusted product classification; empty in test modes.
 }
 
 type CreateRequest struct {
@@ -54,8 +55,10 @@ type Session struct {
 	CreatedSeconds  int64
 	ExpiresSeconds  int64
 	Currency        string
-	GrossCents      uint64
+	GrossCents      uint64 // Credit principal (subtotal), NEVER the tax-inclusive total.
 	Quantity        int
+	LiveMode        bool
+	TaxCode         string
 }
 
 // Checkout's URL is transient browser navigation data. Never persist, log,
@@ -63,6 +66,16 @@ type Session struct {
 type Checkout struct {
 	Session   Session
 	HostedURL string
+}
+
+// TaxEvidence contains only exact final amounts and validated closed facts.
+// It is not a quote, tax-location record or legal taxability conclusion.
+type TaxEvidence struct {
+	AmountCents   uint64
+	TotalCents    uint64
+	Complete      bool
+	Exclusive     bool
+	LiabilitySelf bool
 }
 
 // Evidence with nil error is validated current captured, paid, unrefunded and
@@ -74,6 +87,7 @@ type Checkout struct {
 // provider object, body, event history, customer or card details are returned.
 type Evidence struct {
 	Session              Session
+	Tax                  *TaxEvidence // Live only, projected after complete canonical validation.
 	AmountReceived       uint64
 	AmountCaptured       uint64
 	Paid                 bool

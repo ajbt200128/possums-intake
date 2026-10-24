@@ -29,7 +29,7 @@ type Config struct {
 	Lifetime, IdleTimeout time.Duration
 	ConcurrentRequests    int
 	FailureObserver       failureowner.Observer
-	Payments              TopupActions  // optional synthetic-only host capability
+	Payments              TopupActions  // optional explicitly admitted host capability
 	Balances              BalanceReader // optional; never supplied by Lisp/browser input
 	TLSOffloaded          bool          // owner guarantees an HTTPS-only ingress; never inferred from client headers
 }

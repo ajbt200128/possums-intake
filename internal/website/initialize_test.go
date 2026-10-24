@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -24,7 +25,11 @@ func TestDefaultPublicationExplicitIdempotentAndPreservesCode(t *testing.T) {
 	if err != nil || inventory.GetString("draft") != selection.GetString("active") || inventory.GetBool("publish") {
 		t.Fatal("SITE_DEFAULT_INITIAL_DRAFT")
 	}
-	custom, err := json.Marshal(source("Explicit retained custom publication"))
+	// An operator-owned old notice intentionally remains selected even when a
+	// newer embedded default can describe live mode. Initialization is no upgrade.
+	old := source("Explicit retained custom publication")
+	old.Files["pages.el"] += `(defun topup-page (view preferences) (page "Old operator page" (ui:p "` + sandboxNotice + `")))`
+	custom, err := json.Marshal(old)
 	if err != nil {
 		t.Fatal("SITE_DEFAULT_TEST_SOURCE")
 	}
@@ -32,6 +37,14 @@ func TestDefaultPublicationExplicitIdempotentAndPreservesCode(t *testing.T) {
 	selection.Set("active", json.RawMessage(custom))
 	if b.app.Save(selection) != nil {
 		t.Fatal("SITE_DEFAULT_TEST_SAVE")
+	}
+	draft, err := json.Marshal(source("Distinct unfinished operator draft"))
+	if err != nil {
+		t.Fatal("SITE_DEFAULT_TEST_DRAFT")
+	}
+	inventory.Set("draft", json.RawMessage(draft))
+	if b.app.Save(inventory) != nil {
+		t.Fatal("SITE_DEFAULT_TEST_DRAFT_SAVE")
 	}
 	beforeActive, beforePrevious, beforeDraft := selection.GetString("active"), selection.GetString("previous"), inventory.GetString("draft")
 	if InitializeDefaultPublication(ctx, b.app) != nil {
@@ -44,6 +57,17 @@ func TestDefaultPublicationExplicitIdempotentAndPreservesCode(t *testing.T) {
 	inventory, err = b.app.FindRecordById(publicationCollection, publicationRecord)
 	if err != nil || inventory.GetString("draft") != beforeDraft {
 		t.Fatal("SITE_DEFAULT_OVERWROTE_DRAFT")
+	}
+	if b.host.BindPublication(b.app) != nil {
+		t.Fatal("SITE_DEFAULT_RELOAD_RETAINED_PUBLICATION")
+	}
+	page, err := b.host.revision.PageWithView(ctx, "topup-page", map[string]string{"payment-mode": "live"})
+	if err != nil {
+		t.Fatal("SITE_DEFAULT_RETAINED_OLD_PAGE")
+	}
+	body, err := b.host.revision.Render(page, "csrf", "")
+	if err != nil || !strings.Contains(string(body), "Old operator page") || !strings.Contains(string(body), sandboxNotice) || strings.Contains(string(body), "Payments are live.") {
+		t.Fatal("SITE_DEFAULT_EMBEDDED_SOURCE_NOT_ACTIVE_UPGRADE")
 	}
 }
 
