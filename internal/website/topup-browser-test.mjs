@@ -6,6 +6,17 @@ try {
     const account = new URL(process.env.TOPUP_ACCOUNT_ORIGIN);
     const checkout = new URL(process.env.TOPUP_CHECKOUT_ORIGIN);
     const pin = process.env.TOPUP_ACCOUNT_SPKI;
+    const mode = process.env.TOPUP_PAYMENT_MODE;
+    ensure(mode === 'live' || mode === 'test');
+    const checkNotice = text => {
+        ensure(text.includes('Sandbox/test only. Use synthetic payment details; do not make real payments.') === (mode === 'test'));
+        for (const notice of [
+            'Payments are live. The selected USD amount becomes inference credit; tax is added at Stripe Checkout and does not become credit.',
+            'Stripe processes payment and tax details and keeps its own records. Card and tax-address details are not stored in our local sales records.',
+            'Local purchase links and sales records share a deletion cutoff 20 days after checkout starts. Maintenance delays and storage remnants can retain data longer; this does not delete Stripe records.',
+        ]) ensure(text.includes(notice) === (mode === 'live'));
+        if (mode === 'live') ensure(!text.toLowerCase().includes('sandbox'));
+    };
     ensure(account.protocol === 'https:' && account.hostname === '[::1]' && account.port && account.pathname === '/' && !account.search && !account.hash);
     ensure(checkout.protocol === 'http:' && checkout.hostname === '127.0.0.1' && checkout.port && checkout.pathname === '/' && !checkout.search && !checkout.hash);
     ensure(/^[A-Za-z0-9+/]{43}=$/.test(pin));
@@ -61,6 +72,7 @@ try {
     await page.locator('a[href="/topup"]').click();
     await page.waitForURL(account.origin+'/topup');
     ensure(await page.locator('main h1').innerText() === 'Add credit');
+    checkNotice(await page.locator('main').innerText());
     ensure(await page.locator('link[rel="stylesheet"][href^="/_site/styles/"]').count() === 1);
     ensure(await page.locator('main').evaluate(element => {
         const style = getComputedStyle(element);
@@ -78,6 +90,7 @@ try {
     await page.locator('a').click();
     await page.waitForURL(account.origin+'/topup/return');
     const returnText = await page.locator('body').innerText();
+    checkNotice(returnText);
     ensure(returnText.includes('payment and account funding are not confirmed'));
     ensure(returnText.includes('Current balance: $5.00 USD') && returnText.includes('Available: $5.00 USD'));
     for (const field of ['SYNTHETIC_A','Enabled','microunits','5000000','Pending holds:','Reservation:','Request key:']) ensure(!returnText.includes(field));

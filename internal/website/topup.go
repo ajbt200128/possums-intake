@@ -34,6 +34,15 @@ type TopupResult = payments.TopupResult
 
 var _ TopupActions = (*payments.Service)(nil)
 
+// Mode is presentation-only trusted Go configuration, never a browser/Lisp
+// input or funding receipt. Legacy capabilities retain the test-only notice.
+func topupMode(actions TopupActions) string {
+	if mode, ok := actions.(interface{ IsLive() bool }); ok && mode.IsLive() {
+		return "live"
+	}
+	return "test"
+}
+
 func topupPath(path string) bool {
 	switch path {
 	case "/topup", "/topup/start", "/topup/status", "/topup/return":
@@ -332,7 +341,7 @@ func (h *Host) topupRender(w http.ResponseWriter, r *http.Request, form bool, st
 		h.topupFailure(w, r, documentRenderFault(), "payment_page")
 		return
 	}
-	view := map[string]string{"payment-state": state}
+	view := map[string]string{"payment-state": state, "payment-mode": topupMode(h.payments)}
 	if !form && state != "form" {
 		view["balance-state"] = "unavailable"
 		for key, value := range h.topupBalanceView(r) {
