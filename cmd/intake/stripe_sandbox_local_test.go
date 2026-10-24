@@ -368,13 +368,49 @@ func TestStripeSandboxLocalUnconfirmedTeardownPreservesState(t *testing.T) {
 	}
 }
 
-// Source guard complements the old-mode compiled HTTPS test. Neither existing
-// constructor supplies the optional payment capability, regardless of env.
+// Source guard complements the old-mode compiled HTTPS test. The legacy
+// constructor must delegate only nil; the separate local constructor must not
+// supply payments. The explicit live helper is qualified by live runtime tests.
 func TestStripeSandboxLocalExistingConstructorsDoNotSupplyPayments(t *testing.T) {
 	for _, path := range []string{"website.go", "website_local.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			t.Fatal("SANDBOX_TEST_RUNTIME_SOURCE")
+		}
+		if path == "website.go" {
+			wrappers := 0
+			for _, declaration := range file.Decls {
+				function, ok := declaration.(*ast.FuncDecl)
+				if !ok || function.Name.Name != "newWebsiteHandler" {
+					continue
+				}
+				wrappers++
+				if function.Body == nil || len(function.Body.List) != 1 {
+					t.Fatal("SANDBOX_TEST_REQUALIFY_LEGACY_WRAPPER")
+				}
+				result, ok := function.Body.List[0].(*ast.ReturnStmt)
+				if !ok || len(result.Results) != 1 {
+					t.Fatal("SANDBOX_TEST_REQUALIFY_LEGACY_WRAPPER")
+				}
+				call, ok := result.Results[0].(*ast.CallExpr)
+				if !ok || len(call.Args) != 4 {
+					t.Fatal("SANDBOX_TEST_REQUALIFY_LEGACY_WRAPPER")
+				}
+				helper, ok := call.Fun.(*ast.Ident)
+				if !ok || helper.Name != "newWebsiteHandlerWithPayments" {
+					t.Fatal("SANDBOX_TEST_REQUALIFY_LEGACY_WRAPPER")
+				}
+				for i, expected := range []string{"service", "fallback", "observer", "nil"} {
+					argument, ok := call.Args[i].(*ast.Ident)
+					if !ok || argument.Name != expected {
+						t.Fatal("SANDBOX_TEST_EXISTING_MODE_PAYMENT_CAPABILITY")
+					}
+				}
+			}
+			if wrappers != 1 {
+				t.Fatal("SANDBOX_TEST_REQUALIFY_EXISTING_CONSTRUCTOR")
+			}
+			continue
 		}
 		configs := 0
 		ast.Inspect(file, func(node ast.Node) bool {

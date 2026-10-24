@@ -15,6 +15,8 @@ import (
 	"possums-intake/internal/httpapi"
 	"possums-intake/internal/ledger"
 	"possums-intake/internal/operator"
+	"possums-intake/internal/payments"
+	"possums-intake/internal/stripepay"
 	"possums-intake/internal/telemetry"
 )
 
@@ -34,6 +36,9 @@ func executeObserved(ctx context.Context, args []string, observer failureowner.O
 	}
 	if len(args) > 0 && args[0] == "stripe-sandbox-dev" {
 		return executeStripeSandboxDev(ctx, args[1:], observer)
+	}
+	if len(args) > 0 && args[0] == "live-payments-init" {
+		return executeLivePaymentInitObserved(ctx, args[1:], observer)
 	}
 	if len(args) > 0 && args[0] == "synthetic-payments-init" {
 		return executeSyntheticPaymentInit(ctx, args[1:])
@@ -62,10 +67,15 @@ func executeRecorded(ctx context.Context, args []string, observer failureowner.O
 	return result
 }
 
-func executeStartupObserved(ctx context.Context, args []string, observer failureowner.Observer, startup *startupRecorder) (result error) {
+func executeStartupObserved(ctx context.Context, args []string, observer failureowner.Observer, startup *startupRecorder) error {
+	return executeStartupInputs(ctx, args, observer, startup, os.Getenv)
+}
+
+func executeStartupInputs(ctx context.Context, args []string, observer failureowner.Observer, startup *startupRecorder, input func(string) string) (result error) {
 	owned := false
 	metricsObserver := independentMetricsObserver(observer)
 	synthetic := len(args) > 0 && args[0] == "synthetic-serve"
+	explicitServe := len(args) > 0 && args[0] == "serve"
 	defer func() {
 		if recover() != nil {
 			fault := runtimeFailure(codeRuntime, "startup", "completed_local_lifecycle", "unavailable", "Underlying startup cause unknown. Preserve original or partial state and inspect privately; never reset it.")
@@ -96,6 +106,7 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 	}
 	listen := flags.String("listen", defaultListen, "Numeric listener")
 	operatorMode := flags.Bool("operator", false, "Expose trusted native administration (init/serve only)")
+	stripeLive := flags.Bool("stripe-live", false, "Explicit live Stripe Tax admission (serve with --operator only)")
 	volumeName := flags.String("tinfoil-volume", "", "Opt-in managed-secret volume mount name (init/website-init/serve)")
 	initializeVolume := flags.Bool("initialize-volume", false, "Explicitly initialize a blank Tinfoil disk (init only)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || (!synthetic && !filepath.IsAbs(*dir)) {
@@ -106,6 +117,11 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 			return websiteSetupOptionsFailure()
 		}
 		return ledger.CanonicalFailure(&ledger.Diagnostic{Code: ledger.CodePath}, failuretype.RuntimeSetupUnknown)
+	}
+	stripeLivePresent := false
+	flags.Visit(func(f *flag.Flag) { stripeLivePresent = stripeLivePresent || f.Name == "stripe-live" })
+	if stripeLivePresent && (!explicitServe || !*operatorMode) {
+		return livePaymentOptionsFailure()
 	}
 	if synthetic {
 		invalidOption := false
@@ -193,6 +209,17 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 	if err := validateModeListen(*listen, synthetic || *volumeName != ""); err != nil {
 		return err
 	}
+	var stripeClient *stripepay.Client
+	if *stripeLive {
+		var err error
+		stripeClient, err = stripepay.NewLive(stripepay.LiveConfig{
+			APIKey: input("STRIPE_LIVE_API_KEY"), WebhookSecret: input("STRIPE_LIVE_WEBHOOK_SECRET"),
+			TaxCode: input("STRIPE_LIVE_TAX_CODE"), ReturnOrigin: input("STRIPE_RETURN_ORIGIN"),
+		})
+		if err != nil {
+			return livePaymentDiagnostic(err)
+		}
+	}
 	key := os.Getenv("LEDGER_ADMIN_KEY") // Raw bytes; never normalize or print it.
 	if len(key) < 32 {
 		return runtimeFailure(codeAdminKey, "startup", "runtime_admin_key_at_least_32_bytes", "no_effect", "Inject a high-entropy admin key of at least 32 bytes through LEDGER_ADMIN_KEY. Never put it in command arguments or logs.")
@@ -255,6 +282,15 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 			result, owned = closeErr, true
 		}
 	}()
+	var paymentService *payments.Service
+	if stripeClient != nil {
+		paymentService, err = payments.NewLiveObserved(ctx, service, stripeClient, observer)
+		if err != nil {
+			owned = true // admission owns every primary and secondary failure
+			return livePaymentDiagnostic(err)
+		}
+		// Successful admission owns no later startup failure.
+	}
 	var metrics httpapi.TerminalObserver
 	if !synthetic {
 		runtime := telemetry.New(ctx)
@@ -295,10 +331,11 @@ func executeStartupObserved(ctx context.Context, args []string, observer failure
 			return err
 		}
 	}
-	handler, err = newWebsiteHandler(service, handler, observer)
+	handler, err = newWebsiteHandlerWithPayments(service, handler, observer, paymentService)
 	if err != nil {
 		return err
 	}
+	handler = withLivePaymentWebhook(handler, paymentService)
 	owned = true // serve/maintenance own primary and distinct joined failures
 	startup.checkpoint(phaseBind)
 	return serveStartupObserved(ctx, service, handler, *listen, observer, startup)
