@@ -5,7 +5,7 @@ Not the first/private publisher, deployment, recovery or an immutable-tag protoc
 Complete authenticated version pages and fresh checks establish observed absence,
 not atomic absence: the owner must keep every other registry writer quiet through
 copy/postcheck. A GitHub 404 is inaccessible evidence, never absence/authority.
-The public binary remains reverse-engineerable; the linked source stays private.
+The public binary remains reverse-engineerable; the source stays private.
 Only the existing three public image identities may become a private receipt.
 PRIVACY.md and ../possums/PRIVACY.md apply; native host history is separate.
 """
@@ -33,16 +33,12 @@ r.CODES.update({
         "Owner must confirm this exact source and fixed baseline, and keep every other registry writer stopped until postcheck. Underlying approval-read cause unknown; do not replay publication."),
     "diagnostic_evidence": ("diagnostic_github_evidence", "authenticated_exact_source_run_attempt_and_artifacts",
         "Authenticated source/CI/artifact evidence is unavailable; underlying cause unknown. Inspect privately; do not replay publication."),
-    "diagnostic_package": ("diagnostic_public_package", "fixed_public_package_private_source_link_complete_versions_baseline_and_unused_source_tag",
+    "diagnostic_package": ("diagnostic_public_package", "fixed_public_package_complete_versions_baseline_and_unused_source_tag",
         "Public package identity, complete version evidence or unused source tag is not established; underlying evidence-read cause unknown. Inspect authoritative state privately. A 404 is inaccessible, not absence; stop other writers."),
-    "diagnostic_package_read": ("diagnostic_package_read", "authenticated_package_repository_and_version_page_reads",
-        "Package, authoritative repository or version-page read/decoding is unavailable; underlying cause unknown. Inspect authoritative state privately; a 404 is inaccessible, not absence; do not replay publication."),
+    "diagnostic_package_read": ("diagnostic_package_read", "authenticated_package_and_version_page_reads",
+        "Package or version-page read/decoding is unavailable; underlying cause unknown. Inspect authoritative state privately; a 404 is inaccessible, not absence; do not replay publication."),
     "diagnostic_package_identity": ("diagnostic_package_identity", "fixed_positive_package_id_public_owner_and_container_type",
         "Fixed public package identity or shape is not established; underlying cause unknown. Inspect authoritative package metadata privately; do not change visibility/grants or replay publication."),
-    "diagnostic_repository_identity": ("diagnostic_repository_identity", "fixed_positive_private_source_repository_id_owner_and_main",
-        "Authoritative private source repository identity is not established; underlying cause unknown. Inspect authoritative repository metadata privately; do not change permissions or replay publication."),
-    "diagnostic_package_link": ("diagnostic_package_link", "linked_repository_id_name_and_required_private_projection",
-        "Package source-link identity or required private projection is not established; underlying cause unknown. Inspect authoritative link metadata privately; do not assume a missing projection is private or replay publication."),
     "diagnostic_versions": ("diagnostic_version_inventory", "bounded_well_formed_unique_active_versions_and_tags",
         "Active version inventory is malformed or duplicated; underlying cause unknown. Inspect complete authoritative version evidence privately; keep other writers stopped and do not replay publication."),
     "diagnostic_baseline": ("diagnostic_version_baseline", "fixed_baseline_present_in_complete_active_inventory",
@@ -55,8 +51,8 @@ r.CODES.update({
         "Actual archive startup-diagnostic acceptance is unavailable; underlying cause unknown. Qualify the exact A image; source-only tests are insufficient."),
     "diagnostic_copy": ("diagnostic_registry_copy", "single_preserved_digest_nonreplayed_copy",
         "Copy outcome is unknown; underlying cause unknown. Inspect authoritative registry state privately. Never retry, overwrite, delete, change visibility/grants or roll back."),
-    "diagnostic_public": ("diagnostic_post_publication", "same_public_package_private_source_link_and_exact_raw_registry_digest",
-        "Copy completed, but public package/link/raw digest acceptance is unavailable; underlying cause unknown. Inspect privately before deployment; never replay or modify the package."),
+    "diagnostic_public": ("diagnostic_post_publication", "same_public_package_and_exact_raw_registry_digest",
+        "Copy completed, but public package/raw digest acceptance is unavailable; underlying cause unknown. Inspect privately before deployment; never replay or modify the package."),
     "diagnostic_used": ("diagnostic_publication", "single_attempt_session",
         "This session already attempted its one copy. Inspect authoritative state privately; no retry or rollback."),
     "diagnostic_internal": ("diagnostic_command", "closed_local_command_execution",
@@ -124,23 +120,13 @@ def package_identity(api, code):
             raise r.Stop(read_code, status=status)
         return package
     package = package_read(read_package, read_code)
-    repo = package_read(api.repo, read_code)
     r.require(isinstance(package, dict)
               and type(package.get("id")) is int and package["id"] > 0
               and package.get("name") == p.PACKAGE and package.get("package_type") == "container"
               and isinstance(package.get("owner"), dict) and package["owner"].get("login") == p.OWNER
               and package.get("visibility") == "public",
               "diagnostic_package_identity" if prepublication else code)
-    r.require(isinstance(repo, dict)
-              and type(repo.get("id")) is int and repo["id"] > 0 and repo.get("full_name") == p.REPO
-              and isinstance(repo.get("owner"), dict) and repo["owner"].get("login") == p.OWNER
-              and r.boolean(repo.get("private"), True) and repo.get("default_branch") == "main",
-              "diagnostic_repository_identity" if prepublication else code)
-    link = package.get("repository")
-    r.require(isinstance(link, dict) and type(link.get("id")) is int and link["id"] == repo["id"]
-              and link.get("full_name") == p.REPO and r.boolean(link.get("private"), True),
-              "diagnostic_package_link" if prepublication else code)
-    return {"package": package["id"], "repository": repo["id"]}
+    return {"package": package["id"]}
 
 
 def public_gate(api, ctx):

@@ -357,22 +357,30 @@ class OwnerTests(unittest.TestCase):
     def test_shared_stale_fork_expired_and_runner_guards_refuse_native(self):
         for target, key, value in ((self.f.api.repo_data, "full_name", "fork/repo"),
                                    (self.f.api.repo_data, "private", False),
+                                   (self.f.api.repo_data, "owner", {"login": "other"}),
+                                   (self.f.api.repo_data, "id", 0),
+                                   (self.f.api.repo_data, "id", True),
+                                   (self.f.api.repo_data, "id", 100),
+                                   (self.f.api.repo_data, "default_branch", "other"),
                                    (self.f.api.qualified, "head_repository", {"full_name": "fork/repo"}),
                                    (self.f.api.artifacts[0], "expired", True),
                                    (self.f.api.jobs[2], "runner_id", 2)):
             original = target[key]
             target[key] = value
+            self.f.api.reads.clear()
             self.refused(lambda: n.admit(self.f.api, self.ctx))
+            self.assertNotIn("package", self.f.api.reads)
             target[key] = original
         self.f.api.main = "2" * 40
         self.refused(lambda: n.admit(self.f.api, self.ctx), "stale")
         self.no_copy()
 
-    def test_package_wrong_link_used_tag_and_expected_digest_refuse_before_copy(self):
+    def test_package_wrong_link_permitted_but_used_tag_and_expected_digest_refuse_before_copy(self):
         instance = self.instance()
         self.f.api.before[1]["repository"]["id"] = 100
-        self.refused(instance.execute, "diagnostic_package_link")
-        self.f.api.before[1]["repository"]["id"] = 99
+        with patch.object(self.f.api, "repo", side_effect=AssertionError("duplicate repo read")) as repo:
+            self.assertEqual(d.public_gate(self.f.api, self.f.api.ctx), {"package": 200})
+            repo.assert_not_called()
         self.f.api.version_pages[0][0]["metadata"]["container"]["tags"] = [self.ctx["source"]]
         self.refused(instance.execute, "diagnostic_tag")
         self.f.api.version_pages[0][0]["metadata"]["container"]["tags"] = []
@@ -383,7 +391,9 @@ class OwnerTests(unittest.TestCase):
             instance.ctx[key] = original
         self.no_copy()
 
-    def test_one_copy_exact_receipt_and_reuse_refusal(self):
+    def test_one_copy_exact_receipt_and_reuse_refusal_with_repository_projection_changes(self):
+        self.f.api.before[1]["repository"] = {"id": 100, "private": False}
+        del self.f.api.after[1]["repository"]
         instance = self.instance()
         receipt = instance.execute()
         self.assertEqual(receipt, {"publicSourceSHA": self.ctx["source"], "imageDigest": self.f.digest,
