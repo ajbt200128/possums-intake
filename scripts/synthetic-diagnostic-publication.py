@@ -35,6 +35,22 @@ r.CODES.update({
         "Authenticated source/CI/artifact evidence is unavailable; underlying cause unknown. Inspect privately; do not replay publication."),
     "diagnostic_package": ("diagnostic_public_package", "fixed_public_package_private_source_link_complete_versions_baseline_and_unused_source_tag",
         "Public package identity, complete version evidence or unused source tag is not established; underlying evidence-read cause unknown. Inspect authoritative state privately. A 404 is inaccessible, not absence; stop other writers."),
+    "diagnostic_package_read": ("diagnostic_package_read", "authenticated_package_repository_and_version_page_reads",
+        "Package, authoritative repository or version-page read/decoding is unavailable; underlying cause unknown. Inspect authoritative state privately; a 404 is inaccessible, not absence; do not replay publication."),
+    "diagnostic_package_identity": ("diagnostic_package_identity", "fixed_positive_package_id_public_owner_and_container_type",
+        "Fixed public package identity or shape is not established; underlying cause unknown. Inspect authoritative package metadata privately; do not change visibility/grants or replay publication."),
+    "diagnostic_repository_identity": ("diagnostic_repository_identity", "fixed_positive_private_source_repository_id_owner_and_main",
+        "Authoritative private source repository identity is not established; underlying cause unknown. Inspect authoritative repository metadata privately; do not change permissions or replay publication."),
+    "diagnostic_package_link": ("diagnostic_package_link", "linked_repository_id_name_and_required_private_projection",
+        "Package source-link identity or required private projection is not established; underlying cause unknown. Inspect authoritative link metadata privately; do not assume a missing projection is private or replay publication."),
+    "diagnostic_versions": ("diagnostic_version_inventory", "bounded_well_formed_unique_active_versions_and_tags",
+        "Active version inventory is malformed or duplicated; underlying cause unknown. Inspect complete authoritative version evidence privately; keep other writers stopped and do not replay publication."),
+    "diagnostic_baseline": ("diagnostic_version_baseline", "fixed_baseline_present_in_complete_active_inventory",
+        "Complete active inventory does not establish the fixed baseline; underlying cause unknown. Inspect authoritative registry state privately; do not substitute a baseline or replay publication."),
+    "diagnostic_tag": ("diagnostic_source_tag", "exact_source_tag_absent_from_all_active_versions",
+        "The exact source tag is already present in active version evidence; underlying cause unknown. Inspect authoritative registry state privately; never overwrite, delete or replay publication."),
+    "diagnostic_pagination": ("diagnostic_version_pagination", "complete_inventory_within_fixed_page_cap",
+        "The fixed version-page cap was reached without complete inventory evidence; underlying cause unknown. Inspect authoritative state privately; do not waive the cap or replay publication."),
     "diagnostic_startup": ("diagnostic_archive", "exact_actual_image_startup_diagnostics_all_true",
         "Actual archive startup-diagnostic acceptance is unavailable; underlying cause unknown. Qualify the exact A image; source-only tests are insufficient."),
     "diagnostic_copy": ("diagnostic_registry_copy", "single_preserved_digest_nonreplayed_copy",
@@ -48,7 +64,7 @@ r.CODES.update({
 })
 
 
-def context(env=None):
+def context(env=None, *, publication_required=True):
     env = os.environ if env is None else env
     def read():
         try:
@@ -65,7 +81,8 @@ def context(env=None):
                   and r.boolean(event.get("repository", {}).get("private"), True), "diagnostic_approval")
         r.require(type(inputs) is dict and set(inputs) == {"publish", "qualification_run", "qualification_attempt",
                   "expected_source", "known_baseline", "writers_quiet_confirmed", "quiet_confirmation_source"}, "diagnostic_approval")
-        r.require(inputs["publish"] == "true", "disabled")
+        r.require(type(inputs["publish"]) is str
+                  and inputs["publish"] in (("true",) if publication_required else ("true", "false")), "disabled")
         r.require(inputs["expected_source"] == source and inputs["known_baseline"] == BASELINE
                   and inputs["writers_quiet_confirmed"] == "true"
                   and inputs["quiet_confirmation_source"] == source, "diagnostic_approval")
@@ -99,21 +116,30 @@ def package_read(operation, code):
 
 
 def package_identity(api, code):
-    status, package = package_read(api.package, code)
-    if status != 200:
-        raise r.Stop(code, status=status)
-    repo = package_read(api.repo, code)
+    prepublication = code == "diagnostic_package"
+    read_code = "diagnostic_package_read" if prepublication else code
+    def read_package():
+        status, package = api.package()
+        if status != 200:
+            raise r.Stop(read_code, status=status)
+        return package
+    package = package_read(read_package, read_code)
+    repo = package_read(api.repo, read_code)
     r.require(isinstance(package, dict)
               and type(package.get("id")) is int and package["id"] > 0
               and package.get("name") == p.PACKAGE and package.get("package_type") == "container"
-              and package.get("owner", {}).get("login") == p.OWNER and package.get("visibility") == "public"
+              and isinstance(package.get("owner"), dict) and package["owner"].get("login") == p.OWNER
+              and package.get("visibility") == "public",
+              "diagnostic_package_identity" if prepublication else code)
+    r.require(isinstance(repo, dict)
               and type(repo.get("id")) is int and repo["id"] > 0 and repo.get("full_name") == p.REPO
-              and repo.get("owner", {}).get("login") == p.OWNER and r.boolean(repo.get("private"), True)
-              and repo.get("default_branch") == "main"
-              and type(package.get("repository", {}).get("id")) is int
-              and package["repository"]["id"] == repo["id"]
-              and package["repository"].get("full_name") == p.REPO
-              and r.boolean(package["repository"].get("private"), True), code)
+              and isinstance(repo.get("owner"), dict) and repo["owner"].get("login") == p.OWNER
+              and r.boolean(repo.get("private"), True) and repo.get("default_branch") == "main",
+              "diagnostic_repository_identity" if prepublication else code)
+    link = package.get("repository")
+    r.require(isinstance(link, dict) and type(link.get("id")) is int and link["id"] == repo["id"]
+              and link.get("full_name") == p.REPO and r.boolean(link.get("private"), True),
+              "diagnostic_package_link" if prepublication else code)
     return {"package": package["id"], "repository": repo["id"]}
 
 
@@ -124,24 +150,31 @@ def public_gate(api, ctx):
     identity = package_identity(api, code)
     seen, baseline = set(), False
     for page in range(1, 101):
-        status, batch = package_read(lambda page=page: api.version_page(page), code)
-        if status != 200:
-            raise r.Stop(code, status=status)
-        r.require(type(batch) is list and len(batch) <= 100, code)
+        def read_page():
+            status, batch = api.version_page(page)
+            if status != 200:
+                raise r.Stop("diagnostic_package_read", status=status)
+            return batch
+        batch = package_read(read_page, "diagnostic_package_read")
+        r.require(type(batch) is list and len(batch) <= 100, "diagnostic_versions")
         for version in batch:
             if not isinstance(version, dict):
-                raise r.Stop(code)
+                raise r.Stop("diagnostic_versions")
             r.require(type(version.get("id")) is int and version["id"] > 0
-                      and version["id"] not in seen and r.pin(version.get("name"), r.DIGEST), code)
+                      and version["id"] not in seen and r.pin(version.get("name"), r.DIGEST), "diagnostic_versions")
             seen.add(version["id"])
-            tags = version.get("metadata", {}).get("container", {}).get("tags")
+            metadata = version.get("metadata")
+            if not isinstance(metadata, dict) or not isinstance(metadata.get("container"), dict):
+                raise r.Stop("diagnostic_versions")
+            tags = metadata["container"].get("tags")
             r.require(type(tags) is list and all(type(tag) is str and 1 <= len(tag) <= 128 for tag in tags)
-                      and len(tags) == len(set(tags)) and ctx["source"] not in tags, code)
+                      and len(tags) == len(set(tags)), "diagnostic_versions")
+            r.require(ctx["source"] not in tags, "diagnostic_tag")
             baseline = baseline or version["name"] == BASELINE
         if len(batch) < 100:
-            r.require(baseline, code)
+            r.require(baseline, "diagnostic_baseline")
             return identity
-    raise r.Stop(code)  # Cap reached: incomplete evidence, not a truncated success.
+    raise r.Stop("diagnostic_pagination")  # Cap reached: incomplete evidence, not a truncated success.
 
 
 def archive_gate(root, admitted, tool=p.command):
@@ -221,7 +254,7 @@ def main(args=None):
     if args in (["status"], ["report"]):
         print(json.dumps({"stage": "source_only", "publication": "not_observed", "runtime_verified": False}))
     elif args == ["admit"]:
-        ctx = context()
+        ctx = context(publication_required=False)
         admitted = admit(GitHub(), ctx)
         p.boundary("diagnostic_package", lambda: public_gate(GitHub(), ctx))
         p.outputs(admitted)  # Only admitted artifact IDs; never dispatch-supplied IDs.

@@ -24,6 +24,17 @@ SOURCE = old.SOURCE
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/publish-synthetic-diagnostic-image.yml"
 
 
+def dispatch(root, publish: Any = "true"):
+    event = {"repository": {"full_name": p.REPO, "private": True}, "sender": {"login": p.OWNER},
+             "inputs": {"publish": publish, "qualification_run": "20", "qualification_attempt": "1",
+                        "expected_source": SOURCE, "known_baseline": d.BASELINE,
+                        "writers_quiet_confirmed": "true", "quiet_confirmation_source": SOURCE}}
+    env = {"GITHUB_REPOSITORY": p.REPO, "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": SOURCE,
+           "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_ACTOR": p.OWNER,
+           "GITHUB_RUN_ATTEMPT": "1", "GITHUB_RUN_ID": "30", "GITHUB_EVENT_PATH": str(root / "event.json")}
+    return event, env
+
+
 def version(number, digest=d.BASELINE, tags=None):
     return {"id": number, "name": digest, "metadata": {"container": {"tags": [] if tags is None else tags}}}
 
@@ -113,6 +124,19 @@ class DiagnosticTests(unittest.TestCase):
         self.refused(instance.execute, "diagnostic_used", "completed")
         self.assertEqual(len([args for args in self.f.calls if args[1] == "copy"]), 1)
 
+    def test_real_default_true_context_keeps_single_copy_and_cleanup(self):
+        event, env = dispatch(self.f.root)
+        env["GITHUB_TOKEN"] = "SYNTHETIC_SECRET_SENTINEL"  # noqa: S105 - isolated offline credential fixture
+        (self.f.root / "event.json").write_text(json.dumps(event))
+        instance = d.Publication(self.f.api, self.f.api.ctx, self.f.root,
+                                 {"a": 100, "b": 101, "archive": 102}, self.f.tool)
+        self.assertIs(instance.context_reader, d.context)
+        with patch.object(d.os, "environ", env):
+            self.assertEqual(instance.execute()["publicSourceSHA"], SOURCE)
+        self.assertEqual(sum(args[1] == "copy" for args in self.f.calls), 1)
+        self.assertFalse(self.f.authpath.parent.exists())
+        self.refused(instance.execute, "diagnostic_used", "completed")
+
     def test_existing_first_publisher_and_default_admission_unchanged(self):
         self.refused(lambda: p.namespace_gate(self.f.api), "synthetic_namespace")
         self.refused(lambda: p.admit(self.f.api, self.f.api.ctx), "synthetic_approval")
@@ -138,19 +162,22 @@ class DiagnosticTests(unittest.TestCase):
             with self.subTest(key=key, value=value):
                 original = target[key]
                 target[key] = value
-                self.refused(self.gate, "diagnostic_package")
+                code = ("diagnostic_repository_identity" if target is self.f.api.repo_data else
+                        "diagnostic_package_link" if target is package["repository"] or key == "repository" else
+                        "diagnostic_package_identity")
+                self.refused(self.gate, code)
                 target[key] = original
         self.assert_no_copy()
 
     def test_404_unavailable_not_absence_or_authority(self):
         for status in (404, 401, 403, 429, 500):
             self.f.api.before = (status, None)
-            error = self.refused(self.gate, "diagnostic_package")
+            error = self.refused(self.gate, "diagnostic_package_read")
             self.assertEqual(error.status, status)
         self.f.api.before = copy.deepcopy(self.f.api.after)
         for status in (404, 401, 403, 429, 500):
             self.f.api.version_pages = [(status, None)]
-            error = self.refused(self.gate, "diagnostic_package")
+            error = self.refused(self.gate, "diagnostic_package_read")
             self.assertEqual(error.status, status)
         self.assert_no_copy()
 
@@ -158,9 +185,9 @@ class DiagnosticTests(unittest.TestCase):
         for failure in (r.Stop("synthetic_evidence", status=403),
                         RuntimeError("hostile SYNTHETIC_SECRET_SENTINEL 403"), KeyboardInterrupt()):
             with patch.object(self.f.api, "repo", side_effect=failure):
-                error = self.refused(self.gate, "diagnostic_package")
+                error = self.refused(self.gate, "diagnostic_package_read")
             self.assertEqual(error.status, 403 if isinstance(failure, r.Stop) else None)
-            self.assertEqual(p.diagnostic(error)["stage"], "diagnostic_public_package")
+            self.assertEqual(p.diagnostic(error)["stage"], "diagnostic_package_read")
         self.assert_no_copy()
 
     def test_postcopy_repository_failure_preserves_completed_outcome_without_replay(self):
@@ -191,26 +218,26 @@ class DiagnosticTests(unittest.TestCase):
         # Even a first-page baseline MUST NOT short circuit later tag evidence.
         first[0]["name"] = d.BASELINE
         self.f.api.version_pages[1][0]["metadata"]["container"]["tags"] = [SOURCE]
-        self.refused(self.gate, "diagnostic_package")
+        self.refused(self.gate, "diagnostic_tag")
         self.f.api.version_pages = [[version(1, tags=[SOURCE])]]
-        self.refused(self.gate, "diagnostic_package")
+        self.refused(self.gate, "diagnostic_tag")
         self.f.api.version_pages = [[version(1, "sha256:" + "2" * 64)]]
-        self.refused(self.gate, "diagnostic_package")
+        self.refused(self.gate, "diagnostic_baseline")
         self.f.api.version_pages = [[]]
-        self.refused(self.gate, "diagnostic_package")
+        self.refused(self.gate, "diagnostic_baseline")
 
     def test_partial_pagination_malformed_duplicates_fail_closed(self):
         first = [version(number) for number in range(1, 101)]
         for second in (r.Stop("synthetic_namespace", status=403), RuntimeError("hostile SYNTHETIC_SECRET_SENTINEL"),
                        None, {"unexpected": "hostile"}, [version(1)]):
             self.f.api.version_pages = [first, second]
-            self.refused(self.gate, "diagnostic_package")
+            self.refused(self.gate, "diagnostic_package_read" if isinstance(second, BaseException) else "diagnostic_versions")
         self.f.api.version_pages = [[version(page * 100 + number) for number in range(100)] for page in range(100)]
         # Number zero is invalid; use all-valid IDs for the actual cap refusal.
         for page, batch in enumerate(self.f.api.version_pages):
             for number, item in enumerate(batch):
                 item["id"] = page * 100 + number + 1
-        self.refused(self.gate, "diagnostic_package")
+        self.refused(self.gate, "diagnostic_pagination")
         self.assertIn("versions:100", self.f.api.reads)
         self.assertNotIn("versions:101", self.f.api.reads)
         for field, value in (("id", True), ("id", 0), ("name", "hostile SYNTHETIC_SECRET_SENTINEL"),
@@ -221,8 +248,82 @@ class DiagnosticTests(unittest.TestCase):
             item = version(1)
             item[field] = value
             self.f.api.version_pages = [[item]]
-            self.refused(self.gate, "diagnostic_package")
+            self.refused(self.gate, "diagnostic_versions")
         self.assert_no_copy()
+
+    def test_closed_read_boundaries_status_and_hostile_exceptions(self):
+        for method in ("package", "repo", "version_page"):
+            for failure in (r.Stop("synthetic_namespace", status=401), r.Stop("synthetic_evidence", status=403),
+                            r.Stop("synthetic_evidence", status=429), r.Stop("synthetic_evidence", status=500),
+                            r.Stop("synthetic_evidence", status="hostile SYNTHETIC_SECRET_SENTINEL"),
+                            RuntimeError("hostile SYNTHETIC_SECRET_SENTINEL 403"), KeyboardInterrupt()):
+                with patch.object(self.f.api, method, side_effect=failure):
+                    error = self.refused(self.gate, "diagnostic_package_read")
+                self.assertEqual(error.status, failure.status if isinstance(failure, r.Stop) else None)
+                projection = p.diagnostic(error)
+                self.assertEqual(projection["stage"], "diagnostic_package_read")
+                self.assertIn("cause unknown", projection["next_step"])
+                self.assertIn("do not replay", projection["next_step"])
+        for method in ("package", "version_page"):
+            for value in (None, {}, [], (200,), (200, {}, "hostile")):
+                with patch.object(self.f.api, method, return_value=value):
+                    self.refused(self.gate, "diagnostic_package_read")
+        for status in ("hostile SYNTHETIC_SECRET_SENTINEL", True, 0, None):
+            with patch.object(self.f.api, "before", (status, None)):
+                self.assertIsNone(self.refused(self.gate, "diagnostic_package_read").status)
+        self.assert_no_copy()
+
+    def test_closed_identity_inventory_shapes_and_required_private_projection(self):
+        original = copy.deepcopy(self.f.api.before)
+        for package in (None, [], True, "hostile SYNTHETIC_SECRET_SENTINEL",
+                        {**original[1], "owner": None}, {**original[1], "owner": []}):
+            self.f.api.before = (200, package)
+            self.refused(self.gate, "diagnostic_package_identity")
+        self.f.api.before = copy.deepcopy(original)
+        for repo in (None, [], True, {**self.f.api.repo_data, "owner": None},
+                     {**self.f.api.repo_data, "default_branch": "other"}):
+            with patch.object(self.f.api, "repo", return_value=repo):
+                self.refused(self.gate, "diagnostic_repository_identity")
+        for link in (None, [], True, {}, {"id": 99, "full_name": p.REPO}):
+            self.f.api.before[1]["repository"] = link
+            self.refused(self.gate, "diagnostic_package_link")
+        self.f.api.before = copy.deepcopy(original)
+        for batch in ([None], [True], ["hostile SYNTHETIC_SECRET_SENTINEL"],
+                      [version(1)] * 101, [version(1, tags=["x" * 129])],
+                      [version(1, tags=[""])], [version(1, tags=[[]])],
+                      [{**version(1), "metadata": {"container": None}}]):
+            self.f.api.version_pages = [batch]
+            self.refused(self.gate, "diagnostic_versions")
+        self.assert_no_copy()
+
+    def test_postcopy_closed_read_failures_keep_completed_cleanup_and_once_only(self):
+        for index, failure in enumerate((r.Stop("synthetic_namespace", status=401),
+                                         r.Stop("synthetic_namespace", status=429),
+                                         r.Stop("synthetic_namespace", status=500),
+                                         r.Stop("synthetic_namespace", status="hostile"),
+                                         RuntimeError("hostile SYNTHETIC_SECRET_SENTINEL"), KeyboardInterrupt())):
+            root = self.f.root / ("postcopy-read-" + str(index))
+            root.mkdir()
+            fixture = Fixture(root)
+            original = fixture.api.package
+            def package(fixture=fixture, original=original, failure=failure):
+                if fixture.api.copied:
+                    raise failure
+                return original()
+            class BadCleanup(p.Authfile):
+                def cleanup(self):
+                    super().cleanup()
+                    raise RuntimeError("hostile SYNTHETIC_SECRET_SENTINEL")
+            instance = fixture.publication(auth=BadCleanup())
+            with patch.object(fixture.api, "package", side_effect=package):
+                error = self.refused(instance.execute, "diagnostic_public", "completed")
+            self.assertEqual(error.status, failure.status if isinstance(failure, r.Stop) else None)
+            projection = p.diagnostic(error)
+            self.assertEqual(projection["stage"], "diagnostic_post_publication")
+            self.assertEqual(projection["secondary"], [r.diagnostic(r.Stop("synthetic_cleanup", outcome="completed"))])
+            self.refused(instance.execute, "diagnostic_used", "completed")
+            self.assertEqual(sum(args[1] == "copy" for args in fixture.calls), 1)
+            self.assertFalse(fixture.authpath.parent.exists())
 
     def test_startup_dict_exact_boolean_true_no_source_only_substitute(self):
         admitted = d.admit(self.f.api, self.f.api.ctx)
@@ -424,46 +525,61 @@ class ControlTests(unittest.TestCase):
     def test_context_fixed_authority_source_baseline_booleans_closed_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            event = {"repository": {"full_name": p.REPO, "private": True}, "sender": {"login": p.OWNER},
-                     "inputs": {"publish": "true", "qualification_run": "20", "qualification_attempt": "1",
-                                "expected_source": SOURCE, "known_baseline": d.BASELINE,
-                                "writers_quiet_confirmed": "true", "quiet_confirmation_source": SOURCE}}
-            env = {"GITHUB_REPOSITORY": p.REPO, "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": SOURCE,
-                   "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_ACTOR": p.OWNER,
-                   "GITHUB_RUN_ATTEMPT": "1", "GITHUB_RUN_ID": "30", "GITHUB_EVENT_PATH": str(root / "event.json")}
+            event, env = dispatch(root)
+            def refuse_both():
+                for publication_required in (True, False):
+                    with self.assertRaises(r.Stop):
+                        d.context(env, publication_required=publication_required)
+                observed = json.loads((root / "event.json").read_text())
+                if observed["inputs"].get("publish") == "true":
+                    observed["inputs"]["publish"] = "false"
+                    (root / "event.json").write_text(json.dumps(observed))
+                    with self.assertRaises(r.Stop):
+                        d.context(env, publication_required=False)
             vectors = [(env, "GITHUB_ACTOR", "other"), (env, "GITHUB_REPOSITORY", "other/repo"),
                        (env, "GITHUB_RUN_ATTEMPT", "2"), (env, "GITHUB_EVENT_NAME", "push"),
                        (env, "GITHUB_REF", "refs/tags/v1.0.0"), (event["sender"], "login", "other"),
                        (event["repository"], "full_name", "other/repo"), (event["repository"], "private", False),
-                       (event["repository"], "private", 1), (event["inputs"], "publish", "false"),
+                       (event["repository"], "private", 1), (env, "GITHUB_SHA", "hostile"),
+                       (env, "GITHUB_RUN_ID", "0"), (env, "GITHUB_RUN_ID", "01"),
                        (event["inputs"], "publish", True), (event["inputs"], "writers_quiet_confirmed", True),
                        (event["inputs"], "writers_quiet_confirmed", "false"),
                        (event["inputs"], "quiet_confirmation_source", "2" * 40),
                        (event["inputs"], "expected_source", "2" * 40),
                        (event["inputs"], "known_baseline", "sha256:" + "2" * 64),
                        (event["inputs"], "qualification_run", "20;hostile"),
-                       (event["inputs"], "qualification_attempt", "01")]
+                       (event["inputs"], "qualification_attempt", "01"),
+                       (event["inputs"], "qualification_run", 20), (event["inputs"], "qualification_attempt", "0")]
+            for value in (False, 0, 1, None, "", "TRUE", "False", " true", [], {}):
+                vectors.append((event["inputs"], "publish", value))
             for target, key, value in vectors:
                 original = target[key]
                 target[key] = value
                 (root / "event.json").write_text(json.dumps(event))
-                with self.assertRaises(r.Stop):
-                    d.context(env)
+                refuse_both()
                 target[key] = original
             for key in event["inputs"]:
                 bad = copy.deepcopy(event)
                 del bad["inputs"][key]
                 (root / "event.json").write_text(json.dumps(bad))
-                with self.assertRaises(r.Stop):
-                    d.context(env)
+                refuse_both()
             event["inputs"]["unknown"] = "hostile"
             (root / "event.json").write_text(json.dumps(event))
-            with self.assertRaises(r.Stop):
-                d.context(env)
+            refuse_both()
             del event["inputs"]["unknown"]
             (root / "event.json").write_text(json.dumps(event))
-            self.assertEqual(d.context(env), {"source": SOURCE, "run": 30, "qualification_run": 20,
-                                              "qualification_attempt": 1, "baseline": d.BASELINE})
+            expected = {"source": SOURCE, "run": 30, "qualification_run": 20,
+                        "qualification_attempt": 1, "baseline": d.BASELINE}
+            self.assertEqual(d.context(env), expected)
+            self.assertEqual(d.context(env, publication_required=False), expected)
+            event["inputs"]["publish"] = "false"
+            (root / "event.json").write_text(json.dumps(event))
+            self.assertEqual(d.context(env, publication_required=False), expected)
+            with self.assertRaises(r.Stop) as caught:
+                d.context(env)
+            self.assertEqual(caught.exception.code, "disabled")
+            with self.assertRaises(TypeError):
+                d.context(env, False)  # The override is keyword-only.
 
     def test_fixed_paginated_gets_status_and_hostile_errors_no_real_transport(self):
         api = d.GitHub()
@@ -483,22 +599,85 @@ class ControlTests(unittest.TestCase):
         raise failure
 
     def test_admit_reads_fixed_package_and_outputs_only_selected_ids(self):
-        api = FakeAPI()
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "outputs"
-            with patch.object(d, "context", return_value=api.ctx), patch.object(d, "GitHub", return_value=api), \
-                    patch.object(d, "Publication", side_effect=AssertionError("copy")) as publication, \
-                    patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
-                d.main(["admit"])
-                self.assertEqual(output.read_text(), "source=" + SOURCE + "\nqualification_run=20\na=100\nb=101\narchive=102\n")
-                self.assertIn("package", api.reads)
-                self.assertIn("versions:1", api.reads)
-                publication.assert_not_called()
-                output.unlink()
-                api.before = (404, None)
-                with self.assertRaises(r.Stop):
+            root = Path(directory)
+            output = root / "outputs"
+            for publish in ("false", "true"):
+                event, env = dispatch(root, publish)
+                env["GITHUB_OUTPUT"] = str(output)
+                (root / "event.json").write_text(json.dumps(event))
+                api = FakeAPI()
+                with patch.object(d.os, "environ", env), patch.object(d, "GitHub", return_value=api), \
+                        patch.object(d, "Publication", side_effect=AssertionError("copy")) as publication, \
+                        patch.object(p.Authfile, "prepare", side_effect=AssertionError("auth")) as auth, \
+                        patch.object(p, "command", side_effect=AssertionError("tool")) as tool:
                     d.main(["admit"])
-                self.assertFalse(output.exists())
+                    self.assertEqual(output.read_text(), "source=" + SOURCE + "\nqualification_run=20\na=100\nb=101\narchive=102\n")
+                    self.assertIn("package", api.reads)
+                    self.assertIn("versions:1", api.reads)
+                    self.assertIn("/actions/runs/30", api.reads)
+                    self.assertIn("/actions/runs/20/attempts/1/jobs", api.reads)
+                    output.unlink()
+                    api.before = (404, None)
+                    with self.assertRaises(r.Stop) as caught:
+                        d.main(["admit"])
+                    self.assertEqual(caught.exception.code, "diagnostic_package_read")
+                    self.assertFalse(output.exists())
+                    api.before = copy.deepcopy(api.after)
+                    api.reads.clear()
+                    with patch.dict(api.current, {"run_attempt": 2}), self.assertRaises(r.Stop) as caught:
+                        d.main(["admit"])
+                    self.assertEqual(caught.exception.code, "synthetic_approval")
+                    self.assertNotIn("package", api.reads)
+                    self.assertFalse(output.exists())
+                    publication.assert_not_called()
+                    auth.assert_not_called()
+                    tool.assert_not_called()
+
+    def test_real_context_disabled_publish_and_malformed_admit_before_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for command, values in (("publish", ("false", True, 0, None)),
+                                    ("admit", (True, False, 0, 1, None, "FALSE", "true ", [], {}))):
+                for value in values:
+                    event, env = dispatch(root, value)
+                    output = root / "outputs"
+                    env["GITHUB_OUTPUT"] = str(output)
+                    (root / "event.json").write_text(json.dumps(event))
+                    with patch.object(d.os, "environ", env), \
+                            patch.object(d, "GitHub", side_effect=AssertionError("api")) as api, \
+                            patch.object(d, "Publication", side_effect=AssertionError("copy")) as publication, \
+                            patch.object(p.Authfile, "prepare", side_effect=AssertionError("auth")) as auth, \
+                            patch.object(p, "command", side_effect=AssertionError("tool")) as tool:
+                        with self.assertRaises(r.Stop) as caught:
+                            d.main([command])
+                        self.assertEqual(caught.exception.code, "disabled")
+                        self.assertFalse(output.exists())
+                        api.assert_not_called()
+                        publication.assert_not_called()
+                        auth.assert_not_called()
+                        tool.assert_not_called()
+
+    def test_real_default_publication_context_refuses_false_without_job_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event, env = dispatch(root, "false")
+            (root / "event.json").write_text(json.dumps(event))
+            api, auth = FakeAPI(), p.Authfile()
+            with patch.object(d.os, "environ", env), \
+                    patch.object(auth, "prepare", side_effect=AssertionError("auth")) as prepare, \
+                    patch.object(p, "command", side_effect=AssertionError("tool")) as tool:
+                instance = d.Publication(api, api.ctx, root, {"a": 100, "b": 101, "archive": 102}, auth=auth)
+                self.assertIs(instance.context_reader, d.context)
+                with self.assertRaises(r.Stop) as caught:
+                    instance.execute()
+                self.assertEqual(caught.exception.code, "disabled")
+                self.assertEqual(caught.exception.outcome, "no_effect")
+                self.assertFalse(instance.used)
+                self.assertEqual(api.reads, [])
+                self.assertIsNone(auth.directory)
+                prepare.assert_not_called()
+                tool.assert_not_called()
 
     def test_passive_status_report_and_disabled_no_work(self):
         with patch.object(d.GitHub, "get", side_effect=AssertionError("network")) as api, \
@@ -556,6 +735,7 @@ class ControlTests(unittest.TestCase):
         self.assertIn("retention-days: 1", source)
         self.assertIn("scripts/synthetic-diagnostic-publication.py admit", validation)
         self.assertIn("scripts/synthetic-diagnostic-publication.py publish", source)
+        self.assertIn("if: ${{ inputs.publish == true &&", source.split("\n  publish:")[1])
         self.assertEqual(set(re.findall(r"uses: (\S+)", source)), set(re.findall(r"uses: (\S+)", original)))
         for forbidden in ("workflow_run:", "pull_request:", "push:", "contents: write", "actions: write", "id-token: write",
                           "attestations: write", "continue-on-error", "always()", "container create", "release create", "environment:"):
