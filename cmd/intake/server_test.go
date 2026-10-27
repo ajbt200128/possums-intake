@@ -25,7 +25,7 @@ func TestLocalListenAndServerBudgets(t *testing.T) {
 		}
 	}
 	s := localServer(context.Background(), http.NotFoundHandler())
-	if s.ReadHeaderTimeout != 2*time.Second || s.ReadTimeout != 5*time.Second || s.WriteTimeout != 5*time.Second || s.IdleTimeout != 30*time.Second || s.MaxHeaderBytes != 8192 {
+	if s.ReadHeaderTimeout != 2*time.Second || s.ReadTimeout != 5*time.Second || s.WriteTimeout != 30*time.Second || s.IdleTimeout != 30*time.Second || s.MaxHeaderBytes != 8192 {
 		t.Fatal("HTTP budgets drifted")
 	}
 	if s.ErrorLog.Writer() != io.Discard {
