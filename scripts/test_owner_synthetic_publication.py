@@ -371,10 +371,10 @@ class OwnerTests(unittest.TestCase):
     def test_package_wrong_link_used_tag_and_expected_digest_refuse_before_copy(self):
         instance = self.instance()
         self.f.api.before[1]["repository"]["id"] = 100
-        self.refused(instance.execute, "diagnostic_package")
+        self.refused(instance.execute, "diagnostic_package_link")
         self.f.api.before[1]["repository"]["id"] = 99
         self.f.api.version_pages[0][0]["metadata"]["container"]["tags"] = [self.ctx["source"]]
-        self.refused(instance.execute, "diagnostic_package")
+        self.refused(instance.execute, "diagnostic_tag")
         self.f.api.version_pages[0][0]["metadata"]["container"]["tags"] = []
         for key, bad in (("expected_image", "sha256:" + "2" * 64), ("expected_archive", "2" * 64)):
             original = instance.ctx[key]
