@@ -39,6 +39,30 @@ def version(number, digest=d.BASELINE, tags=None):
     return {"id": number, "name": digest, "metadata": {"container": {"tags": [] if tags is None else tags}}}
 
 
+def repository_projections():
+    return [{}, *({"repository": value} for value in (
+        None, [], True, "ignored", {},
+        {"id": 100, "full_name": p.REPO, "private": True},
+        {"id": True, "full_name": p.REPO, "private": True},
+        {"id": 99, "full_name": "other/repo", "private": True},
+        {"id": 99, "full_name": p.REPO, "private": False},
+        {"id": 99, "full_name": p.REPO, "private": 1},
+        {"id": 99, "full_name": p.REPO},
+    ))]
+
+
+class PackageWithoutRepositoryAccess(dict):
+    def get(self, key, *args):
+        if key == "repository":
+            raise AssertionError("optional repository must not be inspected")
+        return super().get(key, *args)
+
+    def __getitem__(self, key):
+        if key == "repository":
+            raise AssertionError("optional repository must not be inspected")
+        return super().__getitem__(key)
+
+
 class FakeAPI(old.FakeAPI):
     def __init__(self):
         super().__init__()
@@ -146,28 +170,34 @@ class DiagnosticTests(unittest.TestCase):
         self.refused(lambda: d.admit(self.f.api, self.f.api.ctx), "synthetic_approval")
         self.assert_no_copy()
 
-    def test_fixed_owner_repo_link_visibility_and_ids(self):
+    def test_fixed_package_owner_visibility_type_and_positive_id(self):
         package = self.f.api.before[1]
-        vectors = [(package, "name", "other"), (package, "package_type", "npm"),
-                   (package, "owner", {"login": "other"}), (package, "visibility", "private"),
-                   (package, "visibility", "internal"), (package, "id", True), (package, "id", 0),
-                   (package, "repository", None), (package, "repository", {}),
-                   (package["repository"], "id", 100), (package["repository"], "id", True),
-                   (package["repository"], "full_name", "other/repo"),
-                   (package["repository"], "private", False), (package["repository"], "private", 1),
-                   (self.f.api.repo_data, "full_name", "other/repo"),
-                   (self.f.api.repo_data, "owner", {"login": "other"}),
-                   (self.f.api.repo_data, "private", False), (self.f.api.repo_data, "id", True)]
-        for target, key, value in vectors:
+        for key, value in (("name", "other"), ("package_type", "npm"),
+                           ("owner", {"login": "other"}), ("visibility", "private"),
+                           ("visibility", "internal"), ("id", True), ("id", 0)):
             with self.subTest(key=key, value=value):
-                original = target[key]
-                target[key] = value
-                code = ("diagnostic_repository_identity" if target is self.f.api.repo_data else
-                        "diagnostic_package_link" if target is package["repository"] or key == "repository" else
-                        "diagnostic_package_identity")
-                self.refused(self.gate, code)
-                target[key] = original
+                original = package[key]
+                package[key] = value
+                self.refused(self.gate, "diagnostic_package_identity")
+                package[key] = original
         self.assert_no_copy()
+
+    def test_package_repository_projection_ignored_and_identity_only_package_id(self):
+        package = dict(self.f.api.before[1])
+        del package["repository"]
+        for fields in repository_projections():
+            with self.subTest(fields=fields), patch.object(self.f.api, "repo", side_effect=AssertionError("duplicate repo read")) as repo:
+                self.f.api.before = (200, {**package, **fields})
+                self.assertEqual(d.package_identity(self.f.api, "diagnostic_package"), {"package": 200})
+                self.assertEqual(self.gate(), {"package": 200})
+                repo.assert_not_called()
+        self.f.api.before = (200, PackageWithoutRepositoryAccess(package))
+        self.assertEqual(self.gate(), {"package": 200})
+        self.assert_no_copy()
+
+    def test_removed_package_link_diagnostic_categories_are_not_retained(self):
+        self.assertNotIn("diagnostic_repository_identity", r.CODES)
+        self.assertNotIn("diagnostic_package_link", r.CODES)
 
     def test_404_unavailable_not_absence_or_authority(self):
         for status in (404, 401, 403, 429, 500):
@@ -181,16 +211,15 @@ class DiagnosticTests(unittest.TestCase):
             self.assertEqual(error.status, status)
         self.assert_no_copy()
 
-    def test_package_repository_failure_uses_package_stage_and_observed_status(self):
+    def test_package_gate_does_not_duplicate_authoritative_repository_reads(self):
         for failure in (r.Stop("synthetic_evidence", status=403),
                         RuntimeError("hostile SYNTHETIC_SECRET_SENTINEL 403"), KeyboardInterrupt()):
-            with patch.object(self.f.api, "repo", side_effect=failure):
-                error = self.refused(self.gate, "diagnostic_package_read")
-            self.assertEqual(error.status, 403 if isinstance(failure, r.Stop) else None)
-            self.assertEqual(p.diagnostic(error)["stage"], "diagnostic_package_read")
+            with patch.object(self.f.api, "repo", side_effect=failure) as repo:
+                self.assertEqual(self.gate(), {"package": 200})
+                repo.assert_not_called()
         self.assert_no_copy()
 
-    def test_postcopy_repository_failure_preserves_completed_outcome_without_replay(self):
+    def test_postcopy_does_not_duplicate_authoritative_repository_reads_or_replay(self):
         for index, failure in enumerate((r.Stop("synthetic_evidence", status=403),
                                          RuntimeError("hostile SYNTHETIC_SECRET_SENTINEL 403"), KeyboardInterrupt())):
             root = self.f.root / ("postcopy-repository-" + str(index))
@@ -202,10 +231,10 @@ class DiagnosticTests(unittest.TestCase):
                     raise failure
                 return original(suffix)
             instance = fixture.publication()
-            with patch.object(fixture.api, "repo", side_effect=repo):
-                error = self.refused(instance.execute, "diagnostic_public", "completed")
-            self.assertEqual(error.status, 403 if isinstance(failure, r.Stop) else None)
-            self.assertEqual(p.diagnostic(error)["stage"], "diagnostic_post_publication")
+            with patch.object(fixture.api, "repo", side_effect=repo) as read:
+                self.assertEqual(instance.execute()["imageDigest"], fixture.digest)
+            self.assertEqual(sum(call.args == () for call in read.call_args_list), 2)
+            self.assertEqual(instance.outcome, "completed")
             self.refused(instance.execute, "diagnostic_used", "completed")
             self.assertEqual(sum(args[1] == "copy" for args in fixture.calls), 1)
             self.assertFalse(fixture.authpath.parent.exists())
@@ -213,7 +242,7 @@ class DiagnosticTests(unittest.TestCase):
     def test_complete_pages_baseline_anywhere_and_tag_anywhere(self):
         first = [version(number, "sha256:" + "2" * 64) for number in range(1, 101)]
         self.f.api.version_pages = [first, [version(101)]]
-        self.assertEqual(self.gate(), {"package": 200, "repository": 99})
+        self.assertEqual(self.gate(), {"package": 200})
         self.assertIn("versions:2", self.f.api.reads)
         # Even a first-page baseline MUST NOT short circuit later tag evidence.
         first[0]["name"] = d.BASELINE
@@ -252,7 +281,7 @@ class DiagnosticTests(unittest.TestCase):
         self.assert_no_copy()
 
     def test_closed_read_boundaries_status_and_hostile_exceptions(self):
-        for method in ("package", "repo", "version_page"):
+        for method in ("package", "version_page"):
             for failure in (r.Stop("synthetic_namespace", status=401), r.Stop("synthetic_evidence", status=403),
                             r.Stop("synthetic_evidence", status=429), r.Stop("synthetic_evidence", status=500),
                             r.Stop("synthetic_evidence", status="hostile SYNTHETIC_SECRET_SENTINEL"),
@@ -273,20 +302,12 @@ class DiagnosticTests(unittest.TestCase):
                 self.assertIsNone(self.refused(self.gate, "diagnostic_package_read").status)
         self.assert_no_copy()
 
-    def test_closed_identity_inventory_shapes_and_required_private_projection(self):
+    def test_closed_package_identity_and_inventory_shapes(self):
         original = copy.deepcopy(self.f.api.before)
         for package in (None, [], True, "hostile SYNTHETIC_SECRET_SENTINEL",
                         {**original[1], "owner": None}, {**original[1], "owner": []}):
             self.f.api.before = (200, package)
             self.refused(self.gate, "diagnostic_package_identity")
-        self.f.api.before = copy.deepcopy(original)
-        for repo in (None, [], True, {**self.f.api.repo_data, "owner": None},
-                     {**self.f.api.repo_data, "default_branch": "other"}):
-            with patch.object(self.f.api, "repo", return_value=repo):
-                self.refused(self.gate, "diagnostic_repository_identity")
-        for link in (None, [], True, {}, {"id": 99, "full_name": p.REPO}):
-            self.f.api.before[1]["repository"] = link
-            self.refused(self.gate, "diagnostic_package_link")
         self.f.api.before = copy.deepcopy(original)
         for batch in ([None], [True], ["hostile SYNTHETIC_SECRET_SENTINEL"],
                       [version(1)] * 101, [version(1, tags=["x" * 129])],
@@ -375,6 +396,8 @@ class DiagnosticTests(unittest.TestCase):
     def test_source_ci_artifact_mismatch_and_unknown_source_error(self):
         api = self.f.api
         vectors = [(api.repo_data, "private", False), (api.repo_data, "owner", {"login": "other"}),
+                   (api.repo_data, "id", 0), (api.repo_data, "id", True), (api.repo_data, "id", 100),
+                   (api.repo_data, "full_name", "other/repo"), (api.repo_data, "default_branch", "other"),
                    (api.current, "run_attempt", 2), (api.current, "triggering_actor", {"login": "other"}),
                    (api.current, "status", "completed"), (api.current, "head_sha", "2" * 40),
                    (api.current, "path", ".github/workflows/" + p.WORKFLOW),
@@ -384,7 +407,9 @@ class DiagnosticTests(unittest.TestCase):
         for target, key, value in vectors:
             original = target[key]
             target[key] = value
+            api.reads.clear()
             self.refused(self.f.publication().execute)
+            self.assertNotIn("package", api.reads)
             target[key] = original
         instance = self.f.publication()
         instance.downloaded["a"] = 999
@@ -393,6 +418,17 @@ class DiagnosticTests(unittest.TestCase):
             error = self.refused(self.f.publication().execute, "diagnostic_evidence")
             self.assertIsNone(error.status)
         self.assert_no_copy()
+
+    def test_authoritative_source_repository_shapes_refuse_before_package_or_copy(self):
+        for repo in (None, [], True, {**self.f.api.repo_data, "owner": None},
+                     {**self.f.api.repo_data, "default_branch": "other"}):
+            with self.subTest(repo=repo), patch.object(self.f.api, "repo", return_value=repo):
+                self.f.api.reads.clear()
+                instance = self.f.publication()
+                self.refused(instance.execute)
+                self.assertNotIn("package", self.f.api.reads)
+                self.assertFalse(instance.used)
+                self.assert_no_copy()
 
     def test_recheck_context_main_archive_artifacts_and_package_before_copy(self):
         for changed in ("tag", "baseline", "identity", "visibility", "archive", "artifact"):
@@ -462,8 +498,26 @@ class DiagnosticTests(unittest.TestCase):
             self.assertFalse(self.f.authpath.parent.exists())
         self.assertEqual(sum(args[1] == "copy" for args in self.f.calls), 2)  # Separate injected sessions, one each.
 
+    def test_postcopy_repository_projection_changes_do_not_fail_or_replay(self):
+        for index, fields in enumerate(repository_projections()):
+            with self.subTest(fields=fields):
+                root = self.f.root / ("postcopy-projection-" + str(index))
+                root.mkdir()
+                fixture = Fixture(root)
+                package = dict(fixture.api.after[1])
+                del package["repository"]
+                fixture.api.after = (200, PackageWithoutRepositoryAccess({**package, **fields}))
+                instance = fixture.publication()
+                self.assertEqual(instance.execute()["imageDigest"], fixture.digest)
+                self.assertEqual(instance.outcome, "completed")
+                self.assertTrue(any(args[1] == "inspect" and "--raw" in args and args[-1].startswith("docker://")
+                                    for args in fixture.calls))
+                self.refused(instance.execute, "diagnostic_used", "completed")
+                self.assertEqual(sum(args[1] == "copy" for args in fixture.calls), 1)
+                self.assertFalse(fixture.authpath.parent.exists())
+
     def test_successful_copy_completed_on_postcheck_identity_digest_or_unexpected_failure(self):
-        for kind in ("identity", "visibility", "private_link", "digest", "unexpected", "http"):
+        for kind in ("identity", "visibility", "name", "owner", "type", "digest", "unexpected", "http"):
             with self.subTest(kind=kind):
                 self.f.api.copied = False
                 self.f.api.after = copy.deepcopy(self.f.api.before)
@@ -473,8 +527,12 @@ class DiagnosticTests(unittest.TestCase):
                     self.f.api.after[1]["id"] = 201
                 elif kind == "visibility":
                     self.f.api.after[1]["visibility"] = "private"
-                elif kind == "private_link":
-                    self.f.api.after[1]["repository"]["private"] = False
+                elif kind == "name":
+                    self.f.api.after[1]["name"] = "other"
+                elif kind == "owner":
+                    self.f.api.after[1]["owner"] = {"login": "other"}
+                elif kind == "type":
+                    self.f.api.after[1]["package_type"] = "npm"
                 elif kind == "digest":
                     self.f.post_raw = self.f.raw + b"changed"
                 elif kind == "unexpected":
@@ -490,7 +548,10 @@ class DiagnosticTests(unittest.TestCase):
                     if kind == "http":
                         self.assertEqual(error.status, 403)
                 self.refused(instance.execute, "diagnostic_used", "completed")
+                self.assertEqual(instance.outcome, "completed")
+                self.assertEqual(sum(args[1] == "copy" for args in self.f.calls), 1)
                 self.assertFalse(self.f.authpath.parent.exists())
+                self.f.calls.clear()
 
     def test_cleanup_primary_precedence_and_auth_prepare_failure(self):
         class BadCleanup(p.Authfile):
