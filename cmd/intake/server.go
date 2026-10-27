@@ -30,6 +30,9 @@ const (
 	codeRuntime          ledger.Code = "LEDGER_RUNTIME_UNAVAILABLE"
 	cleanupInterval                  = 10 * time.Second
 	pruneInterval                    = 60 * time.Second
+	// Allow three five-second provider reads plus local work and response flush.
+	// A write deadline is a delivery bound, not cancellation or completion proof.
+	responseWriteTimeout = 30 * time.Second
 )
 
 func runtimeFailure(code ledger.Code, stage, constraint, outcome, next string) *ledger.Diagnostic {
@@ -81,7 +84,7 @@ func localServer(ctx context.Context, handler http.Handler) *http.Server {
 		Handler:           handler,
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      5 * time.Second,
+		WriteTimeout:      responseWriteTimeout,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    8 * 1024,
 		// net/http normally logs panic payloads/stacks and transport errors.

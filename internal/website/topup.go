@@ -263,7 +263,9 @@ func topupProviderFailure(e *stripepay.Error, fallback string) *ledger.Diagnosti
 		code, constraint = "PAYMENT_WEBHOOK_REJECTED", "verified_supported_notification_required"
 	}
 	switch e.Constraint {
-	case stripepay.ConstraintSandbox, stripepay.ConstraintSandboxURL,
+	case stripepay.ConstraintLiveContext, stripepay.ConstraintLiveURL,
+		stripepay.ConstraintTax, stripepay.ConstraintTaxComplete,
+		stripepay.ConstraintSandbox, stripepay.ConstraintSandboxURL,
 		stripepay.ConstraintOffline, stripepay.ConstraintInput, stripepay.ConstraintTransport,
 		stripepay.ConstraintResponseSize, stripepay.ConstraintStatus, stripepay.ConstraintRedirect,
 		stripepay.ConstraintDecode, stripepay.ConstraintContext, stripepay.ConstraintSession,
