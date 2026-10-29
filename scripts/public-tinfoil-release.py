@@ -148,12 +148,12 @@ def current_gate(run, ctx):
               and run.get("triggering_actor", {}).get("login") == c.OWNER, "signing_current")
 
 
-def inventory(api, suffix, field=None):
-    """Consume every page; incomplete cap and duplicate IDs never mean absence."""
+def inventory(api, suffix, field=None, *, read=None):
+    """Consume every page; an explicit reader retains its boundary categories."""
     values, seen = [], set()
     for page in range(1, PAGE_CAP + 1):
-        data = repo_read(api, suffix + ("&" if "?" in suffix else "?")
-                         + f"per_page=100&page={page}", "signing_inventory_read")
+        path = suffix + ("&" if "?" in suffix else "?") + f"per_page=100&page={page}"
+        data = repo_read(api, path, "signing_inventory_read") if read is None else read(path)
         batch: Any = data.get(field) if field and type(data) is dict else data if field is None else None
         r.require(type(batch) is list and len(batch) <= 100, "signing_inventory")
         for item in batch:
