@@ -129,9 +129,27 @@ ReturnOrigin must be a canonical lowercase HTTPS DNS origin with at least two
 labels, alphabetic TLD, no port/userinfo/path/query/fragment/opaque form, and no IP
 or recognized special-use local/test suffix. Validation performs no DNS lookup:
 public routing, ownership and deployed TLS are operator qualification, not
-constructor evidence. Live hosted URLs require the existing canonical bounded
-`/c/pay/cs_live_...` path and the same finite printable-fragment policy as sandbox.
-Sandbox still permits only `cs_test_...`; offline remains fixture-origin only.
+constructor evidence. Live hosted URLs retain the 4096-byte total bound and
+exact lowercase `https://checkout.stripe.com` origin, with no port, userinfo,
+opaque URL form, raw ASCII whitespace/control/DEL or backslash, and a nonempty
+absolute path. Path/query/fragment internals are provider-owned and opaque: they
+are not parsed as Session IDs, normalized or reconstructed, decoded for content
+checks, or subject to the sandbox's 2048-byte decoded-fragment limit. The exact
+returned value is preserved transiently through the adapter and coordinator.
+The website's stock Go HTTP redirect percent-encodes raw non-ASCII bytes in
+`Location`, leaving existing percent encodings untouched. This normal URI
+presentation boundary is not byte-exact wire preservation or payment evidence;
+no manual header rewrite or ASCII-only URL grammar is imposed. Stripe's public
+[Session URL contract](https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url)
+directs navigation to the returned hosted-page URL; it does not guarantee an
+internal path/query/fragment grammar. Configured custom domains remain refused.
+Live mode and identity must instead pass the independent strict API Session
+validation before navigation; a URL is never payment or accounting evidence.
+Sandbox retains its original canonical `cs_test_...` path, no-query/escaped-path
+and printable-fragment checks; offline remains fixture-origin only. This corrects
+a source contract assumption, not a known predicate of the reported live refusal:
+the actual rejected URL predicate and provider creation/payment outcomes remain
+unknown here, and no retrieval or replay is performed to diagnose them.
 Nil/zero/unselected/contradictory mode flags fail closed. `IsLive()` and
 `ProductTaxCode()` expose trusted constructor-owned configuration, with an empty
 code outside configured live mode. `IsSandbox()` is unchanged.

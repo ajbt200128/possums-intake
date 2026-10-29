@@ -106,14 +106,34 @@ func (c *Client) validHostedURL(value string) bool {
 	if len(value) == 0 || len(value) > 4096 {
 		return false
 	}
+	if c.live {
+		return validLiveHostedURL(value)
+	}
 	u, err := url.Parse(value)
-	if c.sandbox || c.live {
+	if c.sandbox {
 		return err == nil && u.Scheme+"://"+u.Host == sandboxCheckoutOrigin && u.User == nil && u.Opaque == "" &&
 			u.RawQuery == "" && !u.ForceQuery && u.RawPath == "" && u.String() == value &&
 			strings.HasPrefix(u.Path, "/c/pay/") && c.validSessionID(strings.TrimPrefix(u.Path, "/c/pay/")) &&
 			len(u.Fragment) <= 2048 && printableFragment(u.Fragment)
 	}
 	return err == nil && u.Scheme+"://"+u.Host == c.origin && u.User == nil && u.Opaque == "" && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.RawFragment == "" && u.RawPath == "" && len(u.Path) > 1 && u.Path[0] == '/'
+}
+
+// Live URL internals belong to the provider, not the Session ID grammar. Mode
+// and identity come from the independently validated API Session, never its URL.
+// This fixed-origin navigation boundary is not payment or accounting evidence.
+func validLiveHostedURL(value string) bool {
+	if !strings.HasPrefix(value, "https://") {
+		return false
+	}
+	for _, b := range []byte(value) {
+		if b <= 0x20 || b == 0x7f || b == '\\' {
+			return false
+		}
+	}
+	u, err := url.Parse(value)
+	return err == nil && u.Scheme == "https" && u.Host == "checkout.stripe.com" &&
+		u.User == nil && u.Opaque == "" && strings.HasPrefix(u.Path, "/")
 }
 
 func printableFragment(fragment string) bool {
