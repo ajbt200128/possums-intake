@@ -1,0 +1,43 @@
+cvm-version: @CVM_PIN@
+cpus: 2
+memory: 8192
+gpus: 0
+networks:
+  public-egress:
+    egress: open
+volumes:
+  - name: ledger
+    owner: 65532
+shim:
+  upstream-port: 8090
+  paths: ['/*']
+containers:
+  - name: intake-persistent
+    networks: [public-egress]
+    image: ghcr.io/ajbt200128/possums-intake-synthetic@@IMAGE_DIGEST@
+    command: ['serve', '--state', '/state/ledger', '--tinfoil-volume', 'ledger', '--operator', '--stripe-live', '--listen', '0.0.0.0:8090']
+    user: '65532:65532'
+    read_only: true
+    restart: 'no'
+    persistent_volumes: ['ledger:/state']
+    tmpfs:
+      /tmp: 'rw,nosuid,nodev,size=128m,mode=1777'
+    healthcheck:
+      test: ['CMD', '/bin/intake', 'synthetic-healthcheck']
+      interval: '10s'
+      timeout: '3s'
+      retries: 1
+      start_period: '35s'
+    env:
+      - OTEL_SDK_DISABLED: 'false'
+      - INTAKE_METRICS_ENDPOINT: 'https://api.honeycomb.io/v1/metrics'
+      - INTAKE_METRICS_ENVIRONMENT: 'production'
+      - INTAKE_METRICS_SLOT: 'intake-01'
+      - STRIPE_LIVE_TAX_CODE: 'txcd_10103000'
+      - STRIPE_RETURN_ORIGIN: 'https://possums.dev'
+    secrets:
+      - LEDGER_VOLUME_KEY_B64
+      - LEDGER_ADMIN_KEY
+      - INTAKE_METRICS_HONEYCOMB_API_KEY
+      - STRIPE_LIVE_API_KEY
+      - STRIPE_LIVE_WEBHOOK_SECRET
