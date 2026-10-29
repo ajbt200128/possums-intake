@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  packages: read
 concurrency:
   group: intake-check-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -16,6 +17,12 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
+      - name: Authenticate fixed public repository and package read access
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          PYTHONDONTWRITEBYTECODE=1 python3
+          scripts/public-tinfoil-release.py repository-readiness
       # Keep the qualified immutable action reference intact.
       # yamllint disable-line rule:line-length
       - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
