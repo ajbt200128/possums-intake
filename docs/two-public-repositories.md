@@ -65,11 +65,14 @@ connection/pending deployment/update and original instance/disk/domain unchanged
 Unknown results stop for passive reconciliation, not replay. This packet has
 created no new resource.
 
-Public-only owner publication and a still-disabled guarded official signing
-workflow have passed scoped independent source/offline review. Native qualification
-and the exposure decisions below still precede remote activation; implementation
-summaries and synthetic tests alone are not release acceptance. Secret bindings under the new repository remain
-unqualified; retaining declarations does not carry values between projects.
+The public-only owner adapter and hard-disabled signing foundation passed scoped
+independent source/offline review and merged in PR #16. The newer guarded manual
+signer, CI-token readiness and read-only crypto-acceptance preparation below still
+need independent review and exact-source CI/native qualification. No remote switch
+was changed by this preparation; live activation is unobserved. Implementation
+summaries and synthetic tests alone are not release acceptance. Secret bindings
+under the new repository remain unqualified; declarations do not carry values
+between projects. **Do not create or change Tinfoil secrets yet.**
 
 ## Historical in-place option — unsupported within inspected contracts
 
@@ -280,7 +283,10 @@ workspaces/native host history remain separate persistence boundaries. The new
 signing packet has passed scoped independent source/offline review; activation
 remains off.
 
-## Dormant official signing guard — source/offline review accepted
+## Historical dormant signing foundation — source/offline review accepted
+
+This subsection records the merged hard-disabled foundation, not the newer local
+guarded-signing preparation below. Its test/build identities remain historical.
 
 The new `scripts/public-tinfoil-release.py` admits owner-selected tag dispatch and
 separately authenticates S/R checks, native qualification/artifact IDs, complete
@@ -317,6 +323,138 @@ method; the compatible invocation succeeded. No authorization/validation check w
 disabled; this is not an actual Nix/signing execution.
 Authenticated CI-token access, actual native builds/derivation acquisition,
 cryptographic signing/provenance and runtime acceptance are still unqualified.
+
+## Guarded manual signing and read-only acceptance — local preparation
+
+**Facts:** public [PR #16](https://github.com/ajbt200128/possums-intake/pull/16)
+merged normally at `8ece81feb1db17144f52330b217ee96bc5b05911`, with exact parents
+`6e4d5516d10e0a38279abce072ec06fc9a0ae556` and
+`ba4d4d462532148d541af8d076f86def4a6a7722`. Its Linux PR check run
+`40929665095`, attempt 1, completed successfully, including native Nix checks,
+actual image/probe builds and generated-archive qualification. This is PR
+merge-preview evidence, not final S/current-main A/B or signing acceptance.
+
+The next source packet prepares, but does not remotely activate:
+
+- The manual signer replaces its literal-false barrier with the existing AND of
+  `RELEASE_AUTOMATION_ENABLED` and `PUBLIC_INTAKE_RELEASE_ENABLED`. Both workflow
+  process switches use strict JSON boolean selection as well as the string check:
+  GitHub equality ignores case, so `TRUE`/`True` must fail expression evaluation
+  rather than normalize to enabled; other unselected values map to `false`.
+  Python independently requires both process switches exactly `true` before event
+  or external reads. Owner/tag/manual/first-attempt, complete
+  inventories, S/R evidence, original artifact IDs and guard-before-action checks
+  remain. The protected `intake-public-release` environment remains required;
+  production deployment stays literal `false`, and image/deploy templates remain
+  disabled. No remote switch, environment or grant was changed by this packet.
+- Explicit `public-tinfoil-release.py repository-readiness` performs only the
+  existing fixed-source/fixed-package authenticated GitHub GETs. `check.yml`
+  invokes it with its actual temporary `GITHUB_TOKEN` and `packages: read` before
+  builds. This catches access failures before final S/signing preparation. Actual
+  CI success is still required; a declaration or owner-token read does not prove
+  CI-token access, registry-write authority or future signer-token availability.
+  Optional `package.repository` association is never consulted. `status` stays
+  offline and reports no observed live activation, not a global enabled state.
+- `public-release-acceptance.py accept` is an explicit read-only host command with
+  validated public source/release/check/qualification/artifact/image/archive pins.
+  It authenticates the saved fixed owner through the native SDK without token
+  introspection; checks exact completed successful signing attempt 1, complete
+  invocation inventories, current main/lightweight tag R, S/R checks and original
+  qualified artifact IDs; and reuses committed S→R config/derivation gates. The
+  local checkout must be R. It never accepts supplied evidence JSON or a fixture
+  as command-line proof and never creates tags, publishes, retries or provisions.
+- Acceptance downloads the two standard assets, `tinfoil-deployment.json` and
+  `tinfoil.hash`, through bounded native SDK GETs. Actual sizes and the canonical
+  SHA256-plus-newline hash file must match actual manifest bytes; exact serving
+  config/vendor pins/shape must pass. It then reuses supported `gh attestation
+  verify` and the existing verified-statement gate, requiring the exact tagged
+  workflow certificate/source/signer R, predicate/subject and signed run/attempt.
+  It rechecks selected evidence afterward. Release `target_commitish` is not tag
+  authority: the pinned official action omits `--target`; actual tag and signed
+  certificate binding are authoritative. Unsigned hashes alone never suffice.
+
+Native acquisition has the existing **64 KiB per-stream** limit, stricter than the
+manifest's 512 KiB structural ceiling; larger responses fail closed. Locally
+authored SDK startup/deadline/reader/acquisition/decoding categories survive outer
+boundaries without raw exceptions or invented HTTP statuses. Known workflow,
+release, crypto and acceptance observations remain sticky through later cleanup
+or output failures. Owned public-manifest workspaces are removed only after
+positive child join; unconfirmed join retains them. Reused relation-snapshot
+cleanup/command-join semantics were not changed or newly qualified by this packet.
+Native SDK auth/cache/history, GitHub action credentials/log retention and Nix
+records are separate host boundaries; project code adds no diagnostic log, raw
+cache or support bundle and promises no whole-host transience. The pinned upstream
+composite action can fail before project code can classify it; this packet does
+not suppress or copy its native logs or promise a project code for every vendor
+failure. Failed/unknown publication requires passive reconciliation, never replay.
+
+Initial independent review passed 309 tests with one skip but found a P2: the
+shared signing-inventory projection erased already-known native failure categories.
+An explicit inventory-reader seam now preserves the native category without
+changing default signing callers, pagination or schema admission. Parent also found
+that selected check-attempt filtering could swallow those categories/statuses;
+a closed-category propagation seam preserves them only for acceptance, retaining
+legacy filtering defaults. New regressions traverse the actual native adapter
+with synthetic command responses at signing history, qualification jobs/artifacts,
+release assets and both selected check attempts, before and after crypto evidence:
+96 targeted subcases cover startup/deadline/join/reader/acquisition/decode and
+observed HTTP 403/404, including conservative cleanup and sticky outcomes.
+
+Parent direct discovery now passed **312 tests, one skipped**, including 24 focused
+acceptance tests. Active LSP checked 12 changed paths: 11 clean, with the already
+recorded unchanged regex-guarded `positive()` numeric-parse warning at
+`synthetic-publication.py:70`. No parse-site change was introduced. Real
+closed-descriptor and broken-pipe subprocess cases are included, but cryptographic
+successes in unit tests use internal fake ports: **no actual new signature,
+final-main native A/B or runtime acceptance is claimed**. Fresh independent review
+confirmed the P2 response, independently passed all 312 tests with one skip and
+all 24 focused acceptance tests, and found no new concrete P1/P2 source blocker.
+Protected controls, actual CI-token access and native SDK/release qualification
+remain outstanding.
+
+Before the next local build, the delivery derivation was updated to copy
+`check.yml` explicitly alongside its other workflow fixtures; the new readiness
+assertions must not depend on an undeclared checkout file. A regression asserts
+that input declaration. One actual offline **aarch64-darwin delivery-check build**
+then completed, joined normally, with unchanged pins/trust/builders and no
+wall-clock build wrapper. All **445 declared inputs** matched before/after; frozen
+identity is `76b682e28cbd86c228ec1a4ca45d93f581fff7f3c9f65a715952342e75d5efad`.
+The previously absent output
+`/nix/store/qy9bjq31c826sa01mvd2g48iz37x5hvy-intake-offline-delivery-tests`
+is valid with exact deriver
+`/nix/store/z6ii5ryj76w596kqb90lal98icq9bgyd-intake-offline-delivery-tests.drv`
+and zero-byte completion marker. No Nix-run test count is claimed. Candidate
+x86_64-linux image evaluation still returns
+`/nix/store/4pzx7cnnl6xj5iyyklivjcpfqcbisjnx-possums-intake-local.tar.gz.drv`,
+matching the previously recorded base; no fresh base reevaluation or Linux image
+build is claimed. The owned public snapshot was removed after joined completion;
+normal Nix source/build records may persist. Independent final closure review
+recomputed the same 445-input identity, matched stored `flake.nix`, `check.yml` and
+all 29 declared Python scripts to current bytes, validated output/deriver metadata,
+and independently passed 312 tests with one skip. It found no new concrete P1/P2
+blocker. Passive metadata does not independently reconstruct the parent's observed
+pre-build absence, process joining or snapshot removal. This is accepted local
+source/check evidence, not final S qualification, actual crypto or runtime proof.
+
+**Sequence before freezing S:** finish all activation/tests/docs/acceptance source
+preparation and qualify external controls first. Then require exact final-main S
+checks and reuse `qualify-synthetic-image.yml` once for independent A/B and actual-A
+qualification. Preserve its original run/attempt/artifact IDs and one-day artifact
+window; rehash before the one native owner copy. Create R as S's sole-parent,
+regular root-config-only A/M commit, require R checks, current-main/lightweight-tag
+binding and equal image derivations; do not rebuild a second A/B for config-only R.
+No source or documentation commits between frozen S and R. Only the pinned
+official action publishes once after approval; actual downloaded assets and
+supported crypto must pass against that completed invocation. Metadata, fixture
+passes, old releases and PR checks cannot substitute for these gates.
+
+Legacy image callers still reject public source through PRIVATE defaults. The
+legacy deploy-repository signer instead binds its own PUBLIC repository and
+receipt; intake becoming public does **not** retire or necessarily block it.
+Preserve that signer and historical evidence, retain exclusive writer custody,
+and retire future legacy publication only in the separately reviewed final step.
+The stopped-create/private destination/secret-readiness gates remain unmet;
+**Tinfoil secret entry is not ready and the existing ledger/disk/domain is unchanged.**
 
 ## Exposure review — preliminary local history coverage only
 
@@ -466,14 +604,18 @@ access, protected environment/control checks and signature acceptance remain gat
    branch/environment permissions before changing visibility. No blanket clean
    audit claim or automatic artifact/history deletion. Implement only the public
    path; no accept-either-visibility switch or fallback to private publishers.
-2. **Exact source/build ownership.** Reuse `qualify-synthetic-image.yml`, not a
-   competing qualification workflow. Source **S** is exact successful current-main
+2. **Exact source/build ownership.** Finish guarded activation, tests/docs,
+   acceptance glue and external controls before freezing S. Reuse
+   `qualify-synthetic-image.yml`, not a competing qualification workflow; preserve
+   its original IDs and one-day artifact window. Source **S** is exact successful current-main
    source, with explicit check/run/attempt/artifact bindings. Require independently
    matching native A/B images/archives and actual-image privacy/restart qualification.
    Rehash the exact accepted archive before the once-only copy and preserve known
    completed-copy evidence across later errors. Refresh quiet-writer custody.
-3. **Immutable measured release.** Release **R** differs from S only by its selected
-   measured-config transformation; compare their image derivations for equality.
+3. **Immutable measured release.** Release **R** has sole parent S and differs only
+   by its regular root measured-config A/M transformation; compare their image
+   derivations for equality. No intervening source/docs edits or second config-only
+   R A/B build.
    Use the pinned official action `59f7ab5dbe472b3097c888ebe64e6a4131fc0975` as sole
    publisher, `mark-as-latest: false`, least permissions. Verify downloaded standard
    assets and supported crypto against the exact repo/tag/source/workflow and actual
