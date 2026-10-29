@@ -130,12 +130,12 @@ func TestLiveClosedModesAndHostedURL(t *testing.T) {
 	f := newLiveFixture(t, 500, 40)
 	c := liveClient(t, f.server.URL)
 	path := sandboxCheckoutOrigin + "/c/pay/" + fixtureLiveSession
-	for _, u := range []string{path, path + "#Synthetic%2FFragment=123"} {
+	for _, u := range []string{path, path + "#Synthetic%2FFragment=123", sandboxCheckoutOrigin + "/c/pay/" + fixtureSession, path + "?", path + "#", path + "#%00", path + "#" + strings.Repeat("A", 2049), path + "/other"} {
 		if !c.CheckoutURLAllowed(u) {
 			t.Fatal("live URL refused")
 		}
 	}
-	for _, u := range []string{sandboxCheckoutOrigin + "/c/pay/" + fixtureSession, f.server.URL + "/checkout/synthetic", path + "?", path + "#", path + "#%00", path + "#" + strings.Repeat("A", 2049), path + "/other", strings.Replace(path, "checkout.stripe.com", "checkout.stripe.com:443", 1), strings.Replace(path, "checkout.stripe.com", "user@checkout.stripe.com", 1), strings.Replace(path, "checkout.stripe.com", "checkout.stripe.com.invalid", 1), strings.Replace(path, "https:", "http:", 1)} {
+	for _, u := range []string{f.server.URL + "/checkout/synthetic", strings.Replace(path, "checkout.stripe.com", "checkout.stripe.com:443", 1), strings.Replace(path, "checkout.stripe.com", "user@checkout.stripe.com", 1), strings.Replace(path, "checkout.stripe.com", "checkout.stripe.com.invalid", 1), strings.Replace(path, "https:", "http:", 1)} {
 		if c.CheckoutURLAllowed(u) {
 			t.Fatal("unsafe live URL allowed")
 		}
@@ -567,7 +567,7 @@ func TestTestModesRefuseTaxAndLivePresentationFailureNeverReplays(t *testing.T) 
 	live := newLiveFixture(t, 500, 0)
 	c := liveClient(t, live.server.URL)
 	live.session["status"], live.session["payment_status"], live.session["payment_intent"] = "open", "unpaid", nil
-	live.session["url"] = sandboxCheckoutOrigin + "/c/pay/" + fixtureSession
+	live.session["url"] = "https://checkout.stripe.com.invalid/c/pay/" + fixtureLiveSession
 	_, err := c.CreateCheckout(context.Background(), createInput(live))
 	requireFailure(t, err, StageHostedURL, ConstraintLiveURL, OutcomeCreateUnknown)
 	if len(live.snapshot()) != 1 {
