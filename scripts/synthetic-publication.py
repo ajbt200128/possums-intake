@@ -221,8 +221,8 @@ def admit(api, ctx, workflow=WORKFLOW):
     return admit_qualified(api, ctx, repo)
 
 
-def admit_qualified(api, ctx, repo):
-    """Caller supplies checked authority/repo; native callers pin exact checks."""
+def qualified_checks(api, ctx):
+    """Read exact successful source checks; current-main admission is separate."""
     source = ctx["source"]
     if "checks_run" in ctx or "checks_attempt" in ctx:
         r.require(all(type(ctx.get(key)) is int and ctx[key] > 0 for key in ("checks_run", "checks_attempt")),
@@ -245,9 +245,22 @@ def admit_qualified(api, ctx, repo):
         except r.Stop as error:
             if error.code == "synthetic_evidence":
                 raise
+    return eligible
+
+
+def admit_qualified(api, ctx, repo):
+    """Caller supplies checked authority/repo; native callers pin exact checks."""
+    source = ctx["source"]
+    eligible = qualified_checks(api, ctx)
     view = {"repository": REPO, "ref": "refs/heads/main", "event": "workflow_dispatch",
             "context_sha": source, "main": api.repo("/git/ref/heads/main")["object"]["sha"], "checks": eligible}
     r.source_gate(view, REPO, source)
+    return qualified_artifacts(api, ctx, repo)
+
+
+def qualified_artifacts(api, ctx, repo):
+    """Read source-owned native artifacts; caller must admit source and authority."""
+    source = ctx["source"]
     qrun, attempt = ctx["qualification_run"], ctx["qualification_attempt"]
     q = api.repo(f"/actions/runs/{qrun}")
     run_gate(q, "qualify-synthetic-image.yml", source, attempt, {"workflow_dispatch"})
