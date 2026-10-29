@@ -440,6 +440,25 @@ No push, PR, visibility change, publication or resource mutation has occurred at
 this checkpoint. Private review and exact-source CI precede integration; native
 matching builds/signing and separately admitted resource work remain later gates.
 
+## Operator-made public visibility — custody reconciled
+
+A fresh read after the five local commits found `private=false` for the fixed
+source repository, while main remained `6e4d551` and the intended remote branch
+was absent. The PRIVATE-only push pre-admission stopped **before any push**. This
+thread made no visibility-change request and did not automatically revert it.
+The operator confirmed **Yes—public, custody remains yours**: the visibility
+change was deliberate and other intake/deploy source/release/deployment writers
+remain paused. This establishes intent/custody, not the change's exact timing or
+completion of pending native/control gates.
+
+Source integration now requires explicitly PUBLIC-only admission and a public PR,
+not a private/public fallback. Record this reconciliation separately; do not rewrite
+the five prior local commits. Existing historical-disclosure/no-new-license limits
+remain. No push/PR has yet occurred at this reconciliation checkpoint; no secret,
+release, signing, resource, current ledger/disk/domain or gateway mutation follows
+from public visibility alone. Native matching builds, actual authenticated package
+access, protected environment/control checks and signature acceptance remain gates.
+
 ## Revised execution order — stopped-instance preparation
 
 1. **Exposure audit and delivery implementation.** Review tracked history/refs,
