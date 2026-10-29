@@ -1,17 +1,45 @@
-# Measurement/signing belongs to the immutable tagged workflow. This dormant
-# template is not a configured publisher: selected config/adapter are absent.
+# Dormant public intake signer. Python only admits evidence; the pinned official
+# action is the sole publisher. No tag creation, registry copy or deployment.
 name: Tinfoil intake release - publish
 on:
   workflow_dispatch:
     inputs:
       source:
+        description: Application source S, sole parent of tagged release R
         type: string
         required: true
-      build_run:
+      checks_run:
+        description: Exact successful main check run for S
         type: string
         required: true
-      build_attempt:
+      checks_attempt:
         type: string
+        required: true
+      release_checks_run:
+        description: Exact successful main check run for current-main release R
+        type: string
+        required: true
+      release_checks_attempt:
+        type: string
+        required: true
+      qualification_run:
+        description: Exact successful native A/B qualification run for S
+        type: string
+        required: true
+      qualification_attempt:
+        type: string
+        required: true
+      image_digest:
+        description: Non-placeholder qualified image sha256 digest
+        type: string
+        required: true
+      archive_sha256:
+        description: Exact qualified A archive sha256
+        type: string
+        required: true
+      storage_phase:
+        type: string
+        default: persistent-live-stripe-serve
         required: true
 permissions:
   contents: read
@@ -21,29 +49,92 @@ concurrency:
 env:
   RELEASE_AUTOMATION_ENABLED: 'false'
   PRODUCTION_DEPLOYMENT_ENABLED: 'false'
+  PUBLIC_INTAKE_RELEASE_ENABLED: 'false'
+  PYTHONDONTWRITEBYTECODE: '1'
 jobs:
   measure-and-release:
-    if: ${{ false && vars.RELEASE_AUTOMATION_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ false &&
+      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+      vars.PUBLIC_INTAKE_RELEASE_ENABLED == 'true' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.run_attempt == 1 && github.actor == 'ajbt200128' &&
+      startsWith(github.ref, 'refs/tags/v') }}
+    environment: intake-public-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
       id-token: write
       attestations: write
       actions: read
+      packages: read
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Refuse stale/unqualified/partially published invocation
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/release.py publication-guard
-      # Never reached by the shipped artifacts. Config is intentionally absent;
-      # volume/key/listen policy must be approved, not guessed from the gateway.
-      - uses: tinfoilsh/measure-image-action@f2ec2fdf4510459730f0a5158c5817f5361e9461 # v0.13.2
+      # Keep the reviewed immutable action reference on one line.
+      # yamllint disable-line rule:line-length
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3
         with:
-          config-file: ${{ github.workspace }}/nix/release-config.yml
+          diagnostic-endpoint: ""
+      - name: Offline signing guard tests with synthetic ports only
+        run: >-
+          nix shell --inputs-from . --option builders "" nixpkgs#python3
+          --command python3 -m unittest discover -s scripts
+          -p 'test_public_tinfoil_release.py'
+      - id: admit
+        name: >-
+          Authenticate selected public source, release checks,
+          qualification and absence
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          nix shell --inputs-from . --option builders "" nixpkgs#python3
+          --command python3 scripts/public-tinfoil-release.py admit
+      - name: Download admitted A runtime and startup qualification
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ steps.admit.outputs.qualification_run }}
+          artifact-ids: ${{ steps.admit.outputs.a }}
+          path: accepted/a
+          merge-multiple: true
+      - name: Download admitted B identities
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ steps.admit.outputs.qualification_run }}
+          artifact-ids: ${{ steps.admit.outputs.b }}
+          path: accepted/b
+          merge-multiple: true
+      - name: Download admitted actual A archive without rebuilding
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ajbt200128/possums-intake
+          run-id: ${{ steps.admit.outputs.qualification_run }}
+          artifact-ids: ${{ steps.admit.outputs.archive }}
+          path: accepted/archive
+          merge-multiple: true
+      - name: Re-admit evidence and verify downloaded archive receipt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACCEPTED_A_ARTIFACT_ID: ${{ steps.admit.outputs.a }}
+          ACCEPTED_B_ARTIFACT_ID: ${{ steps.admit.outputs.b }}
+          ACCEPTED_ARCHIVE_ARTIFACT_ID: ${{ steps.admit.outputs.archive }}
+        run: >-
+          nix shell --inputs-from . --option builders ""
+          nixpkgs#python3 nixpkgs#skopeo
+          --command python3 scripts/public-tinfoil-release.py guard
+      # External admission must verify completed run and manifest crypto.
+      # A pre-signing guard cannot establish either outcome.
+      # Keep the reviewed v0.14.0 action reference on one line.
+      # yamllint disable-line rule:line-length
+      - uses: tinfoilsh/measure-image-action@59f7ab5dbe472b3097c888ebe64e6a4131fc0975
+        with:
+          config-file: ${{ github.workspace }}/tinfoil-config.yml
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mark-as-latest: 'false'
