@@ -23,6 +23,7 @@ WEBSITE_DOCUMENTS = {"bundle": ("init.el", "options.el", "pages.el", "routes.el"
 # bytes are verified against, and the human-readable license notice.
 WEBSITE_PROVENANCE = ("manifest.json", "NOTICE.md")
 LEDGER_FIXTURES = ("split_schema_v1.sql", "split_schema_v2.sql")
+PUBLIC_RELEASE_TEMPLATE = "nix/persistent-live-stripe-egress-serve-config.yml.in"
 
 
 def regular(root, path):
@@ -75,6 +76,12 @@ def inputs(root):
             r.require(not path.is_symlink(), "source_snapshot")
             if path.is_file() and path.suffix in extensions:
                 files.append(path)
+    # Older snapshots without this contract remain supported. Once the public
+    # contract is present its exact template is required, never a YAML glob.
+    if (root / "scripts/public-release.py").is_file():
+        template = root / PUBLIC_RELEASE_TEMPLATE
+        regular(root, template)
+        files.append(template)
     if (root / "internal/ledger/fresh_schema_test.go").is_file():
         for name in LEDGER_FIXTURES:
             fixture = root / "internal/ledger/testdata" / name

@@ -32,6 +32,8 @@
           cp ${./flake.nix} flake.nix
           cp -R ${./scripts} scripts
           chmod -R u+w scripts
+          mkdir -p nix
+          cp ${./nix/persistent-live-stripe-egress-serve-config.yml.in} nix/persistent-live-stripe-egress-serve-config.yml.in
           mkdir -p .github/workflows
           cp ${./.github/workflows/qualify-synthetic-image.yml} .github/workflows/qualify-synthetic-image.yml
           cp ${./.github/workflows/publish-synthetic-image.yml} .github/workflows/publish-synthetic-image.yml

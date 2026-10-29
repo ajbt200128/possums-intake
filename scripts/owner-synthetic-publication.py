@@ -167,12 +167,12 @@ class Tools:
         return result
 
 
-def admit(api, ctx):
+def admit(api, ctx, *, repository_reader=p.repository_gate):
     r.require(all(type(ctx.get(key)) is int and ctx[key] > 0 for key in ("checks_run", "checks_attempt")),
               "arguments")
     r.require(ctx.get("baseline") == d.BASELINE and ctx.get("writers_quiet_confirmed") is True,
               "diagnostic_approval")
-    return p.boundary("diagnostic_evidence", lambda: p.admit_qualified(api, ctx, p.repository_gate(api)))
+    return p.boundary("diagnostic_evidence", lambda: p.admit_qualified(api, ctx, repository_reader(api)))
 
 
 def artifact_names(ctx):
@@ -181,14 +181,14 @@ def artifact_names(ctx):
             "archive": "intake-synthetic-archive-" + stem}
 
 
-def download(api, ctx, admitted, root, tools, token):
+def download(api, ctx, admitted, root, tools, token, *, admitter=admit):
     # gh's supported native extraction, never a custom ZipFile.extractall. Exact
     # unique names select immutable artifacts; full admission binds IDs both sides.
-    r.require(admit(api, ctx) == admitted, "owner_download")
+    r.require(admitter(api, ctx) == admitted, "owner_download")
     for key, name in artifact_names(ctx).items():
         tools.gh(["run", "download", str(ctx["qualification_run"]), "--repo", "github.com/" + p.REPO,
                   "--name", name, "--dir", str(root / key)], "owner_download", token)
-    r.require(admit(api, ctx) == admitted, "owner_download")
+    r.require(admitter(api, ctx) == admitted, "owner_download")
     expected = {"a": {"digest", "archive-sha256", "qualification.json", "synthetic-qualification.json"},
                 "b": {"digest", "archive-sha256"}, "archive": {"image.tar.gz"}}
     r.require({item.name for item in root.iterdir()} == set(expected), "owner_download")
@@ -200,9 +200,10 @@ def download(api, ctx, admitted, root, tools, token):
 
 
 class Publication:
-    def __init__(self, api, ctx, root, admitted, tools, auth=None):
+    def __init__(self, api, ctx, root, admitted, tools, auth=None, *, admitter=admit):
         self.api, self.ctx, self.root, self.admitted = api, dict(ctx), Path(root), admitted
         self.tools, self.auth = tools, auth if auth is not None else p.Authfile()
+        self.admitter = admitter
         self.used, self.outcome = False, "no_effect"
 
     def archive(self, admitted):
@@ -216,11 +217,11 @@ class Publication:
             raise p.PublicationStop("diagnostic_used", outcome=self.outcome)
         primary = None
         try:
-            r.require(admit(self.api, self.ctx) == self.admitted, "diagnostic_evidence")
+            r.require(self.admitter(self.api, self.ctx) == self.admitted, "diagnostic_evidence")
             receipt = p.boundary("synthetic_archive", lambda: self.archive(self.admitted))
             identity = p.boundary("diagnostic_package", lambda: d.public_gate(self.api, self.ctx))
             authfile = p.boundary("synthetic_auth", self.auth.prepare)
-            refreshed = admit(self.api, self.ctx)
+            refreshed = self.admitter(self.api, self.ctx)
             r.require(refreshed == self.admitted, "diagnostic_evidence")
             r.require(p.boundary("synthetic_archive", lambda: self.archive(refreshed)) == receipt, "synthetic_archive")
             r.require(p.boundary("diagnostic_package", lambda: d.public_gate(self.api, self.ctx)) == identity,
@@ -256,7 +257,13 @@ def diagnostic(error):
     return value
 
 
-def publish(ctx):
+def present(receipt):
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")), flush=True)
+
+
+def publish(ctx, *, admitter=admit, presenter=present):
+    # Preserve the legacy adapter call shape when no policy was selected.
+    admission = {} if admitter is admit else {"admitter": admitter}
     env = native_env()
     tools = Tools(env)
     token = p.boundary("owner_auth", lambda: tools.gh(["auth", "token", "--hostname", "github.com"], "owner_auth").decode().strip())
@@ -264,22 +271,22 @@ def publish(ctx):
     with owner_environment(env, token):
         verify_owner(token)
         api = d.GitHub()
-        admitted = admit(api, ctx)
+        admitted = p.boundary("diagnostic_evidence", lambda: admitter(api, ctx))
         p.boundary("diagnostic_package", lambda: d.public_gate(api, ctx))
         root = Path(p.boundary("owner_workspace", lambda: tempfile.mkdtemp(prefix="intake-owner-public-", dir="/tmp")))
         # mkdtemp is owner-only; do not use inherited TMPDIR or caller paths.
         p.boundary("owner_workspace", lambda: root.chmod(0o700))
         try:
-            p.boundary("owner_download", lambda: download(api, ctx, admitted, root, tools, token))
+            p.boundary("owner_download", lambda: download(api, ctx, admitted, root, tools, token, **admission))
         except r.Stop as error:
             if tools.joined:
                 raise
             primary = p.PublicationStop(error.code, status=error.status)
             primary.join_unconfirmed = True
             raise primary from None
-        receipt = Publication(api, ctx, root, admitted, tools).execute()
+        receipt = Publication(api, ctx, root, admitted, tools, **admission).execute()
         try:
-            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")), flush=True)
+            presenter(receipt)
         except (Exception, KeyboardInterrupt):
             raise r.Stop("synthetic_receipt", outcome="completed") from None
         try:
