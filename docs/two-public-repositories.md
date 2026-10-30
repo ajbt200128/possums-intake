@@ -409,8 +409,8 @@ successes in unit tests use internal fake ports: **no actual new signature,
 final-main native A/B or runtime acceptance is claimed**. Fresh independent review
 confirmed the P2 response, independently passed all 312 tests with one skip and
 all 24 focused acceptance tests, and found no new concrete P1/P2 source blocker.
-Protected controls, actual CI-token access and native SDK/release qualification
-remain outstanding.
+At that checkpoint, protected controls, actual CI-token access and native
+SDK/release qualification remained outstanding.
 
 Before the next local build, the delivery derivation was updated to copy
 `check.yml` explicitly alongside its other workflow fixtures; the new readiness
@@ -435,6 +435,59 @@ and independently passed 312 tests with one skip. It found no new concrete P1/P2
 blocker. Passive metadata does not independently reconstruct the parent's observed
 pre-build absence, process joining or snapshot removal. This is accepted local
 source/check evidence, not final S qualification, actual crypto or runtime proof.
+
+### PR #17 native CI and synthetic cancellation correction
+
+PR #17 at `8e3cd5465ffd740fb55164e65bdc765523267f4f` passed its actual
+temporary-CI-token fixed-public-package read and direct Python steps. Its first
+native Linux check failed during the ledger Go tests; image/probe and generated
+archive qualification were skipped. The original run remains failed, not rerun or
+merged. Bounded in-memory review selected only a known, locally authored assertion
+in `TestCanceledCreatePreservesPrimaryUncertaintyAndClaim`; no raw logs, exception
+text or dependency-cache pointers were copied here. This pre-existing assertion
+alone does not establish which predicate failed or a production root cause.
+
+The focused correction changes only that synthetic test: its callback cancels and
+withholds the response until `StartTopup` returns. An immediate deferred channel
+close releases the handler before later fixture-mutex acquisition or cleanup.
+All original uncertainty, reference/URL, durable claim and once-only request-count
+assertions remain unchanged, as does the positive known-create/bind-failure test.
+Independent source review found no P1/P2 objection to the lock/cleanup ordering;
+it correctly left execution qualification conditional. No payment runtime,
+receipt, cancellation or retry policy changed.
+
+Parent execution then passed both selected methods **20 times each** at
+`GOMAXPROCS=1,4`, with and without `-race` (**160 targeted executions**), followed by
+both full affected payments/Stripe packages. This used the flake-selected native
+Go **1.27.2**, its pinned compiler for race mode, and a 445-input owned public
+snapshot with identity
+`0933f878166436479d36b90b53b7d5eefdaa7503b00099c9147b1adfaef1c8fc`.
+An existing public-module cache was read only through Go's file-proxy interface;
+new module/build caches were temporary, no sibling-cache writes were requested,
+remote fallback and telemetry were disabled, and current `go.mod`, `go.sum` and
+source hashes remained unchanged. Owned snapshots/caches were removed after
+joined completion. Formatting and active Go LSP checks passed; Python discovery
+still passed 312 tests with one skip. Independent review found no P1/P2 source
+objection and confirmed one separate `-json -race -count=2` command: exit 0 and
+joined completion were retained before parsing, with two pass events per selected
+test and one package-level pass. These **four independent executions** are separate
+from the parent's 160; unconfirmed executions are not counted. The same 445-input
+identity matched before/after. Parent subsequently admitted the unique owned
+review temporary tree using its exact input manifest and filesystem ownership,
+removed it without following symlinks, and confirmed removal without rerunning
+any test. Corrected-head native Linux qualification remains outstanding.
+
+An earlier local pinned-Nix-vendor realization failed before any Go test build;
+its underlying cause remains unknown and it was not replayed. These later
+file-proxy tests do **not** verify the complete Nix vendor hash. Normal native Nix
+records may persist. Go test files are declared image inputs: the corrected
+candidate x86_64-linux image derivation now evaluates to
+`/nix/store/jygqk8hdv757yy9yjfdv5i7mfksyf0xa-possums-intake-local.tar.gz.drv`.
+This is evaluation only. The previous `4pzx7…` image equality is historical,
+not qualification of corrected source; fresh exact-source image/probe/archive
+and subsequent native A/B qualification are still required. Repeated test passes
+do not prove the historical CI cause. No merge, signing, release, resource
+activation or secret readiness follows from this correction.
 
 **Sequence before freezing S:** finish all activation/tests/docs/acceptance source
 preparation and qualify external controls first. Then require exact final-main S
