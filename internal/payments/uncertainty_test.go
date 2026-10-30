@@ -75,8 +75,18 @@ func TestCanceledCreatePreservesPrimaryUncertaintyAndClaim(t *testing.T) {
 	f := newFixture(t, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	f.change(func(f *fixture) { f.onCreate = cancel })
-	result, err := f.service.StartTopup(ctx, testAccount, f.form, "usd5")
+	// Withhold the receipt so this tests cancellation, not a receipt/cancel race.
+	releaseCreate := make(chan struct{})
+	f.change(func(f *fixture) {
+		f.onCreate = func() {
+			cancel()
+			<-releaseCreate
+		}
+	})
+	result, err := func() (TopupResult, error) {
+		defer close(releaseCreate)
+		return f.service.StartTopup(ctx, testAccount, f.form, "usd5")
+	}()
 	var diagnostic *stripepay.Error
 	if !errors.As(err, &diagnostic) || diagnostic.Outcome != stripepay.OutcomeCreateUnknown || result.Reference == "" || result.URL != "" {
 		t.Fatal("canceled create invented rollback or lost primary")
