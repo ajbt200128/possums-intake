@@ -68,8 +68,8 @@ r.CODES.update({
         "Require identical admitted artifact IDs, actual A archive hash, matching manifests and runtime/startup qualification bound to the expected source/image/archive. Underlying cause is unknown; no replacement or fallback."),
     "signing_output": ("public_signing_output", "bounded_closed_admitted_artifact_outputs",
         "Admitted workflow-output delivery is unavailable; underlying cause is unknown. No publication was attempted by this guard; inspect the workflow without replay."),
-    "signing_command": ("public_signing_command", "status_or_explicit_read_only_admit_guard",
-        "Underlying command cause is unknown. Use status or the explicitly selected workflow guard; reporting never initiates publication, deployment or retry."),
+    "signing_command": ("public_signing_command", "status_explicit_repository_readiness_or_admit_guard",
+        "Underlying command cause is unknown. Use offline status, explicit repository-readiness, or the selected workflow guard; evidence reads never initiate publication, deployment or retry."),
 })
 
 
@@ -105,7 +105,8 @@ def validate_context(ctx: dict[str, Any]):
 def context(env=None):
     env = os.environ if env is None else env
     # Refuse invalid/disabled selections before event-file or external reads.
-    r.require(env.get("PUBLIC_INTAKE_RELEASE_ENABLED") == "true", "disabled")
+    r.require(env.get("PUBLIC_INTAKE_RELEASE_ENABLED") == "true"
+              and env.get("RELEASE_AUTOMATION_ENABLED") == "true", "disabled")
     ref, release = env.get("GITHUB_REF", ""), env.get("GITHUB_SHA", "")
     r.require(env.get("GITHUB_REPOSITORY") == c.REPOSITORY
               and env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
@@ -148,12 +149,12 @@ def current_gate(run, ctx):
               and run.get("triggering_actor", {}).get("login") == c.OWNER, "signing_current")
 
 
-def inventory(api, suffix, field=None):
-    """Consume every page; incomplete cap and duplicate IDs never mean absence."""
+def inventory(api, suffix, field=None, *, read=None):
+    """Consume every page; an explicit reader retains its boundary categories."""
     values, seen = [], set()
     for page in range(1, PAGE_CAP + 1):
-        data = repo_read(api, suffix + ("&" if "?" in suffix else "?")
-                         + f"per_page=100&page={page}", "signing_inventory_read")
+        path = suffix + ("&" if "?" in suffix else "?") + f"per_page=100&page={page}"
+        data = repo_read(api, path, "signing_inventory_read") if read is None else read(path)
         batch: Any = data.get(field) if field and type(data) is dict else data if field is None else None
         r.require(type(batch) is list and len(batch) <= 100, "signing_inventory")
         for item in batch:
@@ -308,8 +309,7 @@ def relation_gate(ctx, root, tool=p.command):
     return c.checked("signing_relation", validate)
 
 
-def admit(api, ctx, root, tool=p.command):
-    validate_context(ctx)
+def public_repository_gate(api):
     def repository():
         repo = api.repo()
         status, package = api.package()
@@ -317,7 +317,12 @@ def admit(api, ctx, root, tool=p.command):
             raise r.Stop("signing_repository", status=status)
         c.repository_gate(repo, package)
         return repo
-    repo = stage("signing_repository", repository)
+    return stage("signing_repository", repository)
+
+
+def admit(api, ctx, root, tool=p.command):
+    validate_context(ctx)
+    repo = public_repository_gate(api)
     c.checked("signing_current", lambda: current_gate(repo_read(api, f"/actions/runs/{ctx['run']}", "signing_current"), ctx))
     def source():
         for suffix, ref in (("heads/main", "refs/heads/main"), ("tags/" + ctx["tag"], "refs/tags/" + ctx["tag"])):
@@ -384,8 +389,12 @@ def main(args=None):
     primary = None
     def execute():
         if args == ["status"]:
-            return {"stage": "offline_public_signing_status", "release_enabled": False,
-                    "published": False, "cryptographically_verified": False, "runtime_verified": False}
+            return {"stage": "offline_public_signing_status", "live_activation_observed": False,
+                    "publication_attempted": False, "cryptographically_verified": False, "runtime_verified": False}
+        if args == ["repository-readiness"]:
+            public_repository_gate(p.GitHub())
+            return {"passed": True, "stage": "public_repository_readiness", "authenticated_evidence": True,
+                    "publication_attempted": False, "runtime_verified": False}
         r.require(args in (["admit"], ["guard"]), "signing_command")
         ctx = context()
         downloaded = None

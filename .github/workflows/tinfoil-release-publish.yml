@@ -1,5 +1,6 @@
-# Dormant public intake signer. Python only admits evidence; the pinned official
-# action is the sole publisher. No tag creation, registry copy or deployment.
+# Guarded manual public intake signer; live activation has not been observed.
+# Python only admits evidence; the pinned official action is the sole publisher.
+# No tag creation, registry copy or deployment.
 name: Tinfoil intake release - publish
 on:
   workflow_dispatch:
@@ -47,14 +48,20 @@ concurrency:
   group: intake-signed-release-${{ github.ref_name }}
   cancel-in-progress: false
 env:
-  RELEASE_AUTOMATION_ENABLED: 'false'
+  # GitHub string equality ignores case; strict JSON rejects TRUE/True.
+  RELEASE_AUTOMATION_ENABLED: >-
+    ${{ vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+        fromJSON(vars.RELEASE_AUTOMATION_ENABLED) == true &&
+        'true' || 'false' }}
   PRODUCTION_DEPLOYMENT_ENABLED: 'false'
-  PUBLIC_INTAKE_RELEASE_ENABLED: 'false'
+  PUBLIC_INTAKE_RELEASE_ENABLED: >-
+    ${{ vars.PUBLIC_INTAKE_RELEASE_ENABLED == 'true' &&
+        fromJSON(vars.PUBLIC_INTAKE_RELEASE_ENABLED) == true &&
+        'true' || 'false' }}
   PYTHONDONTWRITEBYTECODE: '1'
 jobs:
   measure-and-release:
-    if: ${{ false &&
-      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+    if: ${{ vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
       vars.PUBLIC_INTAKE_RELEASE_ENABLED == 'true' &&
       github.event_name == 'workflow_dispatch' &&
       github.run_attempt == 1 && github.actor == 'ajbt200128' &&

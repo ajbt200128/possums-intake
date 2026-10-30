@@ -186,7 +186,8 @@ class Fixture(old.Fixture):
                      "source": SOURCE, "checks_run": "10", "checks_attempt": "1", "release_checks_run": "11",
                      "release_checks_attempt": "1", "qualification_run": "20", "qualification_attempt": "1",
                      "image_digest": self.digest, "archive_sha256": self.archive_hash, "storage_phase": s.c.PHASE}}
-        env = {"PUBLIC_INTAKE_RELEASE_ENABLED": "true", "GITHUB_REPOSITORY": s.c.REPOSITORY,
+        env = {"PUBLIC_INTAKE_RELEASE_ENABLED": "true", "RELEASE_AUTOMATION_ENABLED": "true",
+               "GITHUB_REPOSITORY": s.c.REPOSITORY,
                "GITHUB_ACTOR": s.c.OWNER, "GITHUB_TRIGGERING_ACTOR": s.c.OWNER,
                "GITHUB_RUN_ATTEMPT": "1", "GITHUB_RUN_ID": "30", "GITHUB_SHA": RELEASE,
                "GITHUB_REF": "refs/tags/" + TAG, "GITHUB_EVENT_NAME": "workflow_dispatch",
@@ -259,6 +260,68 @@ class SigningTests(unittest.TestCase):
             mutate(modified)
             path.write_text(json.dumps(modified))
             self.stop(lambda: s.context(env), "signing_context")
+        self.assertEqual(self.f.api.reads, [])
+        self.assertEqual(self.f.git.calls, [])
+
+    def test_explicit_repository_readiness_only_reads_fixed_metadata(self):
+        with patch.object(s.p, "GitHub", return_value=self.f.api), \
+                patch.object(s, "context", side_effect=AssertionError("dispatch context")), \
+                patch.object(s.p, "read_file", side_effect=AssertionError("event file")), \
+                patch.object(s.p, "command", side_effect=AssertionError("process")), \
+                patch.object(s.c, "read_template", side_effect=AssertionError("template")), \
+                patch.object(s.Path, "open", side_effect=AssertionError("file")), \
+                patch.dict(s.os.environ, {}, clear=True), patch.object(s.sys, "stdout", io.StringIO()) as out:
+            self.assertEqual(s.main(["repository-readiness"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), {
+            "passed": True, "stage": "public_repository_readiness", "authenticated_evidence": True,
+            "publication_attempted": False, "runtime_verified": False})
+        self.assertEqual(self.f.api.reads, ["", "package"])
+        self.assertEqual(self.f.git.calls, [])
+
+    def test_repository_readiness_refuses_private_inaccessible_and_unexpected_metadata(self):
+        for status in (403, 404):
+            with self.subTest(status=status), patch.object(self.f.api, "package", return_value=(status, None)), \
+                    patch.object(s.p, "GitHub", return_value=self.f.api), \
+                    patch.object(s.sys, "stdout", io.StringIO()) as out:
+                self.assertEqual(s.main(["repository-readiness"]), 1)
+                diagnostic = json.loads(out.getvalue())
+                self.assertEqual(diagnostic["code"], "DELIVERY_SIGNING_REPOSITORY")
+                self.assertEqual(diagnostic["status"], status)
+        self.f.api.repo_data["private"] = True
+        with patch.object(s.p, "GitHub", return_value=self.f.api), patch.object(s.sys, "stdout", io.StringIO()) as out:
+            self.assertEqual(s.main(["repository-readiness"]), 1)
+            self.assertEqual(json.loads(out.getvalue())["code"], "DELIVERY_SIGNING_REPOSITORY")
+        with patch.object(s.p, "GitHub", return_value=self.f.api), \
+                patch.object(self.f.api, "repo", side_effect=RuntimeError("hostile SYNTHETIC_SECRET")), \
+                patch.object(s.sys, "stdout", io.StringIO()) as out:
+            self.assertEqual(s.main(["repository-readiness"]), 1)
+            self.assertEqual(json.loads(out.getvalue())["code"], "DELIVERY_SIGNING_REPOSITORY")
+            self.assertNotIn("SYNTHETIC_SECRET", out.getvalue())
+        self.assertEqual(self.f.git.calls, [])
+
+    def test_disabled_or_unrecognized_public_selection_refuses_before_reads(self):
+        _event, selected_env = self.f.dispatch()
+        for flag, value in ((flag, value)
+                            for flag in ("PUBLIC_INTAKE_RELEASE_ENABLED", "RELEASE_AUTOMATION_ENABLED")
+                            for value in (None, "", "false", "TRUE", "True", "1", "true ", "hostile SYNTHETIC_SECRET")):
+            env = dict(selected_env)
+            if value is None:
+                del env[flag]
+            else:
+                env[flag] = value
+            for mode in ("admit", "guard"):
+                with self.subTest(flag=flag, value=value, mode=mode), \
+                        patch.object(s.os, "environ", env), \
+                        patch.object(s.p, "read_file", side_effect=AssertionError("event read")) as read, \
+                        patch.object(s.p, "GitHub", side_effect=AssertionError("auth/API")) as api, \
+                        patch.object(s.p, "command", side_effect=AssertionError("process")) as command, \
+                        patch.object(s.c, "read_template", side_effect=AssertionError("template")) as template, \
+                        patch.object(s.Path, "open", side_effect=AssertionError("file")) as opened, \
+                        patch.object(s.sys, "stdout", io.StringIO()) as out:
+                    self.assertEqual(s.main([mode]), 1)
+                    self.assertEqual(json.loads(out.getvalue())["code"], "DELIVERY_DISABLED")
+                    for port in (read, api, command, template, opened):
+                        port.assert_not_called()
         self.assertEqual(self.f.api.reads, [])
         self.assertEqual(self.f.git.calls, [])
 
@@ -549,7 +612,11 @@ class SigningTests(unittest.TestCase):
                 patch.object(s.c, "read_template", side_effect=AssertionError("template")), \
                 patch.object(s.Path, "open", side_effect=AssertionError("file")), patch.object(s.sys, "stdout", io.StringIO()) as out:
             self.assertEqual(s.main(["status"]), 0)
-        self.assertFalse(json.loads(out.getvalue())["release_enabled"])
+        status = json.loads(out.getvalue())
+        self.assertEqual(status, {"stage": "offline_public_signing_status", "live_activation_observed": False,
+                                  "publication_attempted": False, "cryptographically_verified": False,
+                                  "runtime_verified": False})
+        self.assertNotIn("release_enabled", status)
         with patch.object(subprocess, "Popen", side_effect=AssertionError("process")), \
                 patch.object(old.p.urllib.request, "build_opener", side_effect=AssertionError("network")), \
                 patch.object(os, "getenv", side_effect=AssertionError("env")):
@@ -587,13 +654,25 @@ class SigningTests(unittest.TestCase):
             self.assertNotIn(b"Error:", result.stderr)
             self.assertTrue(json.loads(result.stderr)["code"].startswith("DELIVERY_"))
 
-    def test_dormant_official_action_only_publisher_least_permissions_and_exact_downloads(self):
+    def test_guarded_official_action_only_publisher_least_permissions_and_exact_downloads(self):
         workflow = ROOT / ".github/workflows/tinfoil-release-publish.yml"
         if not workflow.exists():
             self.skipTest("workflow not included in isolated script test source")
         text = workflow.read_text()
-        for required in ("${{ false &&", "RELEASE_AUTOMATION_ENABLED: 'false'", "PRODUCTION_DEPLOYMENT_ENABLED: 'false'",
-                         "PUBLIC_INTAKE_RELEASE_ENABLED: 'false'", "environment: intake-public-release", "fetch-depth: 0",
+        self.assertIn("on:\n  workflow_dispatch:\n", text)
+        self.assertIn("    if: ${{ vars.RELEASE_AUTOMATION_ENABLED == 'true' &&\n"
+                      "      vars.PUBLIC_INTAKE_RELEASE_ENABLED == 'true' &&\n"
+                      "      github.event_name == 'workflow_dispatch' &&\n"
+                      "      github.run_attempt == 1 && github.actor == 'ajbt200128' &&\n"
+                      "      startsWith(github.ref, 'refs/tags/v') }}", text)
+        self.assertNotIn("${{ false &&", text)
+        for switch in ("RELEASE_AUTOMATION_ENABLED", "PUBLIC_INTAKE_RELEASE_ENABLED"):
+            self.assertIn(f"  {switch}: >-\n    ${{{{ vars.{switch} == 'true' &&\n"
+                          f"        fromJSON(vars.{switch}) == true &&\n        'true' || 'false' }}}}", text)
+        for required in ("PRODUCTION_DEPLOYMENT_ENABLED: 'false'", "environment: intake-public-release",
+                         "group: intake-signed-release-${{ github.ref_name }}", "cancel-in-progress: false", "fetch-depth: 0",
+                         "actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8",
+                         "DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3",
                          "persist-credentials: false", 'diagnostic-endpoint: ""', "mark-as-latest: 'false'",
                          "tinfoilsh/measure-image-action@59f7ab5dbe472b3097c888ebe64e6a4131fc0975",
                          "${{ github.workspace }}/tinfoil-config.yml", "scripts/public-tinfoil-release.py admit",
@@ -605,8 +684,22 @@ class SigningTests(unittest.TestCase):
         self.assertNotIn("release.py publication-guard", text)
         self.assertEqual(text.count("uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"), 3)
         self.assertEqual(text.count("run-id: ${{ steps.admit.outputs.qualification_run }}"), 3)
+        self.assertEqual(text.count("artifact-ids:"), 3)
+        for artifact in ("a", "b", "archive"):
+            self.assertEqual(text.count(f"artifact-ids: ${{{{ steps.admit.outputs.{artifact} }}}}"), 1)
+            self.assertIn(f"ACCEPTED_{artifact.upper()}_ARTIFACT_ID: ${{{{ steps.admit.outputs.{artifact} }}}}", text)
+        self.assertNotIn("artifact-name:", text)
         self.assertEqual(text.count("uses: tinfoilsh/"), 1)
+        self.assertLess(text.index("scripts/public-tinfoil-release.py admit"), text.index("uses: actions/download-artifact@"))
+        self.assertLess(text.rindex("uses: actions/download-artifact@"), text.index("scripts/public-tinfoil-release.py guard"))
         self.assertLess(text.index("scripts/public-tinfoil-release.py guard"), text.index("uses: tinfoilsh/"))
+        check = (ROOT / ".github/workflows/check.yml").read_text()
+        self.assertIn("  packages: read", check)
+        self.assertNotIn("packages: write", check)
+        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", check)
+        self.assertIn("scripts/public-tinfoil-release.py repository-readiness", check)
+        self.assertIn("cp ${./.github/workflows/check.yml} .github/workflows/check.yml",
+                      (ROOT / "flake.nix").read_text())
         self.assertEqual(set(s.INPUTS), {"source", "checks_run", "checks_attempt", "release_checks_run", "release_checks_attempt",
                                       "qualification_run", "qualification_attempt", "image_digest", "archive_sha256", "storage_phase"})
 

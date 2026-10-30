@@ -221,8 +221,8 @@ def admit(api, ctx, workflow=WORKFLOW):
     return admit_qualified(api, ctx, repo)
 
 
-def qualified_checks(api, ctx):
-    """Read exact successful source checks; current-main admission is separate."""
+def qualified_checks(api, ctx, *, propagate=()):
+    """Read exact successful checks separately from current-main admission."""
     source = ctx["source"]
     if "checks_run" in ctx or "checks_attempt" in ctx:
         r.require(all(type(ctx.get(key)) is int and ctx[key] > 0 for key in ("checks_run", "checks_attempt")),
@@ -243,7 +243,8 @@ def qualified_checks(api, ctx):
             r.require(observed["id"] == check["id"], "synthetic_evidence")
             eligible.append(observed)
         except r.Stop as error:
-            if error.code == "synthetic_evidence":
+            # Adapter transport evidence must not become an ineligible-check result.
+            if error.code == "synthetic_evidence" or error.code in propagate:
                 raise
     return eligible
 

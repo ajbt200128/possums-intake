@@ -350,12 +350,12 @@ def live_source():
         raise Stop("transport") from None
 
 
-def verify_file(path, repo, release, tag):
+def verify_file(path, repo, release, tag, *, command=None):
     pins("0" * 40, release, tag)
     require(pin(repo, r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"), "prerequisites")
     identity = f"https://github.com/{repo}/.github/workflows/tinfoil-release-publish.yml@refs/tags/{tag}"
     try:
-        return json.loads(read_command(["gh", "attestation", "verify", path, "--repo", repo,
+        return json.loads((read_command if command is None else command)(["gh", "attestation", "verify", path, "--repo", repo,
             "--cert-identity", identity, "--source-ref", "refs/tags/" + tag, "--source-digest", release,
             "--signer-digest", release, "--deny-self-hosted-runners", "--predicate-type", PREDICATE, "--format", "json"]))
     except (ValueError, TypeError):

@@ -896,15 +896,23 @@ class DeliveryTests(unittest.TestCase):
             self.stop("image_archive", lambda: fixture.once("synthetic-new-state", "init", operator=True))
         cmd.assert_not_called()
 
-    def test_delivery_workflows_hard_disabled_and_serialized(self):
+    def test_delivery_workflows_guarded_or_hard_disabled_and_serialized(self):
         root = Path(__file__).resolve().parents[1]
         if not (root / ".github/workflows").exists():
             self.skipTest("Nix isolated script-only check; workflow check runs in checkout")
         for name in ("publish-image.yml", "tinfoil-release-publish.yml", "deploy-production.yml"):
             text = (root / ".github/workflows" / name).read_text()
-            self.assertIn("${{ false &&", text)
             self.assertIn("cancel-in-progress: false", text)
-            self.assertIn("RELEASE_AUTOMATION_ENABLED: 'false'", text)
+            if name != "tinfoil-release-publish.yml":
+                self.assertIn("${{ false &&", text)
+                self.assertIn("RELEASE_AUTOMATION_ENABLED: 'false'", text)
+        text = (root / ".github/workflows/tinfoil-release-publish.yml").read_text()
+        self.assertIn("if: ${{ vars.RELEASE_AUTOMATION_ENABLED == 'true' &&\n"
+                      "      vars.PUBLIC_INTAKE_RELEASE_ENABLED == 'true' &&", text)
+        for switch in ("RELEASE_AUTOMATION_ENABLED", "PUBLIC_INTAKE_RELEASE_ENABLED"):
+            self.assertIn(f"  {switch}: >-\n    ${{{{ vars.{switch} == 'true' &&\n"
+                          f"        fromJSON(vars.{switch}) == true &&\n        'true' || 'false' }}}}", text)
+        self.assertIn("PRODUCTION_DEPLOYMENT_ENABLED: 'false'", text)
         text = (root / ".github/workflows/deploy-production.yml").read_text()
         self.assertIn("PRODUCTION_DEPLOYMENT_ENABLED: 'false'", text)
         self.assertNotIn("TINFOIL_PRODUCTION_ADMIN_KEY", text)
